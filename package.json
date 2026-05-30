@@ -1,0 +1,20 @@
+{
+  "name": "crayon",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Crayon — autonomous AI coding agent",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "dev": "pnpm --filter @crayon/cli dev",
+    "test": "pnpm -r run test",
+    "typecheck": "pnpm -r run typecheck"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@10.14.0",
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}

@@ -1,0 +1,103 @@
+{
+  "name": "crayon-vscode",
+  "displayName": "Crayon",
+  "description": "Autonomous AI coding agent",
+  "version": "0.1.0",
+  "publisher": "crayon",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other", "Machine Learning"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "crayon.chat",
+        "title": "Crayon: Chat",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "crayon.runTask",
+        "title": "Crayon: Run Task"
+      },
+      {
+        "command": "crayon.indexWorkspace",
+        "title": "Crayon: Index Workspace"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "crayon-sidebar",
+          "title": "Crayon",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "crayon-sidebar": [
+        {
+          "type": "webview",
+          "id": "crayon.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Crayon",
+      "properties": {
+        "crayon.anthropicApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Anthropic API key for Claude models"
+        },
+        "crayon.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key"
+        },
+        "crayon.openrouterApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenRouter API key"
+        },
+        "crayon.provider": {
+          "type": "string",
+          "enum": ["openrouter", "anthropic", "openai"],
+          "default": "openrouter",
+          "description": "LLM provider"
+        },
+        "crayon.defaultModel": {
+          "type": "string",
+          "default": "nvidia/nemotron-3-super-120b-a12b:free",
+          "description": "Default model for agent tasks"
+        },
+        "crayon.autoApplyEdits": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically apply file edits without preview"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@crayon/agent": "workspace:*",
+    "@crayon/indexer": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.3.0",
+    "esbuild": "^0.25.1",
+    "typescript": "^5.8.2"
+  }
+}
