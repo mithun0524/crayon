@@ -6,6 +6,21 @@ import { ChatPanelProvider } from "./panel/chat-provider.js";
 let statusBarItem: vscode.StatusBarItem;
 let chatProvider: ChatPanelProvider;
 
+const diffProvider = new class implements vscode.TextDocumentContentProvider {
+  private contents = new Map<string, string>();
+  private onDidChangeEmitter = new vscode.EventEmitter<vscode.Uri>();
+  onDidChange = this.onDidChangeEmitter.event;
+
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return this.contents.get(uri.fsPath) || '';
+  }
+
+  setContent(uri: vscode.Uri, content: string) {
+    this.contents.set(uri.fsPath, content);
+    this.onDidChangeEmitter.fire(uri);
+  }
+};
+
 export function activate(context: vscode.ExtensionContext): void {
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.text = "$(comment-discussion) Crayon";
@@ -14,6 +29,36 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(statusBarItem);
 
   chatProvider = new ChatPanelProvider(context.extensionUri, context);
+
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider('crayon-diff', diffProvider)
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("crayon.previewEdit", async (absPath: vscode.Uri, previewUri: vscode.Uri, relPath: string, newContent: string) => {
+      diffProvider.setContent(previewUri, newContent);
+
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        absPath,
+        previewUri,
+        `Crayon Patched: ${relPath}`,
+        { preview: true }
+      );
+
+      const choice = await vscode.window.showInformationMessage(
+        `Crayon wants to edit ${relPath}. Accept changes?`,
+        "Accept",
+        "Reject"
+      );
+
+      if (vscode.window.activeTextEditor?.document.uri.scheme === 'crayon-diff') {
+        await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+      }
+
+      return choice === "Accept";
+    })
+  );
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("crayon.chatView", chatProvider)
@@ -125,6 +170,11 @@ async function runAgentTask(task: string, context: vscode.ExtensionContext): Pro
             "Deny"
           );
           return choice === "Approve";
+        },
+        approveEdit: async (relPath: string, newContent: string) => {
+          const absPath = vscode.Uri.joinPath(vscode.Uri.file(folder), relPath);
+          const previewUri = vscode.Uri.parse(`crayon-diff:${absPath.fsPath}`);
+          return await vscode.commands.executeCommand<boolean>("crayon.previewEdit", absPath, previewUri, relPath, newContent) ?? false;
         },
       });
 

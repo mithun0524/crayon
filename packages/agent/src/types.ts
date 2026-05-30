@@ -24,6 +24,7 @@ export interface AgentConfig {
   maxEvalRetries?: number;
   onEvent?: (event: AgentEvent) => void;
   approveCommand?: (command: string) => Promise<boolean>;
+  approveEdit?: (path: string, newContent: string) => Promise<boolean>;
 }
 
 export interface ToolDefinition<T extends z.ZodType = z.ZodType> {
@@ -38,6 +39,7 @@ export interface ToolContext {
   indexer: CodeIndexer;
   onEvent?: (event: AgentEvent) => void;
   approveCommand?: (command: string) => Promise<boolean>;
+  approveEdit?: (path: string, newContent: string) => Promise<boolean>;
 }
 
 export interface AgentSession {

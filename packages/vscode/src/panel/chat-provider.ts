@@ -72,6 +72,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         );
         return choice === "Approve";
       },
+      approveEdit: async (relPath, newContent) => {
+        const absPath = vscode.Uri.joinPath(vscode.Uri.file(folder), relPath);
+        const previewUri = vscode.Uri.parse(`crayon-diff:${absPath.fsPath}`);
+        
+        // Use the diff provider from the extension context to set content
+        // But chat-provider doesn't have direct access to the diffProvider instance!
+        // Let's fire a command or something, or pass it via context.
+        return await vscode.commands.executeCommand<boolean>("crayon.previewEdit", absPath, previewUri, relPath, newContent) ?? false;
+      },
     });
 
     try {

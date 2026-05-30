@@ -94,6 +94,14 @@ export function createTools(ctx: ToolContext) {
         }
 
         const newContent = content.replace(old_string, new_string);
+        
+        if (ctx.approveEdit) {
+          const approved = await ctx.approveEdit(filePath, newContent);
+          if (!approved) {
+            return { success: false, error: "Edit rejected by user" };
+          }
+        }
+
         const diff = createTwoFilesPatch(filePath, filePath, content, newContent);
         await writeFile(absPath, newContent, "utf-8");
 

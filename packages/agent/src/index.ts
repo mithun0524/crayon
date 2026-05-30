@@ -76,6 +76,7 @@ export class CrayonAgent {
       indexer: this.indexer,
       onEvent: this.config.onEvent,
       approveCommand: this.config.approveCommand,
+      approveEdit: this.config.approveEdit,
     };
 
     const tools = createTools(toolCtx);
