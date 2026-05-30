@@ -19,6 +19,7 @@
     "@ai-sdk/anthropic": "^1.2.6",
     "@ai-sdk/openai": "^1.3.7",
     "@crayon/indexer": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "ai": "^4.3.2",
     "diff": "^7.0.0",
     "fast-glob": "^3.3.3",

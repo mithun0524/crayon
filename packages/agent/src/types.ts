@@ -1,6 +1,7 @@
 import type { CoreMessage } from "ai";
 import type { CodeIndexer, RepoIntelligence } from "@crayon/indexer";
 import type { z } from "zod";
+import type { McpServerConfig } from "./tools/mcp.js";
 
 export type AgentEvent =
   | { type: "thinking"; content: string }
@@ -25,6 +26,7 @@ export interface AgentConfig {
   onEvent?: (event: AgentEvent) => void;
   approveCommand?: (command: string) => Promise<boolean>;
   approveEdit?: (path: string, newContent: string) => Promise<boolean>;
+  mcpServers?: McpServerConfig[];
 }
 
 export interface ToolDefinition<T extends z.ZodType = z.ZodType> {

@@ -7,6 +7,7 @@ import { createPlan, classifyTask, type TaskMode } from "./planner/plan.js";
 import { buildSystemPrompt } from "./context/manager.js";
 import { getExecutionModel } from "./models/router.js";
 import { createTools } from "./tools/index.js";
+import { McpClient } from "./tools/mcp.js";
 import { runEvaluation } from "./evaluator/check.js";
 
 export class CrayonAgent {
@@ -15,11 +16,13 @@ export class CrayonAgent {
   private episodicMemory: EpisodicMemory;
   private config: AgentConfig;
   private history: CoreMessage[] = [];
+  private mcpClient: McpClient;
 
   constructor(config: AgentConfig) {
     this.config = config;
     this.indexer = new CodeIndexer(config.workspaceRoot);
     this.episodicMemory = new EpisodicMemory(config.workspaceRoot);
+    this.mcpClient = new McpClient(config.mcpServers || []);
   }
 
   private emit(event: AgentEvent): void {
@@ -56,6 +59,8 @@ export class CrayonAgent {
     } else {
       await this.init();
     }
+    
+    await this.mcpClient.connectAll();
 
     const modelConfig = {
       model: this.config.model,
@@ -80,7 +85,7 @@ export class CrayonAgent {
     };
 
     const tools = createTools(toolCtx);
-    const aiTools = Object.fromEntries(
+    const aiTools: Record<string, any> = Object.fromEntries(
       Object.entries(tools).map(([name, t]) => {
         const toolDef = t as {
           description: string;
@@ -109,6 +114,29 @@ export class CrayonAgent {
         ];
       })
     );
+
+    const mcpTools = await this.mcpClient.listTools();
+    for (const t of mcpTools) {
+      // Create a safely prefixed tool name
+      const safeName = `mcp_${t.server}_${t.tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_");
+      
+      aiTools[safeName] = tool({
+        description: `[MCP Server: ${t.server}] ${t.tool.description || t.tool.name}`,
+        // @ts-ignore - Some versions of AI SDK 3.x allow jsonSchema or we can just use z.any()
+        parameters: t.tool.inputSchema as any,
+        execute: async (args: any) => {
+          this.emit({ type: "tool_call", name: safeName, args });
+          try {
+            const result = await this.mcpClient.callTool(t.server, t.tool.name, args);
+            this.workingMemory.addToolOutput(safeName, result);
+            this.emit({ type: "tool_result", name: safeName, result });
+            return result;
+          } catch (e: any) {
+            return { error: e.message };
+          }
+        }
+      });
+    }
 
     const systemPrompt = await buildSystemPrompt({
       task,
@@ -243,8 +271,9 @@ export class CrayonAgent {
   }
 
   close(): void {
-    this.episodicMemory.close();
-    this.indexer.stopWatching();
+    this.episodicMemory.close?.();
+    this.indexer.stopWatching?.();
+    this.mcpClient?.close?.();
   }
 }
 
