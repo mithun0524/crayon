@@ -1,7 +1,4 @@
-// Dummy comment added by Crayon
-// TODO: dummy comment
-// Another dummy comment
-import { generateText, tool, type CoreMessage } from "ai";
+import { streamText, tool, type CoreMessage } from "ai";
 import { CodeIndexer } from "@crayon/indexer";
 import type { AgentConfig, AgentEvent, AgentResult } from "./types.js";
 import { WorkingMemory } from "./memory/working.js";
@@ -62,7 +59,7 @@ export class CrayonAgent {
     } else {
       await this.init();
     }
-    
+
     await this.mcpClient.connectAll();
 
     const modelConfig = {
@@ -71,6 +68,7 @@ export class CrayonAgent {
       anthropicApiKey: this.config.anthropicApiKey,
       openaiApiKey: this.config.openaiApiKey,
       openrouterApiKey: this.config.openrouterApiKey,
+      googleApiKey: this.config.googleApiKey,
     };
 
     const intelligence = mode === "chat" ? null : await this.indexer.getIntelligence();
@@ -104,7 +102,7 @@ export class CrayonAgent {
               this.emit({ type: "tool_call", name, args });
               const result = await toolDef.execute(args);
               this.workingMemory.addToolOutput(name, result);
-              if (name === "edit_file" || name === "write_file") {
+              if (name === "edit_file" || name === "write_file" || name === "overwrite_file") {
                 const r = result as { path?: string; success?: boolean };
                 if (r.path && r.success !== false) {
                   this.workingMemory.markEdited(r.path);
@@ -120,12 +118,11 @@ export class CrayonAgent {
 
     const mcpTools = await this.mcpClient.listTools();
     for (const t of mcpTools) {
-      // Create a safely prefixed tool name
       const safeName = `mcp_${t.server}_${t.tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_");
-      
+
       aiTools[safeName] = tool({
         description: `[MCP Server: ${t.server}] ${t.tool.description || t.tool.name}`,
-        // @ts-ignore - Some versions of AI SDK 3.x allow jsonSchema or we can just use z.any()
+        // @ts-ignore
         parameters: t.tool.inputSchema as any,
         execute: async (args: any) => {
           this.emit({ type: "tool_call", name: safeName, args });
@@ -171,7 +168,8 @@ export class CrayonAgent {
     while (evalRetries <= maxEvalRetries) {
       const model = getExecutionModel(modelConfig);
 
-      const result = await generateText({
+      // Use streamText for real-time token streaming
+      const streamResult = streamText({
         model,
         system: systemPrompt,
         messages,
@@ -179,26 +177,36 @@ export class CrayonAgent {
         maxSteps,
       });
 
-      totalSteps += result.steps?.length ?? 1;
+      let responseText = "";
 
-      let responseText = result.text?.trim() ?? "";
+      // Emit token deltas in real time
+      for await (const delta of streamResult.textStream) {
+        responseText += delta;
+        this.emit({ type: "text_delta", content: delta });
+      }
 
-      // Some models return empty text but put content in steps
-      if (!responseText && result.steps?.length) {
-        for (const step of result.steps) {
+      // Await the full result for metadata (steps, tool results)
+      const steps = await streamResult.steps;
+      totalSteps += steps?.length ?? 1;
+
+      // Fallback: if textStream was empty but steps had text
+      if (!responseText && steps?.length) {
+        for (const step of steps) {
           if (step.text?.trim()) responseText = step.text.trim();
         }
       }
 
       if (responseText) {
+        // Emit full text event for consumers that prefer complete messages
         this.emit({ type: "text", content: responseText });
         summary = responseText;
       }
 
-      for (const step of result.steps ?? []) {
+      // Collect edited files from tool results
+      for (const step of steps ?? []) {
         for (const tr of step.toolResults ?? []) {
           const toolName = "toolName" in tr ? String(tr.toolName) : "";
-          if (toolName !== "edit_file" && toolName !== "write_file") continue;
+          if (!["edit_file", "write_file", "overwrite_file", "edit_ast"].includes(toolName)) continue;
           const editResult = tr.result as { path?: string; success?: boolean };
           if (editResult?.path && editResult?.success !== false) {
             edits.push(editResult.path);

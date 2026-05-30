@@ -113,11 +113,11 @@ export function createTools(ctx: ToolContext) {
     },
 
     edit_ast: {
-      description: "Replace the entire body of a TypeScript/JavaScript function or class using ts-morph. Prefer over edit_file for large files.",
+      description: "Replace a TypeScript/JavaScript function, class, or class method using ts-morph AST. For class methods use 'ClassName.methodName' notation. Prefer over edit_file for large structural changes.",
       parameters: z.object({
         path: z.string().describe("Relative path to the file"),
-        symbol_name: z.string().describe("Name of the function, class, or method to replace"),
-        new_content: z.string().describe("The **complete** new code for this symbol, including its declaration (e.g. 'function doX() { ... }')"),
+        symbol_name: z.string().describe("Symbol to replace. Use 'ClassName.methodName' for class methods, or just the name for top-level functions/classes/interfaces."),
+        new_content: z.string().describe("Complete replacement code for the symbol including its declaration"),
       }),
       execute: async ({ path: filePath, symbol_name, new_content }: { path: string; symbol_name: string; new_content: string }) => {
         const absPath = resolvePath(filePath);
@@ -129,36 +129,82 @@ export function createTools(ctx: ToolContext) {
         const content = await readFile(absPath, "utf-8");
         const sourceFile = project.createSourceFile(absPath, content);
 
-        // Find the node
         let targetNode: any = null;
-        
-        for (const dec of sourceFile.getClasses()) {
-          if (dec.getName() === symbol_name) targetNode = dec;
-          for (const method of dec.getMethods()) {
-            if (method.getName() === symbol_name) targetNode = method;
+
+        // Support "ClassName.methodName" notation
+        const dotIdx = symbol_name.indexOf(".");
+        if (dotIdx !== -1) {
+          const className = symbol_name.slice(0, dotIdx);
+          const methodName = symbol_name.slice(dotIdx + 1);
+          for (const cls of sourceFile.getClasses()) {
+            if (cls.getName() === className) {
+              for (const method of cls.getMethods()) {
+                if (method.getName() === methodName) {
+                  targetNode = method;
+                  break;
+                }
+              }
+              // Also check getters/setters
+              if (!targetNode) {
+                for (const getter of cls.getGetAccessors()) {
+                  if (getter.getName() === methodName) { targetNode = getter; break; }
+                }
+              }
+              if (!targetNode) {
+                for (const setter of cls.getSetAccessors()) {
+                  if (setter.getName() === methodName) { targetNode = setter; break; }
+                }
+              }
+              break;
+            }
           }
-        }
-        if (!targetNode) {
-          for (const dec of sourceFile.getFunctions()) {
-            if (dec.getName() === symbol_name) targetNode = dec;
+          if (!targetNode) {
+            return { success: false, error: `Method '${methodName}' not found in class '${className}'. Available classes: ${sourceFile.getClasses().map(c => c.getName()).join(", ")}` };
           }
-        }
-        if (!targetNode) {
-          for (const dec of sourceFile.getVariableDeclarations()) {
-            if (dec.getName() === symbol_name) targetNode = dec;
+        } else {
+          // Top-level symbol search
+          for (const dec of sourceFile.getClasses()) {
+            if (dec.getName() === symbol_name) { targetNode = dec; break; }
           }
-        }
-        if (!targetNode) {
-          for (const dec of sourceFile.getInterfaces()) {
-            if (dec.getName() === symbol_name) targetNode = dec;
+          if (!targetNode) {
+            for (const dec of sourceFile.getFunctions()) {
+              if (dec.getName() === symbol_name) { targetNode = dec; break; }
+            }
+          }
+          if (!targetNode) {
+            for (const dec of sourceFile.getVariableDeclarations()) {
+              if (dec.getName() === symbol_name) { targetNode = dec; break; }
+            }
+          }
+          if (!targetNode) {
+            for (const dec of sourceFile.getInterfaces()) {
+              if (dec.getName() === symbol_name) { targetNode = dec; break; }
+            }
+          }
+          if (!targetNode) {
+            for (const dec of sourceFile.getTypeAliases()) {
+              if (dec.getName() === symbol_name) { targetNode = dec; break; }
+            }
+          }
+          if (!targetNode) {
+            // Also search class methods by name alone as fallback (may match multiple, takes first)
+            for (const cls of sourceFile.getClasses()) {
+              for (const method of cls.getMethods()) {
+                if (method.getName() === symbol_name) { targetNode = method; break; }
+              }
+              if (targetNode) break;
+            }
+          }
+          if (!targetNode) {
+            const available = [
+              ...sourceFile.getClasses().map(c => c.getName() ?? ""),
+              ...sourceFile.getFunctions().map(f => f.getName() ?? ""),
+              ...sourceFile.getInterfaces().map(i => i.getName()),
+            ].filter(Boolean).join(", ");
+            return { success: false, error: `Symbol '${symbol_name}' not found. Available top-level symbols: ${available || "none"}. For class methods use 'ClassName.methodName'.` };
           }
         }
 
-        if (!targetNode) {
-          return { success: false, error: `Symbol not found: ${symbol_name}` };
-        }
-
-        // We replace the node with new content
         targetNode.replaceWithText(new_content);
         const newContent = sourceFile.getFullText();
 
@@ -171,15 +217,13 @@ export function createTools(ctx: ToolContext) {
 
         const diff = createTwoFilesPatch(filePath, filePath, content, newContent);
         await writeFile(absPath, newContent, "utf-8");
-
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
-
         return { success: true, path: filePath, diff };
       },
     },
 
     write_file: {
-      description: "Create a new file. Cannot overwrite existing files — use edit_file instead.",
+      description: "Create a new file. Cannot overwrite existing files — use edit_file or overwrite_file instead.",
       parameters: z.object({
         path: z.string().describe("Relative path for the new file"),
         content: z.string().describe("File content"),
@@ -187,7 +231,7 @@ export function createTools(ctx: ToolContext) {
       execute: async ({ path: filePath, content }: { path: string; content: string }) => {
         const absPath = resolvePath(filePath);
         if (existsSync(absPath)) {
-          return { success: false, error: `File already exists: ${filePath}. Use edit_file to modify.` };
+          return { success: false, error: `File already exists: ${filePath}. Use edit_file for targeted edits or overwrite_file to replace the whole file.` };
         }
 
         await mkdir(path.dirname(absPath), { recursive: true });
@@ -196,6 +240,34 @@ export function createTools(ctx: ToolContext) {
         ctx.onEvent?.({ type: "edit", path: filePath, diff: `+ Created new file: ${filePath}` });
 
         return { success: true, path: filePath, created: true };
+      },
+    },
+
+    overwrite_file: {
+      description: "Replace an ENTIRE existing file with new content. Use when edit_file's search/replace is impractical (e.g. large rewrites, new implementations). File must already exist.",
+      parameters: z.object({
+        path: z.string().describe("Relative path to the existing file"),
+        content: z.string().describe("Complete new file content"),
+      }),
+      execute: async ({ path: filePath, content }: { path: string; content: string }) => {
+        const absPath = resolvePath(filePath);
+        if (!existsSync(absPath)) {
+          return { success: false, error: `File not found: ${filePath}. Use write_file to create new files.` };
+        }
+
+        const oldContent = await readFile(absPath, "utf-8");
+
+        if (ctx.approveEdit) {
+          const approved = await ctx.approveEdit(filePath, content);
+          if (!approved) {
+            return { success: false, error: "Edit rejected by user" };
+          }
+        }
+
+        const diff = createTwoFilesPatch(filePath, filePath, oldContent, content);
+        await writeFile(absPath, content, "utf-8");
+        ctx.onEvent?.({ type: "edit", path: filePath, diff });
+        return { success: true, path: filePath, overwritten: true, diff };
       },
     },
 

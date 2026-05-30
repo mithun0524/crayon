@@ -72,7 +72,8 @@
           "enum": [
             "openrouter",
             "anthropic",
-            "openai"
+            "openai",
+            "google"
           ],
           "default": "openrouter",
           "description": "LLM provider"
@@ -85,7 +86,12 @@
         "crayon.autoApplyEdits": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically apply file edits without preview"
+          "description": "When true, file edits are applied immediately without a diff preview prompt. Set to false to review each change before it lands."
+        },
+        "crayon.googleApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Google AI (Gemini) API key. Used when provider is 'google' or model name starts with 'gemini'."
         }
       }
     }

@@ -110,10 +110,12 @@ async function runAgentTask(task: string): Promise<void> {
   const anthropicApiKey = config.get<string>("anthropicApiKey") || process.env.ANTHROPIC_API_KEY;
   const openaiApiKey = config.get<string>("openaiApiKey") || process.env.OPENAI_API_KEY;
   const openrouterApiKey = config.get<string>("openrouterApiKey") || process.env.OPENROUTER_API_KEY;
+  const googleApiKey = config.get<string>("googleApiKey") || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   const defaultModel = config.get<string>("defaultModel") || "nvidia/nemotron-3-super-120b-a12b:free";
-  const provider = config.get<"openrouter" | "anthropic" | "openai">("provider") || "openrouter";
+  const provider = config.get<"openrouter" | "anthropic" | "openai" | "google">("provider") || "openrouter";
+  const autoApplyEdits = config.get<boolean>("autoApplyEdits") ?? true;
 
-  if (!anthropicApiKey && !openaiApiKey && !openrouterApiKey) {
+  if (!anthropicApiKey && !openaiApiKey && !openrouterApiKey && !googleApiKey) {
     vscode.window.showErrorMessage(
       "Crayon: Set crayon.openrouterApiKey or OPENROUTER_API_KEY in settings"
     );
@@ -142,6 +144,7 @@ async function runAgentTask(task: string): Promise<void> {
         anthropicApiKey,
         openaiApiKey,
         openrouterApiKey,
+        googleApiKey,
         onEvent: (event: AgentEvent) => {
           chatProvider.postEvent(event);
           switch (event.type) {
@@ -171,11 +174,13 @@ async function runAgentTask(task: string): Promise<void> {
           );
           return choice === "Approve";
         },
-        approveEdit: async (relPath: string, newContent: string) => {
-          const absPath = vscode.Uri.joinPath(vscode.Uri.file(folder), relPath);
-          const previewUri = vscode.Uri.parse(`crayon-diff:${absPath.fsPath}`);
-          return await vscode.commands.executeCommand<boolean>("crayon.previewEdit", absPath, previewUri, relPath, newContent) ?? false;
-        },
+        approveEdit: autoApplyEdits
+          ? async () => true
+          : async (relPath: string, newContent: string) => {
+              const absPath = vscode.Uri.joinPath(vscode.Uri.file(folder), relPath);
+              const previewUri = vscode.Uri.parse(`crayon-diff:${absPath.fsPath}`);
+              return await vscode.commands.executeCommand<boolean>("crayon.previewEdit", absPath, previewUri, relPath, newContent) ?? false;
+            },
       });
 
       try {

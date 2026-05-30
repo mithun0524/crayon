@@ -6,6 +6,7 @@ import type { McpServerConfig } from "./tools/mcp.js";
 export type AgentEvent =
   | { type: "thinking"; content: string }
   | { type: "text"; content: string }
+  | { type: "text_delta"; content: string }
   | { type: "tool_call"; name: string; args: unknown }
   | { type: "tool_result"; name: string; result: unknown }
   | { type: "plan"; steps: string[] }
@@ -17,10 +18,11 @@ export type AgentEvent =
 export interface AgentConfig {
   workspaceRoot: string;
   model?: string;
-  provider?: "openrouter" | "anthropic" | "openai";
+  provider?: "openrouter" | "anthropic" | "openai" | "google";
   anthropicApiKey?: string;
   openaiApiKey?: string;
   openrouterApiKey?: string;
+  googleApiKey?: string;
   maxSteps?: number;
   maxEvalRetries?: number;
   onEvent?: (event: AgentEvent) => void;
