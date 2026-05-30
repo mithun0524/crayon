@@ -189,6 +189,18 @@ export class CrayonAgent {
       const steps = await streamResult.steps;
       totalSteps += steps?.length ?? 1;
 
+      try {
+        const usage = await streamResult.usage;
+        this.emit({
+          type: "usage",
+          promptTokens: usage.promptTokens,
+          completionTokens: usage.completionTokens,
+          totalTokens: usage.totalTokens,
+        });
+      } catch {
+        // Suppress usage resolution error if not supported
+      }
+
       // Fallback: if textStream was empty but steps had text
       if (!responseText && steps?.length) {
         for (const step of steps) {

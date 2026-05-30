@@ -13,7 +13,8 @@ export type AgentEvent =
   | { type: "edit"; path: string; diff: string }
   | { type: "eval"; passed: boolean; output: string }
   | { type: "done"; summary: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "usage"; promptTokens: number; completionTokens: number; totalTokens: number };
 
 export interface AgentConfig {
   workspaceRoot: string;

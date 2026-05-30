@@ -5,10 +5,11 @@ import os from "node:os";
 
 export interface CrayonConfig {
   defaultModel?: string;
-  provider?: "openrouter" | "anthropic" | "openai";
+  provider?: "openrouter" | "anthropic" | "openai" | "google";
   anthropicApiKey?: string;
   openaiApiKey?: string;
   openrouterApiKey?: string;
+  googleApiKey?: string;
 }
 
 const CONFIG_DIR = path.join(os.homedir(), ".crayon");
@@ -21,6 +22,7 @@ export async function loadConfig(): Promise<CrayonConfig> {
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     openaiApiKey: process.env.OPENAI_API_KEY,
     openrouterApiKey: process.env.OPENROUTER_API_KEY,
+    googleApiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY,
   };
 
   if (existsSync(CONFIG_PATH)) {
@@ -32,6 +34,7 @@ export async function loadConfig(): Promise<CrayonConfig> {
         anthropicApiKey: config.anthropicApiKey ?? file.anthropicApiKey,
         openaiApiKey: config.openaiApiKey ?? file.openaiApiKey,
         openrouterApiKey: config.openrouterApiKey ?? file.openrouterApiKey,
+        googleApiKey: config.googleApiKey ?? file.googleApiKey,
       };
     } catch {
       // use env only
@@ -51,5 +54,5 @@ export function getConfigPath(): string {
 }
 
 export function hasApiKey(config: CrayonConfig): boolean {
-  return !!(config.anthropicApiKey || config.openaiApiKey || config.openrouterApiKey);
+  return !!(config.anthropicApiKey || config.openaiApiKey || config.openrouterApiKey || config.googleApiKey);
 }
