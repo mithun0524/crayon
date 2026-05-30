@@ -1,5 +1,6 @@
 // Dummy comment added by Crayon
 // TODO: dummy comment
+// Another dummy comment
 import { generateText, tool, type CoreMessage } from "ai";
 import { CodeIndexer } from "@crayon/indexer";
 import type { AgentConfig, AgentEvent, AgentResult } from "./types.js";

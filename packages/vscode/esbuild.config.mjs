@@ -5,13 +5,24 @@ const isWatch = process.argv.includes("--watch");
 
 const nativeModules = [
   "vscode",
-  "@crayon/agent",
-  "@crayon/indexer",
   "ai",
   "@ai-sdk/anthropic",
   "@ai-sdk/openai",
+  "@modelcontextprotocol/sdk",
+  "diff",
+  "fast-glob",
   "simple-git",
+  "ts-morph",
+  "zod",
   "@vscode/ripgrep",
+  "chokidar",
+  "sql.js", 
+  "better-sqlite3",
+  "pg",
+  "mysql2",
+  "mariadb",
+  "tedious",
+  "pg-query-stream"
 ];
 
 const extensionConfig = {

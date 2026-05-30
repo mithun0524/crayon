@@ -6,8 +6,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
 
   constructor(
-    private readonly extensionUri: vscode.Uri,
-    private readonly context: vscode.ExtensionContext
+    private readonly extensionUri: vscode.Uri
   ) {}
 
   resolveWebviewView(

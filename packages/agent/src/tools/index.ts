@@ -313,6 +313,13 @@ export function createTools(ctx: ToolContext) {
         message: z.string().describe("Commit message"),
       }),
       execute: async ({ message }: { message: string }) => {
+        if (ctx.approveCommand) {
+          const approved = await ctx.approveCommand(`git add . && git commit -m ${JSON.stringify(message)}`);
+          if (!approved) {
+            return { success: false, error: "Commit rejected by user", message };
+          }
+        }
+
         const git = simpleGit(ctx.workspaceRoot);
         await git.add(".");
         const result = await git.commit(message);

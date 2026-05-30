@@ -28,7 +28,7 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
-  chatProvider = new ChatPanelProvider(context.extensionUri, context);
+  chatProvider = new ChatPanelProvider(context.extensionUri);
 
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider('crayon-diff', diffProvider)
@@ -77,7 +77,7 @@ export function activate(context: vscode.ExtensionContext): void {
         placeHolder: "e.g. Fix the failing test in utils.test.ts",
       });
       if (!task) return;
-      await runAgentTask(task, context);
+      await runAgentTask(task);
     })
   );
 
@@ -102,7 +102,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 }
 
-async function runAgentTask(task: string, context: vscode.ExtensionContext): Promise<void> {
+async function runAgentTask(task: string): Promise<void> {
   const folder = getWorkspaceRoot();
   if (!folder) return;
 
