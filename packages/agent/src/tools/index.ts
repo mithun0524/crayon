@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { createTwoFilesPatch } from "diff";
 import { simpleGit } from "simple-git";
 import { z } from "zod";
+import { Project } from "ts-morph";
 import type { ToolContext } from "../types.js";
 
 const DANGEROUS_PATTERNS = [
@@ -95,6 +96,72 @@ export function createTools(ctx: ToolContext) {
 
         const newContent = content.replace(old_string, new_string);
         
+        if (ctx.approveEdit) {
+          const approved = await ctx.approveEdit(filePath, newContent);
+          if (!approved) {
+            return { success: false, error: "Edit rejected by user" };
+          }
+        }
+
+        const diff = createTwoFilesPatch(filePath, filePath, content, newContent);
+        await writeFile(absPath, newContent, "utf-8");
+
+        ctx.onEvent?.({ type: "edit", path: filePath, diff });
+
+        return { success: true, path: filePath, diff };
+      },
+    },
+
+    edit_ast: {
+      description: "Replace the entire body of a TypeScript/JavaScript function or class using ts-morph. Prefer over edit_file for large files.",
+      parameters: z.object({
+        path: z.string().describe("Relative path to the file"),
+        symbol_name: z.string().describe("Name of the function, class, or method to replace"),
+        new_content: z.string().describe("The **complete** new code for this symbol, including its declaration (e.g. 'function doX() { ... }')"),
+      }),
+      execute: async ({ path: filePath, symbol_name, new_content }: { path: string; symbol_name: string; new_content: string }) => {
+        const absPath = resolvePath(filePath);
+        if (!existsSync(absPath)) {
+          return { success: false, error: `File not found: ${filePath}.` };
+        }
+
+        const project = new Project({ useInMemoryFileSystem: true });
+        const content = await readFile(absPath, "utf-8");
+        const sourceFile = project.createSourceFile(absPath, content);
+
+        // Find the node
+        let targetNode: any = null;
+        
+        for (const dec of sourceFile.getClasses()) {
+          if (dec.getName() === symbol_name) targetNode = dec;
+          for (const method of dec.getMethods()) {
+            if (method.getName() === symbol_name) targetNode = method;
+          }
+        }
+        if (!targetNode) {
+          for (const dec of sourceFile.getFunctions()) {
+            if (dec.getName() === symbol_name) targetNode = dec;
+          }
+        }
+        if (!targetNode) {
+          for (const dec of sourceFile.getVariableDeclarations()) {
+            if (dec.getName() === symbol_name) targetNode = dec;
+          }
+        }
+        if (!targetNode) {
+          for (const dec of sourceFile.getInterfaces()) {
+            if (dec.getName() === symbol_name) targetNode = dec;
+          }
+        }
+
+        if (!targetNode) {
+          return { success: false, error: `Symbol not found: ${symbol_name}` };
+        }
+
+        // We replace the node with new content
+        targetNode.replaceWithText(new_content);
+        const newContent = sourceFile.getFullText();
+
         if (ctx.approveEdit) {
           const approved = await ctx.approveEdit(filePath, newContent);
           if (!approved) {
