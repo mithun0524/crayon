@@ -25,7 +25,7 @@ export default function Navbar() {
         
         {/* Actions */}
         <div className="hidden md:flex items-center gap-4">
-          <Link href="https://github.com/crayon" className="text-sm font-medium text-white/70 hover:text-white transition-colors font-inter focus-ring rounded-md px-2 py-1">
+          <Link href="https://github.com/mithun0524/crayon" className="text-sm font-medium text-white/70 hover:text-white transition-colors font-inter focus-ring rounded-md px-2 py-1">
             GitHub
           </Link>
           <button className="bg-white text-[#09090B] px-5 py-2 rounded-full font-inter font-medium text-sm hover:scale-105 transition-all shadow-[0_0_15px_rgba(255,255,255,0.1)] focus-ring">
@@ -60,7 +60,7 @@ export default function Navbar() {
           <Link href="#how-it-works" className="p-2 hover:bg-white/5 rounded-lg focus-ring" onClick={() => setIsMobileMenuOpen(false)}>How it Works</Link>
           <Link href="#pricing" className="p-2 hover:bg-white/5 rounded-lg focus-ring" onClick={() => setIsMobileMenuOpen(false)}>Pricing</Link>
           <Link href="#docs" className="p-2 hover:bg-white/5 rounded-lg focus-ring" onClick={() => setIsMobileMenuOpen(false)}>Docs</Link>
-          <Link href="https://github.com/crayon" className="p-2 hover:bg-white/5 rounded-lg focus-ring" onClick={() => setIsMobileMenuOpen(false)}>GitHub</Link>
+          <Link href="https://github.com/mithun0524/crayon" className="p-2 hover:bg-white/5 rounded-lg focus-ring" onClick={() => setIsMobileMenuOpen(false)}>GitHub</Link>
         </div>
         <button className="w-full bg-white text-[#09090B] px-5 py-3 rounded-xl font-inter font-bold text-sm hover:bg-gray-200 transition-all focus-ring">
           Get Started Free
