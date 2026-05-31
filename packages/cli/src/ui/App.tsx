@@ -16,6 +16,7 @@ import { StatusBar } from "./StatusBar.js";
 import { DiffRenderer } from "./DiffRenderer.js";
 import { saveSession, loadSession } from "../session.js";
 import { theme } from "./theme.js";
+import { syntaxThemeDark } from "./syntaxTheme.js";
 import { useTerminalSize } from "./hooks/useTerminalSize.js";
 import { AgentProgress } from "./components/AgentProgress.js";
 import { ThinkingMessage } from "./messages/ThinkingMessage.js";
@@ -519,7 +520,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                       const code = lines.slice(1, -1).join("\n");
                       let highlighted = code;
                       try {
-                        highlighted = highlight(code, { language: lang || "typescript", ignoreIllegals: true });
+                        highlighted = highlight(code, { language: lang || "typescript", ignoreIllegals: true, theme: syntaxThemeDark });
                       } catch {}
                       return (
                         <Box key={index} marginY={1} paddingX={1} borderStyle="round" borderColor={theme.border} flexDirection="column">
@@ -531,7 +532,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                     if (part.trim() === "") return null;
                     let mdText = part;
                     try {
-                      mdText = highlight(part, { language: "markdown", ignoreIllegals: true });
+                      mdText = highlight(part, { language: "markdown", ignoreIllegals: true, theme: syntaxThemeDark });
                     } catch {}
                     return <Text key={index} color={theme.text}>{mdText}</Text>;
                   })}

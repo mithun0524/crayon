@@ -14,7 +14,7 @@ export default function Hero() {
     <section className="flex flex-col items-center pt-40 pb-20 px-6 z-10 w-full max-w-7xl mx-auto relative">
       <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#121214] border border-white/10 text-white/80 text-xs font-inter tracking-wide uppercase mb-10 fade-in-up delay-100">
         <span className="w-2 h-2 rounded-full bg-[#00E5FF] shadow-[0_0_8px_#00E5FF]"></span>
-        Forge Protocol v1.0
+        Crayon v1.0
       </div>
 
       <h1 className="text-6xl md:text-8xl font-outfit font-bold tracking-tight text-center text-white mb-8 max-w-5xl leading-[1.1] fade-in-up delay-200">

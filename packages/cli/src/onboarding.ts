@@ -6,8 +6,30 @@ import { existsSync } from 'node:fs';
 import os from 'node:os';
 
 export async function runOnboardingFlow(): Promise<void> {
-  console.log(chalk.cyan.bold("\nWelcome to Crayon! The Autonomous Terminal AI."));
-  console.log(chalk.gray("Let's get your environment set up.\n"));
+  console.clear();
+  
+  // Animated typing effect for the header
+  const title = "⬡ Crayon";
+  const subtitle = "The Autonomous Terminal AI";
+  
+  process.stdout.write("\n");
+  for (const char of title) {
+    process.stdout.write(chalk.bold.cyan(char));
+    await new Promise(r => setTimeout(r, 60)); // Typewriter delay
+  }
+  process.stdout.write("\n");
+  
+  for (const char of subtitle) {
+    process.stdout.write(chalk.dim(char));
+    await new Promise(r => setTimeout(r, 20)); // Faster subtitle delay
+  }
+  process.stdout.write("\n\n");
+  
+  await new Promise(r => setTimeout(r, 500)); // Pause before continuing
+  
+  console.log("Welcome! Let's get your environment configured.");
+  console.log(chalk.dim("This will only take a moment.\n"));
+  await new Promise(r => setTimeout(r, 500));
 
   const provider = await select({
     message: 'Which AI provider would you like to use?',
@@ -40,6 +62,24 @@ export async function runOnboardingFlow(): Promise<void> {
     default: true,
   });
 
+  const permissionMode = await select({
+    message: 'Select the default permission mode:',
+    choices: [
+      { name: 'Ask (Require approval for all terminal commands and file edits)', value: 'ask' },
+      { name: 'Auto-Edit (Auto-approve file edits, ask for terminal commands)', value: 'auto-edit' },
+      { name: 'Auto (Fully autonomous, run commands and edits automatically)', value: 'auto' },
+    ],
+  });
+
+  const theme = await select({
+    message: 'Select your preferred UI theme:',
+    choices: [
+      { name: 'Dark Mode (Default)', value: 'dark' },
+      { name: 'Light Mode', value: 'light' },
+      { name: 'High Contrast', value: 'high-contrast' },
+    ],
+  });
+
   const configPath = path.join(os.homedir(), ".crayon", "config.json");
   const configDir = path.dirname(configPath);
   
@@ -51,6 +91,8 @@ export async function runOnboardingFlow(): Promise<void> {
     provider,
     defaultModel: model,
     telemetry,
+    permissionMode,
+    theme,
   };
 
   if (provider === "anthropic") configObj.anthropicApiKey = apiKey;

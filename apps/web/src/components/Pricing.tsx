@@ -41,7 +41,8 @@ export default function Pricing() {
             <span className="text-white/40 font-inter pb-2">/mo</span>
           </div>
           <ul className="space-y-4 mb-10 flex-1">
-            <Feature item="500 tasks per month" />
+            <Feature item="Bring Your Own Key (BYOK)" />
+            <Feature item="Local execution only" />
             <Feature item="Standard Context Engine" />
             <Feature item="Community Support" />
           </ul>
@@ -59,13 +60,13 @@ export default function Pricing() {
           </div>
           <div className="mb-8 flex flex-col">
             <div className="flex items-end gap-1">
-              <span className="text-5xl font-outfit font-bold text-white transition-all">{isAnnual ? '$24' : '$29'}</span>
+              <span className="text-5xl font-outfit font-bold text-white transition-all">{isAnnual ? '$39' : '$49'}</span>
               <span className="text-white/40 font-inter pb-2">/mo</span>
             </div>
-            {isAnnual && <span className="text-[#00E5FF] text-sm font-inter mt-2">Billed $288 yearly</span>}
+            {isAnnual && <span className="text-[#00E5FF] text-sm font-inter mt-2">Billed $468 yearly</span>}
           </div>
           <ul className="space-y-4 mb-10 flex-1">
-            <Feature item="Unlimited tasks" />
+            <Feature item="500 Managed Tasks/mo (No API keys needed)" />
             <Feature item="Advanced Context Engine (95% reduction)" />
             <Feature item="Self-Healing Loop" />
             <Feature item="Browser Agent Testing" />
@@ -88,10 +89,10 @@ export default function Pricing() {
              {isAnnual && <span className="text-[#00E5FF] text-sm font-inter mt-2">Billed $948 yearly</span>}
           </div>
           <ul className="space-y-4 mb-10 flex-1">
-            <Feature item="Everything in Pro" />
+            <Feature item="Unlimited Managed Tasks" />
             <Feature item="Multi-Agent Swarm (Architect, QA)" />
             <Feature item="Centralized Project Memory" />
-            <Feature item="Enterprise SSO" />
+            <Feature item="Enterprise SSO & Audit Logs" />
             <Feature item="Dedicated Success Manager" />
           </ul>
           <button className="w-full py-4 rounded-xl text-white hover:bg-white/10 transition-colors font-medium border border-white/10 focus-ring">Contact Sales</button>

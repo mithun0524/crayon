@@ -126,6 +126,10 @@ body {
 }
 
 /* Global Interaction Utilities */
+button, a, [role="button"] {
+  cursor: pointer;
+}
+
 button:active, a:active {
   transform: scale(0.98);
 }
@@ -136,6 +140,23 @@ button:active, a:active {
 
 .focus-ring:focus-visible {
   box-shadow: 0 0 0 2px #000000, 0 0 0 4px #00E5FF;
+}
+
+/* Interactive Mouse Spotlight */
+.mouse-spotlight {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(
+    600px circle at var(--mouse-x, 50vw) var(--mouse-y, 50vh),
+    rgba(0, 229, 255, 0.05),
+    transparent 40%
+  );
+  transition: opacity 0.5s ease;
 }
 
 /* Accessibility: Reduced Motion */

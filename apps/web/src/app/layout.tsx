@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Outfit, Inter, JetBrains_Mono } from "next/font/google";
+import InteractiveBackground from "../components/InteractiveBackground";
+import CookieBanner from "../components/CookieBanner";
 import "./globals.css";
 
 const outfit = Outfit({
@@ -36,8 +38,10 @@ export default function RootLayout({
       className={`dark ${outfit.variable} ${inter.variable} ${jetbrainsMono.variable} h-full antialiased scroll-smooth`}
     >
       <body className="min-h-full flex flex-col bg-[#09090B] text-white font-inter overflow-x-hidden relative">
+        <InteractiveBackground />
         <div className="noise-bg pointer-events-none fixed inset-0 z-50"></div>
         {children}
+        <CookieBanner />
       </body>
     </html>
   );

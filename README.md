@@ -1,67 +1,78 @@
-# Crayon
+<div align="center">
+  <img src="https://img.shields.io/badge/CRAYON-Terminal%20AI-cyan?style=for-the-badge" alt="Crayon AI" />
+  <br/>
+  <h1>⬡ Crayon</h1>
+  <p><strong>The Autonomous Terminal AI</strong></p>
+  
+  <p>
+    <img alt="NPM Version" src="https://img.shields.io/npm/v/@crayon/cli?color=cyan&label=npm&style=flat-square">
+    <img alt="Node.js version" src="https://img.shields.io/node/v/@crayon/cli?color=purple&style=flat-square">
+    <img alt="License" src="https://img.shields.io/github/license/mithun0524/crayon?color=blue&style=flat-square">
+  </p>
 
-Autonomous AI coding agent — understands your codebase, plans tasks, edits code safely, runs tools, and self-heals until the job is done.
+  <p>
+    An intelligent, autonomous AI coding agent living directly in your terminal. Crayon understands your codebase deeply, plans complex tasks, writes code safely, executes terminal commands, and self-heals errors until the job is completely finished.
+  </p>
+</div>
 
-## Quick Start
+---
+
+## ⚡ Features
+
+- **🧠 Autonomous ReAct Loop**: Crayon thinks, plans, and executes. If a test fails or a build breaks, it reads the error and fixes it.
+- **🛡️ Secure by Design**: Fine-grained permission modes (`Ask`, `Auto-Edit`, `Auto (God Mode)`). Built-in guards against path traversal, oversized files, and dangerous bash commands (e.g. `rm -rf /`).
+- **✨ Beautiful CLI Interface**: Implemented with React for the Terminal (`ink`). Features predictive slash commands, interactive setup wizards, typing animations, and custom syntax-highlighted markdown.
+- **🚀 Local Indexer**: Rapid semantic codebase search and dependency graph resolution using a lightweight SQLite backend.
+- **🔌 Multi-Provider Support**: First-class support for Anthropic (Claude 3.7 Sonnet), OpenAI, Google (Gemini), and OpenRouter.
+
+## 📦 Quick Start
+
+### Installation
 
 ```bash
-pnpm install
-pnpm build
-
-# In any project:
-pnpm --filter @crayon/cli exec crayon init
-pnpm --filter @crayon/cli exec crayon chat
+# Install globally via npm
+npm install -g @crayon/cli
 ```
 
-## Configuration
+### Running Crayon
 
-Set API keys via environment variables:
+Simply run the agent in any repository:
 
 ```bash
-export OPENROUTER_API_KEY=sk-or-v1-...
-export CRAYON_MODEL=nvidia/nemotron-3-super-120b-a12b:free
-export CRAYON_PROVIDER=openrouter
+crayon chat
 ```
 
-Or create `~/.crayon/config.json`:
+On your first boot, Crayon will launch a beautiful interactive setup wizard to securely configure your API key, preferred models, default UI theme, and permission boundaries.
 
-```json
-{
-  "provider": "openrouter",
-  "defaultModel": "nvidia/nemotron-3-super-120b-a12b:free",
-  "openrouterApiKey": "sk-or-v1-..."
-}
-```
-
-## CLI Commands
+## 🛠️ Commands
 
 | Command | Description |
 |---------|-------------|
-| `crayon init` | Initialize `.crayon/` and index the repo |
-| `crayon index` | Force re-index the workspace |
-| `crayon chat` | Interactive agent session |
-| `crayon run "<task>"` | One-shot autonomous task |
+| `crayon init` | Initialize the local `.crayon/` configuration and index the repo |
+| `crayon index` | Force a fresh re-index of the current workspace |
+| `crayon chat` | Launch an interactive agent session |
+| `crayon run "<task>"` | Execute a one-shot autonomous task in the background |
 
-## VS Code Extension
+Once inside the interactive `chat` interface, you can type `/` to access built-in predictive commands like `/mode` (change permissions), `/files` (view touched files), `/cost` (view token burn), and `/compact` (compress context window).
 
-```bash
-cd packages/vscode
-pnpm build
-# Press F5 in VS Code to launch Extension Development Host
-```
+## 🏗️ Architecture
 
-Commands: **Crayon: Chat**, **Crayon: Run Task**, **Crayon: Index Workspace**
+Crayon is designed as a modular monorepo powered by `pnpm`:
 
-## Architecture
-
-```
+```text
 packages/
-├── agent/    # ReAct loop, tools, memory, planner
-├── indexer/  # Symbol extraction, dependency graph, hybrid search
-├── cli/      # Terminal interface
-└── vscode/   # VS Code extension
+├── agent/    # The core LLM ReAct loop, planner, memory, and native tools
+├── indexer/  # AST extraction, dependency graphs, semantic code search
+├── cli/      # The beautiful Ink-based Terminal UI, onboarding, and telemetry
+└── vscode/   # (Coming Soon) First-class VS Code IDE Extension
 ```
 
-## License
+## 🔐 Configuration
 
-MIT
+Configurations are securely stored in `~/.crayon/config.json`.
+You can also override via standard environment variables:
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`.
+
+## 📄 License
+
+MIT © [Mithun](https://github.com/mithun0524)

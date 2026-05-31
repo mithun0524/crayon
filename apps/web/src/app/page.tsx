@@ -12,7 +12,7 @@ import Footer from '../components/Footer';
 
 export default function Home() {
   return (
-    <div className="min-h-screen relative overflow-hidden flex flex-col bg-[#09090B]">
+    <div className="min-h-screen relative overflow-hidden flex flex-col bg-transparent">
       {/* Dark gradient mesh replacing the massive aurora blobs for performance */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10">
         <div className="absolute top-[-20%] left-[20%] w-[50vw] h-[50vw] bg-[#00E5FF]/5 blur-[120px] rounded-full mix-blend-screen" />
