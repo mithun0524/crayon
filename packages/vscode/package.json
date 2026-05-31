@@ -2,7 +2,7 @@
   "name": "crayon-vscode",
   "displayName": "Crayon",
   "description": "Autonomous AI coding agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "crayon",
   "engines": {
     "vscode": "^1.85.0"
@@ -105,8 +105,8 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.81",
     "@ai-sdk/openai": "^3.0.67",
-    "@crayon/agent": "workspace:*",
-    "@crayon/indexer": "workspace:*",
+    "crayon-agent": "0.1.1",
+    "crayon-indexer": "0.1.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@vscode/ripgrep": "^1.18.0",
     "ai": "^6.0.193",

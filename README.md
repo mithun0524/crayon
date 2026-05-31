@@ -5,8 +5,8 @@
   <p><strong>The Autonomous Terminal AI</strong></p>
   
   <p>
-    <img alt="NPM Version" src="https://img.shields.io/npm/v/@crayon/cli?color=cyan&label=npm&style=flat-square">
-    <img alt="Node.js version" src="https://img.shields.io/node/v/@crayon/cli?color=purple&style=flat-square">
+    <img alt="NPM Version" src="https://img.shields.io/npm/v/crayon-cli?color=cyan&label=npm&style=flat-square">
+    <img alt="Node.js version" src="https://img.shields.io/node/v/crayon-cli?color=purple&style=flat-square">
     <img alt="License" src="https://img.shields.io/github/license/mithun0524/crayon?color=blue&style=flat-square">
   </p>
 
@@ -31,7 +31,7 @@
 
 ```bash
 # Install globally via npm
-npm install -g @crayon/cli
+npm install -g crayon-cli
 ```
 
 ### Running Crayon

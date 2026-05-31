@@ -1,4 +1,4 @@
-import type { CodeIndexer, RepoIntelligence } from "@crayon/indexer";
+import type { CodeIndexer, RepoIntelligence } from "crayon-indexer";
 import type { TaskMode } from "../planner/plan.js";
 import type { WorkingMemory } from "../memory/working.js";
 import type { EpisodicMemory } from "../memory/episodic.js";

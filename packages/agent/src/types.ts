@@ -1,5 +1,5 @@
 import type { CoreMessage } from "ai";
-import type { CodeIndexer, RepoIntelligence } from "@crayon/indexer";
+import type { CodeIndexer, RepoIntelligence } from "crayon-indexer";
 import type { z } from "zod";
 import type { McpServerConfig } from "./tools/mcp.js";
 import type { FileStateCache } from "./context/fileState.js";

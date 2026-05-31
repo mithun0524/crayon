@@ -5,7 +5,7 @@ export default function Hero() {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText("npm install -g @crayon/cli");
+    navigator.clipboard.writeText("npm install -g crayon-cli");
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -38,7 +38,7 @@ export default function Hero() {
           className="flex items-center gap-4 bg-[#121214] rounded-full pl-6 pr-2 py-2 group hover:bg-[#1A1A1D] transition-colors border border-white/10 focus-ring cursor-copy"
           aria-label="Copy install command"
         >
-          <code className="text-sm font-mono text-white/80">npm install -g @crayon/cli</code>
+          <code className="text-sm font-mono text-white/80">npm install -g crayon-cli</code>
           <div className="bg-white/5 text-white/80 p-2 rounded-full group-hover:bg-white/10 transition-all relative">
             {copied ? (
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00FF66" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

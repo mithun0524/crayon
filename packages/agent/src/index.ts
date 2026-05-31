@@ -1,5 +1,5 @@
 import { streamText, tool, jsonSchema, type CoreMessage } from "ai";
-import { CodeIndexer } from "@crayon/indexer";
+import { CodeIndexer } from "crayon-indexer";
 import type { AgentConfig, AgentEvent, AgentResult } from "./types.js";
 import { WorkingMemory } from "./memory/working.js";
 import { EpisodicMemory } from "./memory/episodic.js";

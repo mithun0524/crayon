@@ -37,7 +37,7 @@
 ## Phase 1 — Foundation ✅ DONE
 > *Build the skeleton. Prove it can run.*
 
-- [x] Monorepo setup (`@crayon/agent`, `@crayon/indexer`, `@crayon/cli`, `@crayon/vscode`)
+- [x] Monorepo setup (`crayon-agent`, `crayon-indexer`, `crayon-cli`, `crayon-vscode`)
 - [x] `CrayonAgent` class with `generateText` / `streamText` loop
 - [x] File tools: read, edit, write, overwrite, AST edit
 - [x] Terminal tool with sandboxed approval

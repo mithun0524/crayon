@@ -11,3 +11,8 @@ Thumbs.db
 .vscode-test/
 *.vsix
 coverage/
+
+# Build caches
+.next/
+.turbo/
+packages/cli/bin/

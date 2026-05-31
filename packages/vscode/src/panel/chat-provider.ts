@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { CrayonAgent, type AgentEvent } from "@crayon/agent";
+import { CrayonAgent, type AgentEvent } from "crayon-agent";
 import { getEditorContext } from "../bridge.js";
 
 /**

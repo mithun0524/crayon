@@ -1,6 +1,6 @@
 {
-  "name": "@crayon/agent",
-  "version": "0.1.0",
+  "name": "crayon-agent",
+  "version": "0.1.1",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,7 +18,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^1.2.6",
     "@ai-sdk/openai": "^1.3.7",
-    "@crayon/indexer": "workspace:*",
+    "crayon-indexer": "0.1.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "ai": "^4.3.2",
     "diff": "^9.0.0",

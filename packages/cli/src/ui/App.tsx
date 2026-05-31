@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { createTwoFilesPatch } from "diff";
-import { CrayonAgent, type AgentEvent, autoCompact } from "@crayon/agent";
+import { CrayonAgent, type AgentEvent, autoCompact } from "crayon-agent";
 import { highlight } from "cli-highlight";
 import { loadConfig } from "../config.js";
 import { getGitInfo } from "./gitHelper.js";

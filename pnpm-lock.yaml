@@ -21,15 +21,15 @@ importers:
       '@ai-sdk/openai':
         specifier: ^1.3.7
         version: 1.3.24(zod@3.25.76)
-      '@crayon/indexer':
-        specifier: workspace:*
-        version: link:../indexer
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@3.25.76)
       ai:
         specifier: ^4.3.2
         version: 4.3.19(react@19.2.6)(zod@3.25.76)
+      crayon-indexer:
+        specifier: workspace:*
+        version: link:../indexer
       diff:
         specifier: ^8.0.3
         version: 8.0.4
@@ -79,12 +79,6 @@ importers:
 
   packages/cli:
     dependencies:
-      '@crayon/agent':
-        specifier: workspace:*
-        version: link:../agent
-      '@crayon/indexer':
-        specifier: workspace:*
-        version: link:../indexer
       '@inquirer/prompts':
         specifier: ^8.5.2
         version: 8.5.2(@types/node@22.19.19)
@@ -97,6 +91,12 @@ importers:
       commander:
         specifier: ^13.1.0
         version: 13.1.0
+      crayon-agent:
+        specifier: workspace:*
+        version: link:../agent
+      crayon-indexer:
+        specifier: workspace:*
+        version: link:../indexer
       diff:
         specifier: ^8.0.3
         version: 8.0.4
@@ -174,12 +174,6 @@ importers:
       '@ai-sdk/openai':
         specifier: ^3.0.67
         version: 3.0.67(zod@4.4.3)
-      '@crayon/agent':
-        specifier: workspace:*
-        version: link:../agent
-      '@crayon/indexer':
-        specifier: workspace:*
-        version: link:../indexer
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
@@ -192,6 +186,12 @@ importers:
       chokidar:
         specifier: ^5.0.0
         version: 5.0.0
+      crayon-agent:
+        specifier: workspace:*
+        version: link:../agent
+      crayon-indexer:
+        specifier: workspace:*
+        version: link:../indexer
       diff:
         specifier: ^8.0.3
         version: 8.0.4

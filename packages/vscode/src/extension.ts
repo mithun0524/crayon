@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { CrayonAgent, type AgentEvent } from "@crayon/agent";
-import { CodeIndexer } from "@crayon/indexer";
+import { CrayonAgent, type AgentEvent } from "crayon-agent";
+import { CodeIndexer } from "crayon-indexer";
 import { ChatPanelProvider } from "./panel/chat-provider.js";
 
 let statusBarItem: vscode.StatusBarItem;

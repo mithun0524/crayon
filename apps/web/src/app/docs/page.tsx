@@ -14,7 +14,7 @@ export default function DocsPage() {
           badge="Coming Soon"
         />
         <div className="py-20 text-center text-white/50 font-mono">
-          $ pnpm install @crayon/docs (pending release)
+          $ pnpm install crayon-docs (pending release)
         </div>
       </main>
       <Footer />

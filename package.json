@@ -5,7 +5,7 @@
   "description": "Crayon — autonomous AI coding agent",
   "scripts": {
     "build": "pnpm -r run build",
-    "dev": "pnpm --filter @crayon/cli dev",
+    "dev": "pnpm --filter crayon-cli dev",
     "test": "pnpm -r run test",
     "typecheck": "pnpm -r run typecheck"
   },

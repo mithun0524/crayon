@@ -1,0 +1,4 @@
+bin/
+scripts/
+tests/
+tsconfig.json

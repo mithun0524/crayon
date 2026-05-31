@@ -1,6 +1,6 @@
 {
-  "name": "@crayon/cli",
-  "version": "0.1.0",
+  "name": "crayon-cli",
+  "version": "0.1.1",
   "type": "module",
   "bin": {
     "crayon": "./dist/index.js"
@@ -16,8 +16,8 @@
     "scripts": "dist/**/*.js"
   },
   "dependencies": {
-    "@crayon/agent": "workspace:*",
-    "@crayon/indexer": "workspace:*",
+    "crayon-agent": "0.1.1",
+    "crayon-indexer": "0.1.1",
     "@inquirer/prompts": "^8.5.2",
     "chalk": "^5.4.1",
     "cli-highlight": "^2.1.11",
