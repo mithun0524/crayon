@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
+import { theme } from "./theme.js";
 
 interface PlanViewProps {
   steps: string[];
@@ -9,11 +10,18 @@ interface PlanViewProps {
 }
 
 export const PlanView: React.FC<PlanViewProps> = ({ steps, currentStepIndex, isExecuting }) => {
+  const [shimmer, setShimmer] = useState(false);
+
+  useEffect(() => {
+    const timer = setInterval(() => setShimmer(s => !s), 800);
+    return () => clearInterval(timer);
+  }, []);
+
   if (!steps || steps.length === 0) return null;
 
   return (
     <Box flexDirection="column" marginY={1}>
-      <Text bold color="cyan">Plan:</Text>
+      <Text bold color={theme.brand}>Plan:</Text>
       {steps.map((step, index) => {
         const isDone = index < currentStepIndex;
         const isCurrent = index === currentStepIndex;
@@ -21,27 +29,31 @@ export const PlanView: React.FC<PlanViewProps> = ({ steps, currentStepIndex, isE
         if (isDone) {
           return (
             <Box key={index} paddingLeft={2}>
-              <Text color="green">✓ </Text>
-              <Text dimColor>{step}</Text>
+              <Text color={theme.success}>✓ </Text>
+              <Text color={theme.subtle}>{step}</Text>
             </Box>
           );
         }
 
         if (isCurrent) {
+          const color = isExecuting && shimmer ? theme.brandShimmer : theme.brand;
           return (
             <Box key={index} paddingLeft={2}>
-              <Text color="blue">
-                {isExecuting ? <Spinner type="dots" /> : "●"}{" "}
+              <Text color={color}>
+                {isExecuting ? (
+                  // @ts-expect-error type mismatch
+                  <Spinner type="dots" />
+                ) : "●"}{" "}
               </Text>
-              <Text color="blue" bold>{step}</Text>
+              <Text color={color} bold>{step}</Text>
             </Box>
           );
         }
 
         return (
           <Box key={index} paddingLeft={2}>
-            <Text color="gray">○ </Text>
-            <Text color="gray" dimColor>{step}</Text>
+            <Text color={theme.border}>○ </Text>
+            <Text color={theme.subtle}>{step}</Text>
           </Box>
         );
       })}

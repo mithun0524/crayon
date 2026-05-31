@@ -1,13 +1,6 @@
-import type { CoreMessage } from "ai";
-
 export class WorkingMemory {
-  private messages: CoreMessage[] = [];
   private toolOutputs: Array<{ tool: string; output: unknown; timestamp: number }> = [];
   private editedFiles = new Set<string>();
-
-  addMessage(message: CoreMessage): void {
-    this.messages.push(message);
-  }
 
   addToolOutput(tool: string, output: unknown): void {
     this.toolOutputs.push({ tool, output, timestamp: Date.now() });
@@ -17,9 +10,7 @@ export class WorkingMemory {
     this.editedFiles.add(filePath);
   }
 
-  getMessages(): CoreMessage[] {
-    return [...this.messages];
-  }
+
 
   getEditedFiles(): string[] {
     return [...this.editedFiles];
@@ -37,7 +28,6 @@ export class WorkingMemory {
   }
 
   clear(): void {
-    this.messages = [];
     this.toolOutputs = [];
     this.editedFiles.clear();
   }

@@ -2,9 +2,12 @@ import type { CoreMessage } from "ai";
 import type { CodeIndexer, RepoIntelligence } from "@crayon/indexer";
 import type { z } from "zod";
 import type { McpServerConfig } from "./tools/mcp.js";
+import type { FileStateCache } from "./context/fileState.js";
 
 export type AgentEvent =
   | { type: "thinking"; content: string }
+  | { type: "reasoning"; content: string }
+  | { type: "reasoning_delta"; content: string }
   | { type: "text"; content: string }
   | { type: "text_delta"; content: string }
   | { type: "tool_call"; name: string; args: unknown }
@@ -14,7 +17,10 @@ export type AgentEvent =
   | { type: "eval"; passed: boolean; output: string }
   | { type: "done"; summary: string }
   | { type: "error"; message: string }
-  | { type: "usage"; promptTokens: number; completionTokens: number; totalTokens: number };
+  | { type: "usage"; promptTokens: number; completionTokens: number; totalTokens: number }
+  | { type: "ask_user"; question: string };
+
+export type PermissionMode = "ask" | "auto-edit" | "plan" | "auto" | "bypass";
 
 export interface AgentConfig {
   workspaceRoot: string;
@@ -26,6 +32,7 @@ export interface AgentConfig {
   googleApiKey?: string;
   maxSteps?: number;
   maxEvalRetries?: number;
+  permissionMode?: PermissionMode;
   onEvent?: (event: AgentEvent) => void;
   approveCommand?: (command: string) => Promise<boolean>;
   approveEdit?: (path: string, newContent: string) => Promise<boolean>;
@@ -42,9 +49,11 @@ export interface ToolDefinition<T extends z.ZodType = z.ZodType> {
 export interface ToolContext {
   workspaceRoot: string;
   indexer: CodeIndexer;
+  permissionMode?: PermissionMode;
   onEvent?: (event: AgentEvent) => void;
   approveCommand?: (command: string) => Promise<boolean>;
   approveEdit?: (path: string, newContent: string) => Promise<boolean>;
+  fileState?: FileStateCache;
 }
 
 export interface AgentSession {

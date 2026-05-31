@@ -8,23 +8,35 @@
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:binaries": "node scripts/build-binaries.cjs",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "pkg": {
+    "scripts": "dist/**/*.js"
   },
   "dependencies": {
     "@crayon/agent": "workspace:*",
     "@crayon/indexer": "workspace:*",
+    "@inquirer/prompts": "^8.5.2",
     "chalk": "^5.4.1",
+    "cli-highlight": "^2.1.11",
     "commander": "^13.1.0",
     "diff": "^9.0.0",
     "ink": "^7.0.5",
     "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "marked": "^18.0.4",
     "ora": "^8.2.0",
+    "posthog-node": "^5.35.7",
     "react": "^19.2.6"
   },
   "devDependencies": {
+    "@types/ink-text-input": "^2.0.5",
+    "@types/marked": "^6.0.0",
     "@types/node": "^22.13.10",
     "@types/react": "^19.2.15",
+    "pkg": "^5.8.1",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2"
   }

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import type { FileSymbols, SymbolInfo } from "../types.js";
 
@@ -184,7 +185,6 @@ export async function parseFile(filePath: string, workspaceRoot: string): Promis
   };
 }
 
-import { existsSync } from "node:fs";
 
 export function resolveImport(importPath: string, fromFile: string, workspaceRoot: string): string | null {
   if (importPath.startsWith(".")) {
@@ -192,7 +192,7 @@ export function resolveImport(importPath: string, fromFile: string, workspaceRoo
     const resolved = path.resolve(dir, importPath);
     const extensions = [".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.js"];
     for (const ext of extensions) {
-      const candidate = ext.startsWith("/") ? resolved + ext : resolved + ext;
+      const candidate = resolved + ext;
       if (existsSync(candidate)) {
         return path.relative(workspaceRoot, candidate).replace(/\\/g, "/");
       }

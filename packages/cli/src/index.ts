@@ -3,12 +3,21 @@ import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
 import path from "node:path";
+import { existsSync } from "node:fs";
 import React from "react";
 import { render } from "ink";
 import { CrayonAgent } from "@crayon/agent";
 import { CodeIndexer } from "@crayon/indexer";
 import { loadConfig, hasApiKey } from "./config.js";
 import { App } from "./ui/App.js";
+import { initTelemetry, trackEvent, flushTelemetry } from "./telemetry.js";
+import { runOnboardingFlow } from "./onboarding.js";
+
+async function exitCLI(code: number = 0) {
+  trackEvent("Agent Exited", { code });
+  await flushTelemetry();
+  process.exit(code);
+}
 
 const program = new Command();
 
@@ -37,7 +46,7 @@ program
     } catch (err) {
       spinner.fail("Init failed");
       console.error(chalk.red(err instanceof Error ? err.message : String(err)));
-      process.exit(1);
+      await exitCLI(1);
     }
   });
 
@@ -56,7 +65,7 @@ program
     } catch (err) {
       spinner.fail("Index failed");
       console.error(chalk.red(err instanceof Error ? err.message : String(err)));
-      process.exit(1);
+      await exitCLI(1);
     }
   });
 
@@ -67,8 +76,8 @@ program
   .action(async (task: string) => {
     const config = await loadConfig();
     if (!hasApiKey(config)) {
-      console.error(chalk.red("No API key found. Set GEMINI_API_KEY, ANTHROPIC_API_KEY, or create ~/.crayon/config.json"));
-      process.exit(1);
+      await runOnboardingFlow();
+      Object.assign(config, await loadConfig());
     }
 
     const isTTY = process.stdin.isTTY && typeof process.stdin.setRawMode === "function";
@@ -83,33 +92,43 @@ program
       await waitUntilExit();
     } catch (err) {
       console.error(chalk.red(`TUI Error: ${err instanceof Error ? err.message : String(err)}`));
-      process.exit(1);
+      await exitCLI(1);
     }
   });
 
 program
   .command("chat")
   .description("Interactive agent session")
-  .action(async () => {
+  .option("-r, --resume", "Resume the last active session")
+  .option("-m, --mode <mode>", "Permission mode (ask, auto-edit, plan, auto, bypass)")
+  .action(async (options) => {
     const config = await loadConfig();
     if (!hasApiKey(config)) {
-      console.error(chalk.red("No API key found. Set GEMINI_API_KEY, ANTHROPIC_API_KEY, or create ~/.crayon/config.json"));
-      process.exit(1);
+      await runOnboardingFlow();
+      Object.assign(config, await loadConfig());
     }
 
     const isTTY = process.stdin.isTTY && typeof process.stdin.setRawMode === "function";
 
     if (!isTTY) {
       console.error(chalk.red("Interactive chat mode requires an active TTY terminal interface."));
-      process.exit(1);
+      await exitCLI(1);
     }
 
     try {
-      const { waitUntilExit } = render(React.createElement(App, { mode: "chat" }));
+      process.stdout.write('\x1b[?1049h'); // Enter alternate screen buffer
+      const { waitUntilExit } = render(React.createElement(App, { 
+        mode: "chat", 
+        resume: options.resume,
+        permissionMode: options.mode as any
+      }));
       await waitUntilExit();
     } catch (err) {
+      process.stdout.write('\x1b[?1049l'); // Leave alternate screen buffer on error
       console.error(chalk.red(`TUI Error: ${err instanceof Error ? err.message : String(err)}`));
-      process.exit(1);
+      await exitCLI(1);
+    } finally {
+      process.stdout.write('\x1b[?1049l'); // Leave alternate screen buffer
     }
   });
 
@@ -125,6 +144,7 @@ async function runFallback(task: string) {
     openaiApiKey: config.openaiApiKey,
     openrouterApiKey: config.openrouterApiKey,
     googleApiKey: config.googleApiKey,
+    mcpServers: config.mcpServers,
     onEvent: (event) => {
       switch (event.type) {
         case "plan":
@@ -171,10 +191,79 @@ async function runFallback(task: string) {
     }
   } catch (err: any) {
     console.error(chalk.red(`\nFailed: ${err.message || String(err)}`));
-    process.exit(1);
+    await exitCLI(1);
   } finally {
     agent.close();
   }
 }
 
-program.parse();
+const mcpCmd = program
+  .command("mcp")
+  .description("Manage MCP (Model Context Protocol) servers");
+
+mcpCmd
+  .command("add")
+  .description("Add an MCP server")
+  .argument("<name>", "Server name")
+  .argument("<command>", "Execution command (e.g., node, npx, python)")
+  .argument("[args...]", "Command arguments")
+  .action(async (name, command, args) => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const mcpPath = path.join(os.homedir(), ".crayon", "mcp.json");
+    let mcpConfig: any = { mcpServers: {} };
+    if (existsSync(mcpPath)) {
+      mcpConfig = JSON.parse(await fs.readFile(mcpPath, "utf-8"));
+      if (!mcpConfig.mcpServers) mcpConfig.mcpServers = {};
+    }
+    mcpConfig.mcpServers[name] = { command, args, env: {} };
+    await fs.mkdir(path.dirname(mcpPath), { recursive: true });
+    await fs.writeFile(mcpPath, JSON.stringify(mcpConfig, null, 2));
+    console.log(chalk.green(`Added MCP server: ${name}`));
+  });
+
+mcpCmd
+  .command("list")
+  .description("List MCP servers")
+  .action(async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const mcpPath = path.join(os.homedir(), ".crayon", "mcp.json");
+    if (!existsSync(mcpPath)) {
+      console.log("No MCP servers configured.");
+      return;
+    }
+    const mcpConfig = JSON.parse(await fs.readFile(mcpPath, "utf-8"));
+    if (!mcpConfig.mcpServers || Object.keys(mcpConfig.mcpServers).length === 0) {
+      console.log("No MCP servers configured.");
+      return;
+    }
+    console.log(chalk.cyan("Configured MCP Servers:"));
+    for (const [name, conf] of Object.entries<any>(mcpConfig.mcpServers)) {
+      console.log(chalk.green(`- ${name}`) + `: ${conf.command} ${(conf.args || []).join(" ")}`);
+    }
+  });
+
+async function runMain() {
+  await initTelemetry();
+  trackEvent("Agent Started");
+
+  process.on("uncaughtException", (err) => {
+    trackEvent("Agent Error", { error: err.message, type: "uncaughtException" });
+    flushTelemetry().finally(() => process.exit(1));
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    trackEvent("Agent Error", { error: String(reason), type: "unhandledRejection" });
+    flushTelemetry().finally(() => process.exit(1));
+  });
+
+  await program.parseAsync(process.argv);
+  await exitCLI(0);
+}
+
+runMain().catch(async (err) => {
+  trackEvent("Agent Error", { error: err.message, type: "mainError" });
+  await flushTelemetry();
+  process.exit(1);
+});

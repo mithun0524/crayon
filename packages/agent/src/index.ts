@@ -1,4 +1,4 @@
-import { streamText, tool, type CoreMessage } from "ai";
+import { streamText, tool, jsonSchema, type CoreMessage } from "ai";
 import { CodeIndexer } from "@crayon/indexer";
 import type { AgentConfig, AgentEvent, AgentResult } from "./types.js";
 import { WorkingMemory } from "./memory/working.js";
@@ -6,9 +6,25 @@ import { EpisodicMemory } from "./memory/episodic.js";
 import { createPlan, classifyTask, type TaskMode } from "./planner/plan.js";
 import { buildSystemPrompt } from "./context/manager.js";
 import { getExecutionModel } from "./models/router.js";
+import type { ModelConfig } from "./models/router.js";
 import { createTools } from "./tools/index.js";
 import { McpClient } from "./tools/mcp.js";
 import { runEvaluation } from "./evaluator/check.js";
+import { withRetry } from "./services/withRetry.js";
+import { microCompact, autoCompact, getCompactionLevel } from "./context/compaction.js";
+import { FileStateCache } from "./context/fileState.js";
+
+/** Tools that are safe to execute concurrently (read-only). Exported for consumer use. */
+export { CONCURRENT_SAFE_TOOLS };
+const CONCURRENT_SAFE_TOOLS = new Set([
+  "read_file",
+  "grep",
+  "search_codebase",
+  "list_directory",
+  "git_status",
+  "git_diff",
+  "thinking",
+]);
 
 export class CrayonAgent {
   private indexer: CodeIndexer;
@@ -17,6 +33,19 @@ export class CrayonAgent {
   private config: AgentConfig;
   private history: CoreMessage[] = [];
   private mcpClient: McpClient;
+  private fileState = new FileStateCache();
+
+  public get tools() {
+    return createTools({
+      workspaceRoot: this.config.workspaceRoot,
+      indexer: this.indexer,
+      permissionMode: this.config.permissionMode,
+      onEvent: this.config.onEvent,
+      approveCommand: this.config.approveCommand,
+      approveEdit: this.config.approveEdit,
+      fileState: this.fileState,
+    });
+  }
 
   constructor(config: AgentConfig) {
     this.config = config;
@@ -48,21 +77,32 @@ export class CrayonAgent {
     this.workingMemory.clear();
   }
 
+  getHistory(): CoreMessage[] {
+    return this.history;
+  }
+
+  setHistory(history: CoreMessage[]): void {
+    this.history = history;
+  }
+
   async run(
     task: string,
-    options: { currentFile?: string; selection?: string; skipHistory?: boolean } = {}
+    options: { currentFile?: string; selection?: string; skipHistory?: boolean; signal?: AbortSignal } = {}
   ): Promise<AgentResult> {
     const mode: TaskMode = classifyTask(task);
 
     if (mode === "chat") {
+      this.emit({ type: "thinking", content: "Initializing indexer..." });
       await this.indexer.init();
     } else {
+      this.emit({ type: "thinking", content: "Indexing workspace..." });
       await this.init();
     }
 
+    this.emit({ type: "thinking", content: "Connecting to MCP servers..." });
     await this.mcpClient.connectAll();
 
-    const modelConfig = {
+    const modelConfig: ModelConfig = {
       model: this.config.model,
       provider: this.config.provider,
       anthropicApiKey: this.config.anthropicApiKey,
@@ -71,7 +111,10 @@ export class CrayonAgent {
       googleApiKey: this.config.googleApiKey,
     };
 
+    this.emit({ type: "thinking", content: "Gathering project intelligence..." });
     const intelligence = mode === "chat" ? null : await this.indexer.getIntelligence();
+    
+    this.emit({ type: "thinking", content: "Planning approach..." });
     const plan = await createPlan(task, modelConfig);
     if (plan.length > 0) {
       this.emit({ type: "plan", steps: plan });
@@ -80,10 +123,17 @@ export class CrayonAgent {
     const toolCtx = {
       workspaceRoot: this.config.workspaceRoot,
       indexer: this.indexer,
+      permissionMode: this.config.permissionMode,
       onEvent: this.config.onEvent,
       approveCommand: this.config.approveCommand,
       approveEdit: this.config.approveEdit,
+      fileState: this.fileState,
     };
+
+    const userMessage: CoreMessage = { role: "user", content: task };
+    const messages: CoreMessage[] = options.skipHistory
+      ? [userMessage]
+      : [...this.history, userMessage];
 
     const tools = createTools(toolCtx);
     const aiTools: Record<string, any> = Object.fromEntries(
@@ -108,6 +158,13 @@ export class CrayonAgent {
                   this.workingMemory.markEdited(r.path);
                 }
               }
+              const resObj = result as Record<string, any>;
+              if (resObj && resObj.error === "PERMISSION_DENIED_BY_USER") {
+                messages.push({
+                  role: "system",
+                  content: "The user explicitly denied this action. Do not retry it. Ask the user for alternative directions."
+                });
+              }
               this.emit({ type: "tool_result", name, result });
               return result;
             },
@@ -122,13 +179,19 @@ export class CrayonAgent {
 
       aiTools[safeName] = tool({
         description: `[MCP Server: ${t.server}] ${t.tool.description || t.tool.name}`,
-        // @ts-ignore
-        parameters: t.tool.inputSchema as any,
+        parameters: jsonSchema(t.tool.inputSchema as any),
         execute: async (args: any) => {
           this.emit({ type: "tool_call", name: safeName, args });
           try {
             const result = await this.mcpClient.callTool(t.server, t.tool.name, args);
             this.workingMemory.addToolOutput(safeName, result);
+            const resObj = result as Record<string, any>;
+            if (resObj && resObj.error === "PERMISSION_DENIED_BY_USER") {
+              messages.push({
+                role: "system",
+                content: "The user explicitly denied this action. Do not retry it. Ask the user for alternative directions."
+              });
+            }
             this.emit({ type: "tool_result", name: safeName, result });
             return result;
           } catch (e: any) {
@@ -138,6 +201,7 @@ export class CrayonAgent {
       });
     }
 
+    this.emit({ type: "thinking", content: "Preparing context and tools..." });
     const systemPrompt = await buildSystemPrompt({
       task,
       plan,
@@ -157,32 +221,144 @@ export class CrayonAgent {
     const edits: string[] = [];
     let totalSteps = 0;
 
-    const userMessage: CoreMessage = { role: "user", content: task };
-    const messages: CoreMessage[] = options.skipHistory
-      ? [userMessage]
-      : [...this.history, userMessage];
-
     const useTools = mode !== "chat";
     const maxSteps = mode === "chat" ? 1 : mode === "advisory" ? 8 : (this.config.maxSteps ?? 25);
 
+    let totalSessionCost = 0;
+    const MAX_SESSION_COST = 2.00; // Hard limit to prevent runaway usage
+
     while (evalRetries <= maxEvalRetries) {
+      if (options.signal?.aborted) {
+        throw new Error("Agent execution aborted");
+      }
+
+      // --- Context compaction before LLM call ---
+      const compactionLevel = getCompactionLevel(messages);
+      if (compactionLevel === "auto") {
+        this.emit({ type: "thinking", content: "Context window filling up, compacting conversation..." });
+        const compacted = await autoCompact(messages, modelConfig);
+        messages.splice(0, messages.length, ...compacted);
+      } else if (compactionLevel === "micro") {
+        const compacted = microCompact(messages);
+        messages.splice(0, messages.length, ...compacted);
+      }
+
       const model = getExecutionModel(modelConfig);
 
-      // Use streamText for real-time token streaming
-      const streamResult = streamText({
-        model,
-        system: systemPrompt,
-        messages,
-        tools: useTools ? aiTools : undefined,
-        maxSteps,
-      });
+      this.emit({ type: "thinking", content: "Thinking..." });
+      // Use streamText with retry wrapper for resilience
+      const { result: streamResult } = await withRetry(
+        async () => {
+          return streamText({
+            model,
+            system: systemPrompt,
+            messages,
+            tools: useTools ? aiTools : undefined,
+            maxSteps,
+            abortSignal: options.signal,
+            onStepFinish: (step) => {
+              const { usage } = step;
+              const stepCost = (usage.promptTokens * 3 / 1_000_000) + (usage.completionTokens * 15 / 1_000_000);
+              totalSessionCost += stepCost;
+              if (totalSessionCost > MAX_SESSION_COST) {
+                throw new Error("Cost limit exceeded. Aborting to prevent runaway usage.");
+              }
+            },
+          });
+        },
+        {
+          onRetry: (error, attempt, delayMs) => {
+            this.emit({
+              type: "thinking",
+              content: `API error (attempt ${attempt}), retrying in ${Math.round(delayMs / 1000)}s: ${error.message}`,
+            });
+          },
+        }
+      );
 
       let responseText = "";
+      let inThinking = false;
+      let buffer = "";
 
-      // Emit token deltas in real time
-      for await (const delta of streamResult.textStream) {
-        responseText += delta;
-        this.emit({ type: "text_delta", content: delta });
+      for await (const chunk of streamResult.fullStream) {
+        if (chunk.type === "reasoning") {
+          this.emit({ type: "reasoning_delta", content: chunk.textDelta });
+          continue;
+        }
+        
+        if (chunk.type === "text-delta") {
+          buffer += chunk.textDelta;
+          
+          while (buffer.length > 0) {
+            if (!inThinking) {
+              const startIdx = buffer.indexOf("<thinking>");
+              if (startIdx !== -1) {
+                // Emit text before <thinking>
+                const before = buffer.slice(0, startIdx);
+                if (before) {
+                  responseText += before;
+                  this.emit({ type: "text_delta", content: before });
+                }
+                this.emit({ type: "thinking", content: "Thinking..." });
+                inThinking = true;
+                buffer = buffer.slice(startIdx + 10); // 10 is "<thinking>".length
+              } else {
+                // If it ends with something that could be `<thinking>`, hold it.
+                const possibleTag = buffer.lastIndexOf("<");
+                if (possibleTag !== -1 && "<thinking>".startsWith(buffer.slice(possibleTag))) {
+                  // Buffer ends with a partial <thinking> tag, emit up to the `<`
+                  const safePart = buffer.slice(0, possibleTag);
+                  if (safePart) {
+                    responseText += safePart;
+                    this.emit({ type: "text_delta", content: safePart });
+                  }
+                  buffer = buffer.slice(possibleTag);
+                  break; // Wait for more chunks
+                } else {
+                  // Safe to emit all
+                  responseText += buffer;
+                  this.emit({ type: "text_delta", content: buffer });
+                  buffer = "";
+                }
+              }
+            } else {
+              const endIdx = buffer.indexOf("</thinking>");
+              if (endIdx !== -1) {
+                // Emit reasoning before </thinking>
+                const reasoning = buffer.slice(0, endIdx);
+                if (reasoning) {
+                  this.emit({ type: "reasoning_delta", content: reasoning });
+                }
+                inThinking = false;
+                buffer = buffer.slice(endIdx + 11); // 11 is "</thinking>".length
+              } else {
+                // Could end with partial </thinking>
+                const possibleTag = buffer.lastIndexOf("<");
+                if (possibleTag !== -1 && "</thinking>".startsWith(buffer.slice(possibleTag))) {
+                  const safeReasoning = buffer.slice(0, possibleTag);
+                  if (safeReasoning) {
+                    this.emit({ type: "reasoning_delta", content: safeReasoning });
+                  }
+                  buffer = buffer.slice(possibleTag);
+                  break; // Wait for more chunks
+                } else {
+                  this.emit({ type: "reasoning_delta", content: buffer });
+                  buffer = "";
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      // Flush any remaining buffer
+      if (buffer) {
+        if (inThinking) {
+           this.emit({ type: "reasoning_delta", content: buffer });
+        } else {
+           responseText += buffer;
+           this.emit({ type: "text_delta", content: buffer });
+        }
       }
 
       // Await the full result for metadata (steps, tool results)
@@ -204,7 +380,7 @@ export class CrayonAgent {
       // Fallback: if textStream was empty but steps had text
       if (!responseText && steps?.length) {
         for (const step of steps) {
-          if (step.text?.trim()) responseText = step.text.trim();
+          if (step.text?.trim()) responseText += step.text.trim();
         }
       }
 
@@ -226,14 +402,7 @@ export class CrayonAgent {
         }
       }
 
-      if (!options.skipHistory) {
-        this.history.push(userMessage);
-        this.history.push({ role: "assistant", content: responseText || "Done." });
-        // Keep last 20 messages
-        if (this.history.length > 20) {
-          this.history = this.history.slice(-20);
-        }
-      }
+      // History push moved outside the while loop to avoid duplicates on eval retries
 
       if (mode !== "coding" || !this.workingMemory.hasEdits()) {
         break;
@@ -258,6 +427,15 @@ export class CrayonAgent {
         role: "user",
         content: `Tests/build failed. Fix the issues.\n\nCommand: ${evalResult.command}\nExit: ${evalResult.exitCode}\nSTDERR:\n${evalResult.stderr.slice(0, 3000)}\nSTDOUT:\n${evalResult.stdout.slice(0, 3000)}`,
       });
+    }
+
+    if (!options.skipHistory) {
+      this.history.push(userMessage);
+      this.history.push({ role: "assistant", content: summary || "Done." });
+      // Keep last 20 messages
+      if (this.history.length > 20) {
+        this.history = this.history.slice(-20);
+      }
     }
 
     const success = evalRetries <= maxEvalRetries;
@@ -293,6 +471,10 @@ export class CrayonAgent {
     return this.indexer;
   }
 
+  setPermissionMode(mode: import("./types.js").PermissionMode): void {
+    this.config.permissionMode = mode;
+  }
+
   close(): void {
     this.episodicMemory.close?.();
     this.indexer.stopWatching?.();
@@ -303,3 +485,7 @@ export class CrayonAgent {
 export { CrayonAgent as Agent };
 export * from "./types.js";
 export { classifyTask } from "./planner/plan.js";
+export { microCompact, autoCompact, getCompactionLevel } from "./context/compaction.js";
+export { FileStateCache } from "./context/fileState.js";
+export { withRetry } from "./services/withRetry.js";
+export type { RetryOptions } from "./services/withRetry.js";

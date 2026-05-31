@@ -1,10 +1,11 @@
-import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { readFile, writeFile, mkdir, readdir, unlink, rename, stat } from "node:fs/promises";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { createTwoFilesPatch } from "diff";
 import { simpleGit } from "simple-git";
 import { z } from "zod";
+import { parse as shellParse } from "shell-quote";
 import { Project } from "ts-morph";
 import type { ToolContext } from "../types.js";
 
@@ -19,16 +20,51 @@ const DANGEROUS_PATTERNS = [
   />\s*\/dev\/sd/,
 ];
 
+function capResult(result: string, maxChars: number = 50000): string {
+  if (result.length <= maxChars) return result;
+  return result.slice(0, maxChars) + `\n\n... (output truncated at ${maxChars} chars. Full output is ${result.length} chars.)`;
+}
+
 export function createTools(ctx: ToolContext) {
-  const resolvePath = (filePath: string) => {
-    const resolved = path.resolve(ctx.workspaceRoot, filePath);
-    if (!resolved.startsWith(ctx.workspaceRoot)) {
-      throw new Error(`Path escapes workspace: ${filePath}`);
-    }
-    return resolved;
-  };
+    const resolvePath = (filePath: string) => {
+      let resolved = path.resolve(ctx.workspaceRoot, filePath);
+      try {
+        if (existsSync(resolved)) {
+          resolved = realpathSync(resolved);
+        } else {
+          const parent = path.dirname(resolved);
+          if (existsSync(parent)) {
+            resolved = path.join(realpathSync(parent), path.basename(resolved));
+          }
+        }
+      } catch (e) {
+        // Fallback to unresolved if realpath fails
+      }
+
+      if (!resolved.startsWith(ctx.workspaceRoot)) {
+        throw new Error(`Path escapes workspace: ${filePath}`);
+      }
+      return resolved;
+    };
+
+    const checkEditPermission = async (filePath: string, newContent: string) => {
+      if (ctx.permissionMode === "plan") return false;
+      if (ctx.permissionMode === "auto-edit" || ctx.permissionMode === "auto" || ctx.permissionMode === "bypass") return true;
+      if (ctx.approveEdit) return await ctx.approveEdit(filePath, newContent);
+      return false; // Default safe fallback
+    };
+
+    const checkCommandPermission = async (command: string, isDangerous: boolean) => {
+      if (ctx.permissionMode === "plan") return false;
+      if (ctx.permissionMode === "bypass") return true;
+      if (ctx.permissionMode === "auto" && !isDangerous) return true;
+      // auto-edit, ask, or dangerous in auto -> needs approval
+      if (ctx.approveCommand) return await ctx.approveCommand(command);
+      return false;
+    };
 
   return {
+    // concurrent: true | readonly: true | permission: none
     thinking: {
       description: "Reason through a problem before acting. Use for planning and analysis — not for final user-facing replies.",
       parameters: z.object({
@@ -40,6 +76,7 @@ export function createTools(ctx: ToolContext) {
       },
     },
 
+    // concurrent: true | readonly: true | permission: none
     read_file: {
       description: "Read a file from the workspace. Optionally specify start and end line numbers.",
       parameters: z.object({
@@ -49,8 +86,19 @@ export function createTools(ctx: ToolContext) {
       }),
       execute: async ({ path: filePath, start_line, end_line }: { path: string; start_line?: number; end_line?: number }) => {
         const absPath = resolvePath(filePath);
+        
+        if (existsSync(absPath)) {
+          const stats = await import("node:fs/promises").then(fs => fs.stat(absPath));
+          if (stats.size > 2 * 1024 * 1024) {
+            throw new Error(`File ${filePath} is too large (>2MB). Please use grep or search_codebase instead.`);
+          }
+        }
+
         const content = await readFile(absPath, "utf-8");
         const lines = content.split("\n");
+
+        // Track that we read this file
+        ctx.fileState?.markRead(filePath, content);
 
         if (start_line !== undefined || end_line !== undefined) {
           const start = (start_line ?? 1) - 1;
@@ -58,19 +106,20 @@ export function createTools(ctx: ToolContext) {
           const slice = lines.slice(start, end);
           return {
             path: filePath,
-            content: slice.map((l, i) => `${start + i + 1}|${l}`).join("\n"),
+            content: capResult(slice.map((l, i) => `${start + i + 1}|${l}`).join("\n")),
             totalLines: lines.length,
           };
         }
 
         return {
           path: filePath,
-          content: lines.map((l, i) => `${i + 1}|${l}`).join("\n"),
+          content: capResult(lines.map((l, i) => `${i + 1}|${l}`).join("\n")),
           totalLines: lines.length,
         };
       },
     },
 
+    // concurrent: false | readonly: false | permission: ask
     edit_file: {
       description: "Edit an existing file using search/replace. old_string must match exactly once in the file.",
       parameters: z.object({
@@ -84,23 +133,31 @@ export function createTools(ctx: ToolContext) {
           return { success: false, error: `File not found: ${filePath}. Use write_file for new files.` };
         }
 
+        const stats = await stat(absPath);
+        if (stats.size > 2 * 1024 * 1024) {
+          throw new Error("File is too large (>2MB).");
+        }
+
+        // Warn if file hasn't been read first
+        const notReadWarning = ctx.fileState && !ctx.fileState.hasRead(filePath)
+          ? "Warning: You have not read this file yet. Read it first to avoid overwriting changes. "
+          : "";
+
         const content = await readFile(absPath, "utf-8");
         const occurrences = content.split(old_string).length - 1;
 
         if (occurrences === 0) {
-          return { success: false, error: "old_string not found in file" };
+          return { success: false, error: notReadWarning + "old_string not found in file" };
         }
         if (occurrences > 1) {
-          return { success: false, error: `old_string found ${occurrences} times. Provide more context to make it unique.` };
+          return { success: false, error: notReadWarning + `old_string found ${occurrences} times. Provide more context to make it unique.` };
         }
 
         const newContent = content.replace(old_string, new_string);
         
-        if (ctx.approveEdit) {
-          const approved = await ctx.approveEdit(filePath, newContent);
-          if (!approved) {
-            return { success: false, error: "Edit rejected by user" };
-          }
+        const approved = await checkEditPermission(filePath, newContent);
+        if (!approved) {
+          return { success: false, error: "PERMISSION_DENIED_BY_USER" };
         }
 
         const diff = createTwoFilesPatch(filePath, filePath, content, newContent);
@@ -108,10 +165,13 @@ export function createTools(ctx: ToolContext) {
 
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
 
-        return { success: true, path: filePath, diff };
+        const result: Record<string, unknown> = { success: true, path: filePath, diff };
+        if (notReadWarning) result.warning = notReadWarning.trim();
+        return result;
       },
     },
 
+    // concurrent: false | readonly: false | permission: ask
     edit_ast: {
       description: "Replace a TypeScript/JavaScript function, class, or class method using ts-morph AST. For class methods use 'ClassName.methodName' notation. Prefer over edit_file for large structural changes.",
       parameters: z.object({
@@ -123,6 +183,11 @@ export function createTools(ctx: ToolContext) {
         const absPath = resolvePath(filePath);
         if (!existsSync(absPath)) {
           return { success: false, error: `File not found: ${filePath}.` };
+        }
+
+        const stats = await stat(absPath);
+        if (stats.size > 2 * 1024 * 1024) {
+          throw new Error("File is too large (>2MB).");
         }
 
         const project = new Project({ useInMemoryFileSystem: true });
@@ -208,11 +273,9 @@ export function createTools(ctx: ToolContext) {
         targetNode.replaceWithText(new_content);
         const newContent = sourceFile.getFullText();
 
-        if (ctx.approveEdit) {
-          const approved = await ctx.approveEdit(filePath, newContent);
-          if (!approved) {
-            return { success: false, error: "Edit rejected by user" };
-          }
+        const approved = await checkEditPermission(filePath, newContent);
+        if (!approved) {
+          return { success: false, error: "PERMISSION_DENIED_BY_USER" };
         }
 
         const diff = createTwoFilesPatch(filePath, filePath, content, newContent);
@@ -222,6 +285,7 @@ export function createTools(ctx: ToolContext) {
       },
     },
 
+    // concurrent: false | readonly: false | permission: ask
     write_file: {
       description: "Create a new file. Cannot overwrite existing files — use edit_file or overwrite_file instead.",
       parameters: z.object({
@@ -231,7 +295,16 @@ export function createTools(ctx: ToolContext) {
       execute: async ({ path: filePath, content }: { path: string; content: string }) => {
         const absPath = resolvePath(filePath);
         if (existsSync(absPath)) {
-          return { success: false, error: `File already exists: ${filePath}. Use edit_file for targeted edits or overwrite_file to replace the whole file.` };
+          // Warn if file exists but hasn't been read
+          const notReadWarning = ctx.fileState && !ctx.fileState.hasRead(filePath)
+            ? " Warning: You have not read this file yet. Read it first to avoid overwriting changes."
+            : "";
+          return { success: false, error: `File already exists: ${filePath}. Use edit_file for targeted edits or overwrite_file to replace the whole file.${notReadWarning}` };
+        }
+
+        const approved = await checkEditPermission(filePath, content);
+        if (!approved) {
+          return { success: false, error: "PERMISSION_DENIED_BY_USER" };
         }
 
         await mkdir(path.dirname(absPath), { recursive: true });
@@ -243,6 +316,7 @@ export function createTools(ctx: ToolContext) {
       },
     },
 
+    // concurrent: false | readonly: false | permission: ask
     overwrite_file: {
       description: "Replace an ENTIRE existing file with new content. Use when edit_file's search/replace is impractical (e.g. large rewrites, new implementations). File must already exist.",
       parameters: z.object({
@@ -255,42 +329,84 @@ export function createTools(ctx: ToolContext) {
           return { success: false, error: `File not found: ${filePath}. Use write_file to create new files.` };
         }
 
+        const stats = await stat(absPath);
+        if (stats.size > 2 * 1024 * 1024) {
+          throw new Error("File is too large (>2MB).");
+        }
+
+        // Warn if file hasn't been read first
+        const notReadWarning = ctx.fileState && !ctx.fileState.hasRead(filePath)
+          ? "Warning: You have not read this file yet. Read it first to avoid overwriting changes. "
+          : "";
+
         const oldContent = await readFile(absPath, "utf-8");
 
-        if (ctx.approveEdit) {
-          const approved = await ctx.approveEdit(filePath, content);
-          if (!approved) {
-            return { success: false, error: "Edit rejected by user" };
-          }
+        const approved = await checkEditPermission(filePath, content);
+        if (!approved) {
+          return { success: false, error: "PERMISSION_DENIED_BY_USER" };
         }
 
         const diff = createTwoFilesPatch(filePath, filePath, oldContent, content);
         await writeFile(absPath, content, "utf-8");
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
-        return { success: true, path: filePath, overwritten: true, diff };
+        const result: Record<string, unknown> = { success: true, path: filePath, overwritten: true, diff };
+        if (notReadWarning) result.warning = notReadWarning.trim();
+        return result;
       },
     },
 
+    // concurrent: true | readonly: true | permission: none
     grep: {
       description: "Search for a pattern in the codebase using ripgrep.",
       parameters: z.object({
         pattern: z.string().describe("Search pattern (regex supported)"),
         glob: z.string().optional().describe("File glob filter, e.g. '*.ts'"),
       }),
-      execute: async ({ pattern }: { pattern: string; glob?: string }) => {
+      execute: async ({ pattern, glob }: { pattern: string; glob?: string }) => {
+        if (glob) {
+          // Use ripgrep directly with glob filter
+          const rgResult = await new Promise<{ matches: Array<{ path: string; line: number; snippet: string }> }>((resolve) => {
+            const args = ["--json", "--max-count", "30", "--glob", glob, pattern, ctx.workspaceRoot];
+            const proc = spawn("rg", args, { cwd: ctx.workspaceRoot });
+            let output = "";
+            proc.stdout.on("data", (d: Buffer) => { output += d.toString(); });
+            proc.stderr.on("data", () => {});
+            proc.on("close", () => {
+              const matches: Array<{ path: string; line: number; snippet: string }> = [];
+              for (const line of output.split("\n")) {
+                if (!line.trim()) continue;
+                try {
+                  const parsed = JSON.parse(line);
+                  if (parsed.type === "match") {
+                    matches.push({
+                      path: path.relative(ctx.workspaceRoot, parsed.data.path.text).replace(/\\/g, "/"),
+                      line: parsed.data.line_number,
+                      snippet: parsed.data.lines.text?.trim() ?? "",
+                    });
+                  }
+                } catch {}
+              }
+              resolve({ matches });
+            });
+            proc.on("error", () => resolve({ matches: [] }));
+          });
+          return rgResult;
+        }
         const results = await ctx.indexer.search(pattern, 30);
+        const raw = JSON.stringify(results
+          .filter((r) => r.matchType === "grep" || r.snippet)
+          .map((r) => ({
+            path: r.path,
+            line: r.line,
+            snippet: r.snippet,
+          })));
         return {
-          matches: results
-            .filter((r) => r.matchType === "grep" || r.snippet)
-            .map((r) => ({
-              path: r.path,
-              line: r.line,
-              snippet: r.snippet,
-            })),
+          matches: JSON.parse(capResult(raw)),
         };
       },
     },
 
+    // concurrent: true | readonly: true | permission: none
     search_codebase: {
       description: "Hybrid search: symbols + ripgrep + dependency graph. Best for finding relevant code.",
       parameters: z.object({
@@ -298,19 +414,21 @@ export function createTools(ctx: ToolContext) {
       }),
       execute: async ({ query }: { query: string }) => {
         const results = await ctx.indexer.search(query, 20);
+        const raw = JSON.stringify(results.map((r) => ({
+          path: r.path,
+          score: r.score,
+          matchType: r.matchType,
+          line: r.line,
+          symbol: r.symbol,
+          snippet: r.snippet,
+        })));
         return {
-          results: results.map((r) => ({
-            path: r.path,
-            score: r.score,
-            matchType: r.matchType,
-            line: r.line,
-            symbol: r.symbol,
-            snippet: r.snippet,
-          })),
+          results: JSON.parse(capResult(raw)),
         };
       },
     },
 
+    // concurrent: true | readonly: true | permission: none
     list_directory: {
       description: "List files and directories in a path.",
       parameters: z.object({
@@ -320,34 +438,83 @@ export function createTools(ctx: ToolContext) {
       execute: async ({ path: dirPath, depth }: { path?: string; depth?: number }) => {
         const absPath = resolvePath(dirPath ?? ".");
         const entries = await listDirRecursive(absPath, ctx.workspaceRoot, depth ?? 1);
-        return { path: dirPath ?? ".", entries };
+        const raw = JSON.stringify({ path: dirPath ?? ".", entries });
+        return JSON.parse(capResult(raw));
       },
     },
 
+    // concurrent: false | readonly: false | permission: ask
     terminal: {
       description: "Run a shell command in the workspace directory. Dangerous commands require approval.",
       parameters: z.object({
         command: z.string().describe("Shell command to execute"),
-        timeout_ms: z.number().default(60000).describe("Timeout in milliseconds"),
+        timeout_ms: z.number().default(30000).describe("Timeout in milliseconds (max 120000)"),
+        cwd: z.string().optional().describe("Working directory (relative to workspace root). Defaults to workspace root."),
       }),
-      execute: async ({ command, timeout_ms }: { command: string; timeout_ms?: number }) => {
+      execute: async ({ command, timeout_ms, cwd: cwdPath }: { command: string; timeout_ms?: number; cwd?: string }) => {
+        let isDangerous = false;
         for (const pattern of DANGEROUS_PATTERNS) {
           if (pattern.test(command)) {
-            if (ctx.approveCommand) {
-              const approved = await ctx.approveCommand(command);
-              if (!approved) {
-                return { success: false, error: "Command rejected by user", command };
-              }
-            } else {
-              return { success: false, error: "Dangerous command blocked. Approval required.", command };
-            }
+            isDangerous = true;
+            break;
           }
         }
 
-        return runCommand(command, ctx.workspaceRoot, timeout_ms ?? 60000);
+        if (!isDangerous) {
+          try {
+            const parsed = shellParse(command);
+            for (const token of parsed) {
+              if (typeof token === "string") {
+                const lower = token.toLowerCase();
+                if (["cd", "rm", "del", "mv", "sh", "bash", "cmd", "powershell", "pwsh", "node", "python", "ruby", "perl"].includes(lower)) {
+                  isDangerous = true;
+                  break;
+                }
+                if (path.isAbsolute(token) || token.startsWith("../") || token.startsWith("..\\")) {
+                  let resolvedToken = path.isAbsolute(token) ? token : path.join(cwdPath ? resolvePath(cwdPath) : ctx.workspaceRoot, token);
+                  try {
+                    if (existsSync(resolvedToken)) {
+                      resolvedToken = realpathSync(resolvedToken);
+                    } else if (existsSync(path.dirname(resolvedToken))) {
+                      resolvedToken = path.join(realpathSync(path.dirname(resolvedToken)), path.basename(resolvedToken));
+                    }
+                  } catch (e) {}
+                  
+                  if (!resolvedToken.startsWith(ctx.workspaceRoot)) {
+                    isDangerous = true;
+                    break;
+                  }
+                }
+              } else if (typeof token === "object" && token !== null && "op" in token) {
+                // If parse returns operators that are complex, treat it carefully
+                const op = (token as any).op;
+                if (op === "glob" || op === "!" || op === "command") {
+                  // Just keeping note, we could flag complex ops here, but let's stick to tokens for now
+                }
+              }
+            }
+          } catch (e) {
+            isDangerous = true;
+          }
+        }
+
+        const approved = await checkCommandPermission(command, isDangerous);
+        if (!approved) {
+          return { success: false, error: "PERMISSION_DENIED_BY_USER", command };
+        }
+
+        const timeout = Math.min(timeout_ms ?? 30000, 120000);
+        const workDir = cwdPath ? resolvePath(cwdPath) : ctx.workspaceRoot;
+        const result = await runCommand(command, workDir, timeout);
+        return {
+          ...result,
+          stdout: capResult(result.stdout),
+          stderr: capResult(result.stderr, 10000),
+        };
       },
     },
 
+    // concurrent: true | readonly: true | permission: none
     git_status: {
       description: "Get git status of the workspace.",
       parameters: z.object({}),
@@ -365,6 +532,7 @@ export function createTools(ctx: ToolContext) {
       },
     },
 
+    // concurrent: true | readonly: true | permission: none
     git_diff: {
       description: "Get git diff for the workspace or a specific file.",
       parameters: z.object({
@@ -379,23 +547,119 @@ export function createTools(ctx: ToolContext) {
       },
     },
 
+    // concurrent: false | readonly: false | permission: ask
     git_commit: {
       description: "Stage all changes and commit with a message.",
       parameters: z.object({
         message: z.string().describe("Commit message"),
       }),
       execute: async ({ message }: { message: string }) => {
-        if (ctx.approveCommand) {
-          const approved = await ctx.approveCommand(`git add . && git commit -m ${JSON.stringify(message)}`);
-          if (!approved) {
-            return { success: false, error: "Commit rejected by user", message };
-          }
+        const approved = await checkCommandPermission(`git add . && git commit -m ${JSON.stringify(message)}`, false);
+        if (!approved) {
+          return { success: false, error: "PERMISSION_DENIED_BY_USER", message };
         }
 
         const git = simpleGit(ctx.workspaceRoot);
         await git.add(".");
         const result = await git.commit(message);
         return { success: true, hash: result.commit, summary: result.summary };
+      },
+    },
+
+    // concurrent: false | readonly: false | permission: ask
+    delete_file: {
+      description: "Delete a file from the workspace.",
+      parameters: z.object({
+        path: z.string().describe("Relative path to the file to delete"),
+      }),
+      execute: async ({ path: filePath }: { path: string }) => {
+        const absPath = resolvePath(filePath);
+        if (!existsSync(absPath)) {
+          return { success: false, error: `File not found: ${filePath}` };
+        }
+
+        const approved = await checkEditPermission(filePath, "");
+        if (!approved) {
+          return { success: false, error: "PERMISSION_DENIED_BY_USER" };
+        }
+
+        await unlink(absPath);
+        ctx.onEvent?.({ type: "edit", path: filePath, diff: `- Deleted file: ${filePath}` });
+        return { path: filePath, success: true, message: "File deleted" };
+      },
+    },
+
+    // concurrent: false | readonly: false | permission: ask
+    rename_file: {
+      description: "Rename or move a file within the workspace.",
+      parameters: z.object({
+        old_path: z.string().describe("Current relative path of the file"),
+        new_path: z.string().describe("New relative path for the file"),
+      }),
+      execute: async ({ old_path, new_path }: { old_path: string; new_path: string }) => {
+        const absOld = resolvePath(old_path);
+        const absNew = resolvePath(new_path);
+
+        if (!existsSync(absOld)) {
+          return { success: false, error: `File not found: ${old_path}` };
+        }
+        if (existsSync(absNew)) {
+          return { success: false, error: `Destination already exists: ${new_path}` };
+        }
+
+        const approved = await checkEditPermission(old_path, "");
+        if (!approved) {
+          return { success: false, error: "PERMISSION_DENIED_BY_USER" };
+        }
+
+        await mkdir(path.dirname(absNew), { recursive: true });
+        await rename(absOld, absNew);
+        ctx.onEvent?.({ type: "edit", path: old_path, diff: `Renamed: ${old_path} -> ${new_path}` });
+        return { old_path, new_path, success: true };
+      },
+    },
+
+    // concurrent: true | readonly: true | permission: ask
+    web_fetch: {
+      description: "Fetch content from a URL. Returns the response text. Requires permission.",
+      parameters: z.object({
+        url: z.string().describe("URL to fetch"),
+        max_length: z.number().optional().describe("Max response length in chars (default 50000)"),
+      }),
+      execute: async ({ url, max_length }: { url: string; max_length?: number }) => {
+        const approved = await checkCommandPermission(`web_fetch: ${url}`, false);
+        if (!approved) {
+          return { success: false, error: "PERMISSION_DENIED_BY_USER", url };
+        }
+
+        try {
+          const response = await fetch(url, {
+            signal: AbortSignal.timeout(10000),
+          });
+          const body = await response.text();
+          const maxLen = max_length ?? 50000;
+          return {
+            url,
+            status: response.status,
+            content_type: response.headers.get("content-type") ?? "unknown",
+            body: capResult(body, maxLen),
+          };
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          return { success: false, error: `Fetch failed: ${message}`, url };
+        }
+      },
+    },
+
+    // concurrent: true | readonly: true | permission: none
+    ask_user: {
+      description: "Ask the user a question. Use when you need clarification or a decision.",
+      parameters: z.object({
+        question: z.string().describe("The question to ask the user"),
+      }),
+      execute: async ({ question }: { question: string }) => {
+        ctx.onEvent?.({ type: "ask_user", question });
+        return { answer: "User interaction not supported in current mode" };
       },
     },
   };

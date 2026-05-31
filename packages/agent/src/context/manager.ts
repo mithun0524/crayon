@@ -114,5 +114,6 @@ ${workingMemory.getRecentToolOutputs(5) || "None."}
 1. Always provide a clear text response to the user when finished.
 2. Use edit_file for existing files; write_file for new files only.
 3. Use search_codebase before guessing file locations.
-4. Only call tools that exist in your tool list.`;
+4. Only call tools that exist in your tool list.
+5. Before making tool calls or complex decisions, you MUST wrap your internal reasoning inside <thinking>...</thinking> tags. This helps the user understand your thought process.`;
 }

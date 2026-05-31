@@ -18,7 +18,7 @@ const DEFAULT_OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 
 function resolveProvider(config: ModelConfig, modelId: string): ModelProvider {
   if (config.provider) return config.provider as ModelProvider;
-  if (config.googleApiKey || process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+  if (config.googleApiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
     if (modelId.startsWith("gemini")) return "google";
   }
   if (config.openrouterApiKey || process.env.OPENROUTER_API_KEY) return "openrouter";
@@ -54,8 +54,8 @@ export function resolveModel(config: ModelConfig): LanguageModel {
 
   switch (provider) {
     case "google": {
-      const apiKey = config.googleApiKey ?? process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-      if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY is required for Gemini models");
+      const apiKey = config.googleApiKey ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+      if (!apiKey) throw new Error("GEMINI_API_KEY, GOOGLE_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY is required for Gemini models");
       try {
         // @ts-ignore — @ai-sdk/google is an optional peer dependency
         const { createGoogleGenerativeAI } = require("@ai-sdk/google");
