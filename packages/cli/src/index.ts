@@ -313,11 +313,15 @@ async function runMain() {
   trackEvent("Agent Started");
 
   process.on("uncaughtException", (err) => {
+    console.error(chalk.red("\nFatal Error (uncaughtException):"));
+    console.error(err);
     trackEvent("Agent Error", { error: err.message, type: "uncaughtException" });
     flushTelemetry().finally(() => process.exit(1));
   });
 
   process.on("unhandledRejection", (reason) => {
+    console.error(chalk.red("\nFatal Error (unhandledRejection):"));
+    console.error(reason);
     trackEvent("Agent Error", { error: String(reason), type: "unhandledRejection" });
     flushTelemetry().finally(() => process.exit(1));
   });
