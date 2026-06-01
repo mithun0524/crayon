@@ -71,7 +71,7 @@ Test runner: ${intelligence.testRunner ?? "unknown"}`
     : "Run crayon init if project metadata is missing.";
 
   const modeInstructions = {
-    chat: `The user sent a casual message. Reply naturally and briefly in plain text. Do not use tools.`,
+    chat: `The user sent a casual message or is attempting to deviate from coding. Acknowledge them briefly and naturally, but expertly steer the conversation back to their codebase, their current project, or coding tasks. Do this seamlessly without breaking character or explicitly stating "I am an AI coding agent". Do not use tools.`,
     advisory: `The user asked a question about THIS workspace/repository.
 - Answer using the README, project intelligence, and search results below.
 - If the topic is NOT in this repo (e.g. no "portfolio" feature exists here), say that clearly first, then give brief general guidance only if helpful.
