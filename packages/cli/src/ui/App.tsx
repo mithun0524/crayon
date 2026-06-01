@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Box, Text, useInput, useApp } from "ink";
+import { Box, Text, useInput, useApp, Static } from "ink";
 import TextInput from "ink-text-input";
 import path from "node:path";
 import { existsSync } from "node:fs";
@@ -20,7 +20,6 @@ marked.setOptions({
 import { loadConfig } from "../config.js";
 import { getGitInfo } from "./gitHelper.js";
 import { PlanView } from "./PlanView.js";
-import { StreamView } from "./StreamView.js";
 import { StatusBar } from "./StatusBar.js";
 import { DiffRenderer } from "./DiffRenderer.js";
 import { saveSession, loadSession } from "../session.js";
@@ -56,7 +55,7 @@ const AVAILABLE_COMMANDS = [
 
 export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) => {
   const { exit } = useApp();
-  const { rows, columns } = useTerminalSize();
+  const { columns } = useTerminalSize();
 
   const [gitBranch, setGitBranch] = useState("main");
   const [gitDirtyCount, setGitDirtyCount] = useState(0);
@@ -267,6 +266,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       case "tool_call":
         setActiveToolName(event.name);
         setActiveToolArgs(event.args);
+        setStreamingText("");
         if (event.name !== "thinking") {
           setCurrentStepIndex((prev) => Math.min(prev + 1, Math.max(0, activePlanRef.current.length - 1)));
         } else {
@@ -505,15 +505,24 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
   };
 
-  // We slice history heavily to prevent it from ever exceeding screen size since
-  // we do not have a virtualized scrollbox like Claude Code yet.
-  // A slice of 30 should keep it contained nicely while allowing history view.
-  const visibleHistory = history.slice(-30);
+  const getToolDisplay = () => {
+    if (!activeToolName || activeToolName === "thinking") return streamingText || "Thinking...";
+    let argInfo = "";
+    try {
+      if (activeToolArgs) {
+        if (activeToolArgs.path) argInfo = ` ${activeToolArgs.path}`;
+        else if (activeToolArgs.file_path) argInfo = ` ${activeToolArgs.file_path}`;
+        else if (activeToolArgs.command) argInfo = ` ${activeToolArgs.command}`;
+        else if (activeToolArgs.query) argInfo = ` '${activeToolArgs.query}'`;
+      }
+    } catch {}
+    return `Running ${activeToolName}${argInfo}...`;
+  };
 
   return (
-    <Box flexDirection="column" width={columns} height={rows} overflow="hidden">
-      <Box flexGrow={1} flexDirection="column" overflow="hidden" justifyContent="flex-end" paddingLeft={1}>
-        {visibleHistory.map((msg) => {
+    <Box flexDirection="column" width="100%">
+      <Static items={history}>
+        {(msg) => {
           if (msg.text.startsWith("⬡ Crayon v0.1.0")) {
             return (
               <Box key={msg.id} flexDirection="column" marginBottom={1}>
@@ -573,23 +582,21 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               </Box>
             );
           }
-        })}
-      </Box>
+        }}
+      </Static>
 
       <Box flexShrink={0} flexDirection="column" paddingLeft={1}>
         {activePlan.length > 0 && (
           <PlanView steps={activePlan} currentStepIndex={currentStepIndex} isExecuting={isExecuting} />
         )}
 
-        {isExecuting && activePlan.length === 0 && !approvalRequest && !streamingText && (
+        {isExecuting && activePlan.length === 0 && !approvalRequest && (
           <Box flexDirection="column" width="100%">
             {streamingReasoning && (
               <ThinkingMessage thinking={streamingReasoning} />
             )}
             <AgentProgress
-              statusText={activeToolName && activeToolName !== "thinking" 
-                ? `Running tool ${activeToolName}...` 
-                : activeToolArgs?.status || "Thinking..."}
+              statusText={getToolDisplay()}
               tokens={tokens}
               startTime={executionStartTime.current}
               modelName={defaultModel}
@@ -597,11 +604,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           </Box>
         )}
 
-        {isExecuting && streamingText && (
-          <Box marginTop={1}>
-            <StreamView text={streamingText} isStreaming={isExecuting} />
-          </Box>
-        )}
+
 
         {approvalRequest && (
           <Box flexDirection="column" borderStyle="single" borderColor={theme.warning} paddingX={1} marginY={1} width="100%">
