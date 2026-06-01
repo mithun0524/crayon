@@ -2,7 +2,7 @@
   "name": "crayon-vscode",
   "displayName": "Crayon",
   "description": "Autonomous AI coding agent",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "crayon",
   "icon": "media/icon.png",
   "galleryBanner": {
