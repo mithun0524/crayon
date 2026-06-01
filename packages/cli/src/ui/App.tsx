@@ -503,7 +503,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             return (
               <Box key={msg.id} flexDirection="column" marginBottom={1}>
                 <Text color={theme.brand} bold>{msg.text}</Text>
-                <Text color={theme.border}>────────────────────────────────────────────────────────────────</Text>
+                <Text color={theme.border}>{"─".repeat(columns || 80)}</Text>
               </Box>
             );
           }
@@ -618,7 +618,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       </Box>
 
       <Box marginTop={1}>
-        <Text color={theme.border}>────────────────────────────────────────────────────────────────</Text>
+        <Text color={theme.border}>{"─".repeat(columns || 80)}</Text>
       </Box>
 
       {!isExecuting && !approvalRequest && mode === "chat" && (

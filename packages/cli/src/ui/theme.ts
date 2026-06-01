@@ -24,26 +24,26 @@ export interface Theme {
 }
 
 export const darkTheme: Theme = {
-  brand: '#AF87FF',          // Electric violet / Crayon purple
-  brandShimmer: '#C7A8FF',   // Lighter violet for shimmer
-  border: '#888888',         // Medium gray
-  text: '#FFFFFF',           // White
-  subtle: '#999999',         // Light gray
-  background: '#000000',     // Black
-  success: '#4EBA65',        // Bright green
-  error: '#FF6B80',          // Bright red
-  warning: '#FFC107',        // Bright amber
+  brand: '#A8A29E',          // Warm gray / minimal
+  brandShimmer: '#E7E5E4',   // Lighter gray for shimmer
+  border: '#3F3F46',         // Dark gray border
+  text: '#F4F4F5',           // Off-white text
+  subtle: '#71717A',         // Muted gray
+  background: '#09090B',     // Near black
+  success: '#22C55E',        // Minimal green
+  error: '#EF4444',          // Minimal red
+  warning: '#F59E0B',        // Minimal amber
 
-  diffAdded: '#225C2B',      // Dark green (text/border)
-  diffRemoved: '#7A2936',    // Dark red (text/border)
-  diffAddedBg: '#122616',    // Very dark green bg
-  diffRemovedBg: '#2E1519',  // Very dark red bg
-  diffAddedWord: '#38A660',  // Medium green
-  diffRemovedWord: '#B3596B',// Medium red
+  diffAdded: '#166534',      
+  diffRemoved: '#991B1B',    
+  diffAddedBg: '#052E16',    
+  diffRemovedBg: '#450A0A',  
+  diffAddedWord: '#22C55E',  
+  diffRemovedWord: '#EF4444',
 
-  selectionBg: '#264F78',    // Dark selection blue
-  panelBg: '#111111',        // Very dark grey
-  promptBg: '#1E1E1E',       // Dark grey for prompt
+  selectionBg: '#27272A',    // Dark selection
+  panelBg: '#18181B',        // Very dark grey panel
+  promptBg: '#09090B',       // Dark background
 };
 
 import { lightTheme } from "./themes/light.js";
