@@ -224,6 +224,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
       setIsExecuting(false);
       setActiveToolName(null);
+      setActivePlan([]);
+      activePlanRef.current = [];
 
       const summaryMsg = result.summary || "Task completed successfully.";
       pushMessage({ sender: "crayon", text: summaryMsg, reasoning: streamingReasoning });
@@ -237,6 +239,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       if (abortedRef.current) return;
       setIsExecuting(false);
       setActiveToolName(null);
+      setActivePlan([]);
+      activePlanRef.current = [];
       setError(err?.message || String(err));
       pushMessage({ sender: "system", text: `Error: ${err?.message || String(err)}` });
 
@@ -319,6 +323,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     setIsExecuting(false);
     setActiveToolName(null);
     setActiveToolArgs(null);
+    setActivePlan([]);
+    activePlanRef.current = [];
     setStreamingText("");
     setStreamingReasoning("");
     pushMessage({ sender: "system", text: "🚫 Agent execution interrupted by user." });
