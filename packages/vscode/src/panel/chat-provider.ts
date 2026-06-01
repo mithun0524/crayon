@@ -34,7 +34,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.html = this.getHtml();
 
-    webviewView.webview.onDidReceiveMessage(async (message: { type: string; task?: string }) => {
+    webviewView.webview.onDidReceiveMessage(async (message: { type: string; task?: string; path?: string }) => {
       if (message.type === "run" && message.task) {
         await this.handleRun(message.task);
       } else if (message.type === "stop") {
@@ -42,6 +42,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       } else if (message.type === "clear") {
         this.agent?.clearHistory();
         this.view?.webview.postMessage({ type: "cleared" });
+      } else if (message.type === "open_file" && message.path) {
+        if (this.agentWorkspaceRoot) {
+          const fileUri = vscode.Uri.joinPath(vscode.Uri.file(this.agentWorkspaceRoot), message.path);
+          vscode.workspace.openTextDocument(fileUri).then((doc) => {
+            vscode.window.showTextDocument(doc, { preview: false });
+          });
+        }
       }
     });
 
@@ -147,12 +154,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private getHtml(): string {
+    const nonce = getNonce();
+    const webviewScriptUri = this.view?.webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "dist", "webview.js")
+    );
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <title>Crayon Chat</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -213,6 +225,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       font-size: 12.5px;
       line-height: 1.5;
     }
+    
+    .msg pre {
+      background: var(--vscode-editor-background);
+      padding: 8px;
+      border-radius: 4px;
+      overflow-x: auto;
+      margin: 8px 0;
+    }
+    
+    .msg code {
+      font-family: var(--vscode-editor-font-family);
+      font-size: var(--vscode-editor-font-size);
+    }
+    
+    .msg p { margin-bottom: 8px; }
+    .msg p:last-child { margin-bottom: 0; }
 
     .msg.user {
       background: var(--vscode-button-background);
@@ -225,10 +253,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       background: var(--vscode-editor-inactiveSelectionBackground);
       align-self: flex-start;
       border-radius: 2px 12px 12px 12px;
-      white-space: pre-wrap;
     }
 
-    /* Streaming agent bubble — updated in place */
     .msg.agent.streaming::after {
       content: '▋';
       animation: blink 0.8s step-end infinite;
@@ -267,14 +293,31 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       align-self: flex-start;
       padding: 2px 12px;
     }
+    
+    .tool-call summary {
+      cursor: pointer;
+      color: var(--vscode-textLink-foreground);
+      user-select: none;
+    }
+    
+    .tool-call pre {
+      margin-top: 4px;
+      font-size: 10px;
+      background: var(--vscode-editor-background);
+    }
 
     .msg.edit {
       background: transparent;
-      color: var(--vscode-gitDecoration-modifiedResourceForeground, #73c991);
       font-size: 11px;
       align-self: flex-start;
       padding: 2px 12px;
     }
+    
+    .file-link {
+      color: var(--vscode-gitDecoration-modifiedResourceForeground, #73c991);
+      text-decoration: none;
+    }
+    .file-link:hover { text-decoration: underline; }
 
     .msg.eval-pass {
       color: var(--vscode-testing-iconPassed, #73c991);
@@ -328,11 +371,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     #send-btn:hover { background: var(--vscode-button-hoverBackground); }
     #send-btn:disabled { opacity: 0.45; cursor: not-allowed; }
     #send-btn.stop { background: var(--vscode-inputValidation-errorBackground, #5a1d1d); }
+    
+    #token-counter {
+      color: var(--vscode-descriptionForeground);
+      font-size: 10px;
+      font-weight: normal;
+    }
   </style>
 </head>
 <body>
   <div class="header">
-    <span>⬡ Crayon</span>
+    <span>⬡ Crayon <span id="token-counter"></span></span>
     <div class="header-actions">
       <button class="icon-btn" id="clear-btn" title="Clear conversation">Clear</button>
     </div>
@@ -342,159 +391,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     <textarea id="task-input" placeholder="Ask Crayon to build, fix, or refactor..." rows="1"></textarea>
     <button id="send-btn">Run</button>
   </div>
-  <script>
-    const vscode = acquireVsCodeApi();
-    const messagesEl = document.getElementById('messages');
-    const input = document.getElementById('task-input');
-    const sendBtn = document.getElementById('send-btn');
-    const clearBtn = document.getElementById('clear-btn');
-    let running = false;
-    let streamingBubble = null; // the current streaming agent bubble
-
-    function addMsg(text, cls) {
-      const div = document.createElement('div');
-      div.className = 'msg ' + cls;
-      div.textContent = text;
-      messagesEl.appendChild(div);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-      return div;
-    }
-
-    function startStreamBubble() {
-      streamingBubble = document.createElement('div');
-      streamingBubble.className = 'msg agent streaming';
-      streamingBubble.textContent = '';
-      messagesEl.appendChild(streamingBubble);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-      return streamingBubble;
-    }
-
-    function appendStream(delta) {
-      if (!streamingBubble) startStreamBubble();
-      streamingBubble.textContent += delta;
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-    }
-
-    function finalizeStreamBubble(fullText) {
-      if (streamingBubble) {
-        streamingBubble.classList.remove('streaming');
-        if (fullText) streamingBubble.textContent = fullText;
-        streamingBubble = null;
-      }
-    }
-
-    function send() {
-      const task = input.value.trim();
-      if (!task || running) return;
-      running = true;
-      sendBtn.textContent = '■';
-      sendBtn.classList.add('stop');
-      sendBtn.disabled = false;
-      addMsg(task, 'user');
-      input.value = '';
-      input.style.height = 'auto';
-      vscode.postMessage({ type: 'run', task });
-    }
-
-    sendBtn.addEventListener('click', () => {
-      if (running) {
-        vscode.postMessage({ type: 'stop' });
-        finalizeStreamBubble('');
-        setIdle();
-      } else {
-        send();
-      }
-    });
-
-    clearBtn.addEventListener('click', () => {
-      vscode.postMessage({ type: 'clear' });
-    });
-
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-    });
-
-    // Auto-resize textarea
-    input.addEventListener('input', () => {
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 120) + 'px';
-    });
-
-    function setIdle() {
-      running = false;
-      sendBtn.textContent = 'Run';
-      sendBtn.classList.remove('stop');
-      sendBtn.disabled = false;
-      streamingBubble = null;
-    }
-
-    window.addEventListener('message', (e) => {
-      const { type, event } = e.data;
-
-      if (type === 'cleared') {
-        messagesEl.innerHTML = '';
-        addMsg('Conversation cleared.', 'system');
-        return;
-      }
-
-      if (type !== 'event') return;
-
-      switch (event.type) {
-        case 'plan': {
-          const ol = document.createElement('ol');
-          event.steps.forEach(s => {
-            const li = document.createElement('li');
-            li.textContent = s;
-            ol.appendChild(li);
-          });
-          const div = document.createElement('div');
-          div.className = 'msg plan';
-          div.innerHTML = '<strong>Plan</strong>';
-          div.appendChild(ol);
-          messagesEl.appendChild(div);
-          messagesEl.scrollTop = messagesEl.scrollHeight;
-          break;
-        }
-        case 'text_delta':
-          // Real-time streaming — append to streaming bubble
-          appendStream(event.content);
-          break;
-        case 'text':
-          // Full text received (end of stream or fallback)
-          finalizeStreamBubble(event.content);
-          break;
-        case 'tool_call':
-          if (event.name !== 'thinking') {
-            addMsg('→ ' + event.name, 'tool');
-          }
-          break;
-        case 'edit':
-          addMsg('✎ ' + event.path, 'edit');
-          break;
-        case 'eval':
-          addMsg(
-            event.passed ? '✓ Tests passed' : '✗ Tests failed — retrying...',
-            event.passed ? 'eval-pass' : 'eval-fail'
-          );
-          break;
-        case 'thinking':
-          addMsg(event.content, 'system');
-          break;
-        case 'done':
-          finalizeStreamBubble(null);
-          setIdle();
-          break;
-        case 'error':
-          finalizeStreamBubble(null);
-          addMsg('Error: ' + event.message, 'error');
-          setIdle();
-          break;
-      }
-    });
-
-    addMsg('Ready. Describe a task and Crayon will plan, code, and test autonomously.', 'system');
-  </script>
+  <script nonce="${nonce}" src="${webviewScriptUri}"></script>
 </body>
 </html>`;
   }
+}
+
+function getNonce() {
+  let text = '';
+  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  for (let i = 0; i < 32; i++) {
+    text += possible.charAt(Math.floor(Math.random() * possible.length));
+  }
+  return text;
 }

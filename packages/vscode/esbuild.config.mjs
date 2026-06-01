@@ -37,15 +37,28 @@ const extensionConfig = {
   minify: false,
 };
 
+const webviewConfig = {
+  entryPoints: ["src/webview/main.ts"],
+  bundle: true,
+  outfile: "dist/webview.js",
+  format: "iife",
+  platform: "browser",
+  sourcemap: true,
+  minify: true,
+};
+
 async function build() {
   mkdirSync("dist", { recursive: true });
 
   if (isWatch) {
-    const ctx = await esbuild.context(extensionConfig);
-    await ctx.watch();
+    const ctxExt = await esbuild.context(extensionConfig);
+    const ctxWeb = await esbuild.context(webviewConfig);
+    await ctxExt.watch();
+    await ctxWeb.watch();
     console.log("Watching for changes...");
   } else {
     await esbuild.build(extensionConfig);
+    await esbuild.build(webviewConfig);
     console.log("Extension built successfully");
   }
 }

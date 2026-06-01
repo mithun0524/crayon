@@ -52,7 +52,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       {!isExecuting && (
         <>
           <Text color={theme.subtle} dimColor>  •  </Text>
-          <Text color={theme.subtle} dimColor>[esc] Cancel</Text>
+          <Text color={theme.subtle} dimColor>[ctrl+c] Exit</Text>
         </>
       )}
 

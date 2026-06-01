@@ -4,15 +4,21 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { FileSymbols, SymbolInfo } from "../types.js";
 
-const TS_JS_EXT = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
+const TS_EXT = new Set([".ts", ".tsx"]);
+const JS_EXT = new Set([".js", ".jsx", ".mjs", ".cjs"]);
 const PY_EXT = new Set([".py"]);
 const GO_EXT = new Set([".go"]);
+const RUST_EXT = new Set([".rs"]);
+const JAVA_EXT = new Set([".java"]);
 
 function detectLanguage(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
-  if (TS_JS_EXT.has(ext)) return "typescript";
+  if (TS_EXT.has(ext)) return "typescript";
+  if (JS_EXT.has(ext)) return "javascript";
   if (PY_EXT.has(ext)) return "python";
   if (GO_EXT.has(ext)) return "go";
+  if (RUST_EXT.has(ext)) return "rust";
+  if (JAVA_EXT.has(ext)) return "java";
   return "unknown";
 }
 
@@ -85,6 +91,12 @@ function extractTsJsSymbols(content: string): {
     }
   }
 
+  symbols.sort((a, b) => a.line - b.line);
+  for (let i = 0; i < symbols.length; i++) {
+    const nextSym = symbols[i + 1];
+    symbols[i]!.endLine = nextSym ? Math.max(symbols[i]!.line, nextSym.line - 1) : lines.length;
+  }
+
   return { imports, exports, symbols };
 }
 
@@ -116,6 +128,12 @@ function extractPythonSymbols(content: string): {
     if (classMatch?.[1]) {
       symbols.push({ name: classMatch[1], kind: "class", line: lineNum });
     }
+  }
+
+  symbols.sort((a, b) => a.line - b.line);
+  for (let i = 0; i < symbols.length; i++) {
+    const nextSym = symbols[i + 1];
+    symbols[i]!.endLine = nextSym ? Math.max(symbols[i]!.line, nextSym.line - 1) : lines.length;
   }
 
   return { imports, exports, symbols };
@@ -151,6 +169,12 @@ function extractGoSymbols(content: string): {
     }
   }
 
+  symbols.sort((a, b) => a.line - b.line);
+  for (let i = 0; i < symbols.length; i++) {
+    const nextSym = symbols[i + 1];
+    symbols[i]!.endLine = nextSym ? Math.max(symbols[i]!.line, nextSym.line - 1) : lines.length;
+  }
+
   return { imports, exports, symbols };
 }
 
@@ -159,17 +183,25 @@ export async function parseFile(filePath: string, workspaceRoot: string): Promis
   const language = detectLanguage(filePath);
   const stat = await import("node:fs/promises").then((fs) => fs.stat(filePath));
 
-  let parsed: { imports: string[]; exports: string[]; symbols: SymbolInfo[] };
+  let parsed: { imports: string[]; exports: string[]; symbols: SymbolInfo[] } | null = null;
+  try {
+    const { parse } = await import("./tree-sitter-parser.js");
+    parsed = await parse(content, language);
+  } catch (err) {
+    console.error("Tree-sitter parsing failed, falling back to regex:", err);
+  }
 
-  switch (language) {
-    case "python":
-      parsed = extractPythonSymbols(content);
-      break;
-    case "go":
-      parsed = extractGoSymbols(content);
-      break;
-    default:
-      parsed = extractTsJsSymbols(content);
+  if (!parsed) {
+    switch (language) {
+      case "python":
+        parsed = extractPythonSymbols(content);
+        break;
+      case "go":
+        parsed = extractGoSymbols(content);
+        break;
+      default:
+        parsed = extractTsJsSymbols(content);
+    }
   }
 
   const relativePath = path.relative(workspaceRoot, filePath).replace(/\\/g, "/");

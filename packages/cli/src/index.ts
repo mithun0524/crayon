@@ -244,6 +244,70 @@ mcpCmd
     }
   });
 
+program
+  .command("config")
+  .description("Manage Crayon configuration")
+  .action(async () => {
+    const { getConfigPath } = await import("./config.js");
+    const configPath = getConfigPath();
+    console.log(chalk.green(`Configuration path: ${configPath}`));
+    console.log(chalk.dim("Use CRAYON_THEME=light or high-contrast to change themes."));
+  });
+
+program
+  .command("serve")
+  .description("Start Crayon MCP server on stdio")
+  .action(async () => {
+    const { runMcpServer } = await import("crayon-agent");
+    await runMcpServer();
+  });
+
+program
+  .command("tasks")
+  .description("List all tasks")
+  .action(async () => {
+    const { TaskManager } = await import("crayon-agent");
+    const manager = new TaskManager(process.cwd());
+    const tasks = await manager.listTasks();
+    if (tasks.length === 0) {
+      console.log("No tasks found.");
+      return;
+    }
+    console.log(chalk.cyan("Tasks:"));
+    for (const t of tasks) {
+      const color = t.status === "completed" ? chalk.green : t.status === "failed" ? chalk.red : chalk.yellow;
+      console.log(`${color(`[${t.status}]`)} ${t.id} - ${t.description}`);
+    }
+  });
+
+program
+  .command("resume")
+  .description("Resume an interrupted task")
+  .argument("<taskId>", "ID of the task to resume")
+  .action(async (taskId) => {
+    const { TaskManager } = await import("crayon-agent");
+    const manager = new TaskManager(process.cwd());
+    const task = await manager.getTask(taskId);
+    if (!task) {
+      console.error(chalk.red(`Task not found: ${taskId}`));
+      return;
+    }
+    console.log(chalk.blue(`Resuming task: ${task.description}`));
+    // Simplified resume flow
+    await runFallback(task.description);
+  });
+
+program
+  .command("queue")
+  .description("Queue multiple tasks to run sequentially")
+  .argument("<tasks...>", "Tasks to queue")
+  .action(async (tasks) => {
+    for (let i = 0; i < tasks.length; i++) {
+      console.log(chalk.magenta.bold(`\n--- Running queued task ${i + 1}/${tasks.length}: ${tasks[i]} ---`));
+      await runFallback(tasks[i]);
+    }
+  });
+
 async function runMain() {
   await initTelemetry();
   trackEvent("Agent Started");

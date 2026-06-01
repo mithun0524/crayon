@@ -6,8 +6,9 @@ import { createTwoFilesPatch } from "diff";
 import { simpleGit } from "simple-git";
 import { z } from "zod";
 import { parse as shellParse } from "shell-quote";
-import { Project } from "ts-morph";
+import { Project, Node, SyntaxKind } from "ts-morph";
 import type { ToolContext } from "../types.js";
+import { createGitTools } from "./git-workflow.js";
 
 const DANGEROUS_PATTERNS = [
   /rm\s+-rf/i,
@@ -64,6 +65,8 @@ export function createTools(ctx: ToolContext) {
     };
 
   return {
+    ...createGitTools(ctx),
+
     // concurrent: true | readonly: true | permission: none
     thinking: {
       description: "Reason through a problem before acting. Use for planning and analysis — not for final user-facing replies.",
@@ -270,6 +273,11 @@ export function createTools(ctx: ToolContext) {
           }
         }
 
+        if (Node.isVariableDeclaration(targetNode)) {
+          const stmt = targetNode.getFirstAncestorByKind(SyntaxKind.VariableStatement);
+          if (stmt) targetNode = stmt;
+        }
+
         targetNode.replaceWithText(new_content);
         const newContent = sourceFile.getFullText();
 
@@ -429,6 +437,61 @@ export function createTools(ctx: ToolContext) {
     },
 
     // concurrent: true | readonly: true | permission: none
+    find_usages: {
+      description: "Find all usages/references of a specific symbol across the codebase.",
+      parameters: z.object({
+        symbol: z.string().describe("The exact name of the symbol to find usages for"),
+      }),
+      execute: async ({ symbol }: { symbol: string }) => {
+        const results = await ctx.indexer.search(symbol, 50);
+        const usages = results
+          .filter(r => r.matchType === "grep" || r.matchType === "symbol" || r.snippet)
+          .map(r => ({
+            path: r.path,
+            line: r.line,
+            snippet: r.snippet,
+          }));
+        
+        return {
+          symbol,
+          usages: JSON.parse(capResult(JSON.stringify(usages))),
+        };
+      },
+    },
+
+    // concurrent: true | readonly: true | permission: none
+    get_dependents: {
+      description: "Find which files depend on (import) the specified file. Useful for assessing impact of changes.",
+      parameters: z.object({
+        file_path: z.string().describe("Relative path of the file to check"),
+      }),
+      execute: async ({ file_path }: { file_path: string }) => {
+        try {
+          const dependents = ctx.indexer.getGraph().getDependents(file_path);
+          return { file_path, dependents };
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      },
+    },
+
+    // concurrent: true | readonly: true | permission: none
+    get_dependencies: {
+      description: "Find which files the specified file depends on (imports).",
+      parameters: z.object({
+        file_path: z.string().describe("Relative path of the file to check"),
+      }),
+      execute: async ({ file_path }: { file_path: string }) => {
+        try {
+          const dependencies = ctx.indexer.getGraph().getDependencies(file_path);
+          return { file_path, dependencies };
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      },
+    },
+
+    // concurrent: true | readonly: true | permission: none
     list_directory: {
       description: "List files and directories in a path.",
       parameters: z.object({
@@ -452,6 +515,7 @@ export function createTools(ctx: ToolContext) {
         cwd: z.string().optional().describe("Working directory (relative to workspace root). Defaults to workspace root."),
       }),
       execute: async ({ command, timeout_ms, cwd: cwdPath }: { command: string; timeout_ms?: number; cwd?: string }) => {
+        if (ctx.signal?.aborted) return { success: false, error: "Aborted", command };
         let isDangerous = false;
         for (const pattern of DANGEROUS_PATTERNS) {
           if (pattern.test(command)) {
@@ -505,7 +569,7 @@ export function createTools(ctx: ToolContext) {
 
         const timeout = Math.min(timeout_ms ?? 30000, 120000);
         const workDir = cwdPath ? resolvePath(cwdPath) : ctx.workspaceRoot;
-        const result = await runCommand(command, workDir, timeout);
+        const result = await runCommand(command, workDir, timeout, ctx.signal);
         return {
           ...result,
           stdout: capResult(result.stdout),
@@ -659,6 +723,10 @@ export function createTools(ctx: ToolContext) {
       }),
       execute: async ({ question }: { question: string }) => {
         ctx.onEvent?.({ type: "ask_user", question });
+        if (ctx.approveCommand) {
+          const response = await ctx.approveCommand(question);
+          return { answer: response ? "User approved/responded." : "User declined." };
+        }
         return { answer: "User interaction not supported in current mode" };
       },
     },
@@ -697,7 +765,7 @@ async function listDirRecursive(
   return result;
 }
 
-function runCommand(command: string, cwd: string, timeoutMs: number): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {
+function runCommand(command: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
     const isWin = process.platform === "win32";
     const shell = isWin ? "powershell.exe" : "/bin/sh";
@@ -706,6 +774,7 @@ function runCommand(command: string, cwd: string, timeoutMs: number): Promise<{ 
     const proc = spawn(shell, [shellFlag, command], {
       cwd,
       env: process.env,
+      signal,
     });
 
     let stdout = "";

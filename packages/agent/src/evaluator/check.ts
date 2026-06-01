@@ -51,14 +51,33 @@ function detectPackageManager(workspaceRoot: string): string {
 }
 
 export async function runEvaluation(workspaceRoot: string): Promise<EvalResult | null> {
+  const isWin = process.platform === "win32";
+  const shell = isWin ? "powershell.exe" : "/bin/sh";
+  const shellFlag = isWin ? "-Command" : "-c";
+
+  // Pre-check: Typescript compile
+  if (existsSync(path.join(workspaceRoot, "tsconfig.json"))) {
+    const pm = detectPackageManager(workspaceRoot);
+    const tscCmd = `${pm} exec tsc --noEmit`;
+    const tscResult = await new Promise<EvalResult>((resolve) => {
+      const proc = spawn(shell, [shellFlag, tscCmd], { cwd: workspaceRoot });
+      let stdout = ""; let stderr = "";
+      proc.stdout.on("data", d => stdout += d.toString());
+      proc.stderr.on("data", d => stderr += d.toString());
+      proc.on("close", code => resolve({ passed: code === 0, command: tscCmd, stdout, stderr, exitCode: code ?? -1 }));
+      proc.on("error", err => resolve({ passed: false, command: tscCmd, stdout, stderr: err.message, exitCode: -1 }));
+    });
+    
+    // If TS fails, return immediately to fix types before running tests
+    if (!tscResult.passed) {
+      return tscResult;
+    }
+  }
+
   const command = await detectTestCommand(workspaceRoot);
   if (!command) return null;
 
   return new Promise((resolve) => {
-    const isWin = process.platform === "win32";
-    const shell = isWin ? "powershell.exe" : "/bin/sh";
-    const shellFlag = isWin ? "-Command" : "-c";
-
     const proc = spawn(shell, [shellFlag, command], {
       cwd: workspaceRoot,
       env: process.env,

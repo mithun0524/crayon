@@ -1,7 +1,7 @@
 import type { CoreMessage } from "ai";
 import { generateText } from "ai";
 import type { ModelConfig } from "../models/router.js";
-import { resolveModel } from "../models/router.js";
+import { getCompactModel } from "../models/router.js";
 
 const PRESERVE_TAIL = 4;
 const TRUNCATE_THRESHOLD = 500;
@@ -96,7 +96,7 @@ export async function autoCompact(
     .join("\n\n");
 
   try {
-    const model = resolveModel(modelConfig);
+    const model = getCompactModel(modelConfig);
     const { text: summary } = await generateText({
       model,
       system:

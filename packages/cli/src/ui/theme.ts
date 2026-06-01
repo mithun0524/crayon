@@ -46,4 +46,17 @@ export const darkTheme: Theme = {
   promptBg: '#1E1E1E',       // Dark grey for prompt
 };
 
-export const theme = darkTheme;
+import { lightTheme } from "./themes/light.js";
+import { highContrastTheme } from "./themes/high-contrast.js";
+
+function loadTheme(): Theme {
+  const themeName = process.env.CRAYON_THEME || 'dark';
+  if (themeName === 'light') {
+    return lightTheme;
+  } else if (themeName === 'high-contrast') {
+    return highContrastTheme;
+  }
+  return darkTheme;
+}
+
+export const theme = loadTheme();

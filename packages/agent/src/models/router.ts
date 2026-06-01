@@ -89,3 +89,16 @@ export function getPlanningModel(config: ModelConfig): LanguageModel {
 export function getExecutionModel(config: ModelConfig): LanguageModel {
   return resolveModel(config);
 }
+
+export function getCompactModel(config: ModelConfig): LanguageModel {
+  if (config.anthropicApiKey || process.env.ANTHROPIC_API_KEY) {
+    return resolveModel({ ...config, model: "claude-3-5-haiku-latest", provider: "anthropic" });
+  }
+  if (config.openaiApiKey || process.env.OPENAI_API_KEY) {
+    return resolveModel({ ...config, model: "gpt-4o-mini", provider: "openai" });
+  }
+  if (config.googleApiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+    return resolveModel({ ...config, model: "gemini-2.0-flash", provider: "google" });
+  }
+  return resolveModel(config);
+}

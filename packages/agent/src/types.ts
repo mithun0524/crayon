@@ -54,6 +54,7 @@ export interface ToolContext {
   approveCommand?: (command: string) => Promise<boolean>;
   approveEdit?: (path: string, newContent: string) => Promise<boolean>;
   fileState?: FileStateCache;
+  signal?: AbortSignal;
 }
 
 export interface AgentSession {

@@ -3,9 +3,11 @@ import { resolveImport } from "../parser/symbols.js";
 
 export class DependencyGraph {
   private adjacency = new Map<string, Set<string>>();
+  private reverseAdjacency = new Map<string, Set<string>>();
 
   build(files: Map<string, FileSymbols>, workspaceRoot: string): void {
     this.adjacency.clear();
+    this.reverseAdjacency.clear();
 
     for (const [filePath, fileSymbols] of files) {
       const deps = new Set<string>();
@@ -14,6 +16,10 @@ export class DependencyGraph {
         const resolved = resolveImport(imp, filePath, workspaceRoot);
         if (resolved && files.has(resolved)) {
           deps.add(resolved);
+          if (!this.reverseAdjacency.has(resolved)) {
+            this.reverseAdjacency.set(resolved, new Set());
+          }
+          this.reverseAdjacency.get(resolved)!.add(filePath);
         }
       }
 
@@ -23,6 +29,10 @@ export class DependencyGraph {
 
   getDependencies(filePath: string): string[] {
     return [...(this.adjacency.get(filePath) ?? [])];
+  }
+
+  getDependents(filePath: string): string[] {
+    return [...(this.reverseAdjacency.get(filePath) ?? [])];
   }
 
   expand(filePaths: string[], hops = 2): string[] {

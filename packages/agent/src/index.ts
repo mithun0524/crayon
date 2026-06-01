@@ -20,11 +20,55 @@ const CONCURRENT_SAFE_TOOLS = new Set([
   "read_file",
   "grep",
   "search_codebase",
+  "find_usages",
+  "get_dependents",
+  "get_dependencies",
   "list_directory",
   "git_status",
   "git_diff",
   "thinking",
 ]);
+
+const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  'claude-sonnet': { input: 3, output: 15 },
+  'claude-haiku': { input: 0.25, output: 1.25 },
+  'claude-opus': { input: 15, output: 75 },
+  'gpt-4o': { input: 2.5, output: 10 },
+  'gpt-4o-mini': { input: 0.15, output: 0.6 },
+  'gpt-4-turbo': { input: 10, output: 30 },
+  'gemini-2.5-pro': { input: 1.25, output: 10 },
+  'gemini-2.5-flash': { input: 0.15, output: 0.6 },
+  'gemini-2.0-flash': { input: 0.1, output: 0.4 },
+  'default': { input: 3, output: 15 },
+};
+
+export function getModelPricing(modelName: string) {
+  const lower = modelName.toLowerCase();
+  for (const key in MODEL_PRICING) {
+    if (key !== 'default' && lower.includes(key)) return MODEL_PRICING[key];
+  }
+  return MODEL_PRICING.default;
+}
+
+const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  'claude-sonnet': 200000,
+  'claude-haiku': 200000,
+  'claude-opus': 200000,
+  'gpt-4o': 128000,
+  'gpt-4o-mini': 128000,
+  'gpt-4-turbo': 128000,
+  'gemini-2.5': 1000000,
+  'gemini-2.0': 1000000,
+  'default': 200000,
+};
+
+export function getContextWindow(modelName: string) {
+  const lower = modelName.toLowerCase();
+  for (const key in MODEL_CONTEXT_WINDOWS) {
+    if (key !== 'default' && lower.includes(key)) return MODEL_CONTEXT_WINDOWS[key];
+  }
+  return MODEL_CONTEXT_WINDOWS.default;
+}
 
 export class CrayonAgent {
   private indexer: CodeIndexer;
@@ -89,7 +133,8 @@ export class CrayonAgent {
     task: string,
     options: { currentFile?: string; selection?: string; skipHistory?: boolean; signal?: AbortSignal } = {}
   ): Promise<AgentResult> {
-    const mode: TaskMode = classifyTask(task);
+    try {
+      const mode: TaskMode = classifyTask(task);
 
     if (mode === "chat") {
       this.emit({ type: "thinking", content: "Initializing indexer..." });
@@ -128,6 +173,7 @@ export class CrayonAgent {
       approveCommand: this.config.approveCommand,
       approveEdit: this.config.approveEdit,
       fileState: this.fileState,
+      signal: options.signal,
     };
 
     const userMessage: CoreMessage = { role: "user", content: task };
@@ -233,7 +279,9 @@ export class CrayonAgent {
       }
 
       // --- Context compaction before LLM call ---
-      const compactionLevel = getCompactionLevel(messages);
+      const model = getExecutionModel(modelConfig);
+      const ctxWindow = getContextWindow(model.modelId || modelConfig.model || "");
+      const compactionLevel = getCompactionLevel(messages, ctxWindow);
       if (compactionLevel === "auto") {
         this.emit({ type: "thinking", content: "Context window filling up, compacting conversation..." });
         const compacted = await autoCompact(messages, modelConfig);
@@ -243,7 +291,6 @@ export class CrayonAgent {
         messages.splice(0, messages.length, ...compacted);
       }
 
-      const model = getExecutionModel(modelConfig);
 
       this.emit({ type: "thinking", content: "Thinking..." });
       // Use streamText with retry wrapper for resilience
@@ -258,7 +305,8 @@ export class CrayonAgent {
             abortSignal: options.signal,
             onStepFinish: (step) => {
               const { usage } = step;
-              const stepCost = (usage.promptTokens * 3 / 1_000_000) + (usage.completionTokens * 15 / 1_000_000);
+              const pricing = getModelPricing(model.modelId || modelConfig.model || "");
+              const stepCost = (usage.promptTokens * pricing.input / 1_000_000) + (usage.completionTokens * pricing.output / 1_000_000);
               totalSessionCost += stepCost;
               if (totalSessionCost > MAX_SESSION_COST) {
                 throw new Error("Cost limit exceeded. Aborting to prevent runaway usage.");
@@ -465,6 +513,10 @@ export class CrayonAgent {
       steps: totalSteps,
       edits: [...new Set(edits)],
     };
+    } catch (err: any) {
+      this.emit({ type: "error", message: err.message });
+      throw err;
+    }
   }
 
   getIndexer(): CodeIndexer {
@@ -476,6 +528,8 @@ export class CrayonAgent {
   }
 
   close(): void {
+    this.history = [];
+    this.workingMemory.clear();
     this.episodicMemory.close?.();
     this.indexer.stopWatching?.();
     this.mcpClient?.close?.();
@@ -489,3 +543,5 @@ export { microCompact, autoCompact, getCompactionLevel } from "./context/compact
 export { FileStateCache } from "./context/fileState.js";
 export { withRetry } from "./services/withRetry.js";
 export type { RetryOptions } from "./services/withRetry.js";
+export { TaskManager } from "./tasks/manager.js";
+export { runMcpServer } from './mcp-server.js';

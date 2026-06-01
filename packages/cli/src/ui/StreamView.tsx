@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Box, Text } from "ink";
+import { theme } from "./theme.js";
 
 interface StreamViewProps {
   text: string;
@@ -27,11 +28,11 @@ export const StreamView: React.FC<StreamViewProps> = ({ text, isStreaming }) => 
 
   return (
     <Box flexDirection="column" marginY={1} paddingX={1}>
-      <Text bold color="green">Crayon:</Text>
+      <Text bold color={theme.brand}>Crayon:</Text>
       <Box flexDirection="row" flexWrap="wrap">
-        <Text color="white">
+        <Text color={theme.text}>
           {text}
-          {isStreaming && showCursor && <Text color="green">▋</Text>}
+          {isStreaming && showCursor && <Text color={theme.brand}>▋</Text>}
         </Text>
       </Box>
     </Box>

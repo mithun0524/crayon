@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { createTwoFilesPatch } from "diff";
-import { CrayonAgent, type AgentEvent, autoCompact } from "crayon-agent";
+import { CrayonAgent, type AgentEvent, autoCompact, getModelPricing } from "crayon-agent";
 import { highlight } from "cli-highlight";
 import { loadConfig } from "../config.js";
 import { getGitInfo } from "./gitHelper.js";
@@ -41,7 +41,8 @@ const AVAILABLE_COMMANDS = [
   { cmd: "/mode", desc: "Change permission mode (ask, auto-edit, plan, auto, bypass)" },
   { cmd: "/cost", desc: "View token usage and cost" },
   { cmd: "/files", desc: "View modified files this session" },
-  { cmd: "/compact", desc: "Compact conversation history" }
+  { cmd: "/compact", desc: "Compact conversation history" },
+  { cmd: "/help", desc: "Show help information" }
 ];
 
 export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) => {
@@ -52,6 +53,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [gitDirtyCount, setGitDirtyCount] = useState(0);
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [activePlan, setActivePlan] = useState<string[]>([]);
+  const activePlanRef = useRef<string[]>([]);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [streamingText, setStreamingText] = useState("");
   const [streamingReasoning, setStreamingReasoning] = useState("");
@@ -93,12 +95,21 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   useEffect(() => {
     let active = true;
 
-    pushMessage({
-      sender: "system",
-      text: `⬡ Crayon v0.1.0 · Workspace: ${workspaceName}`
-    });
-
     async function initAgent() {
+      let version = "0.1.0";
+      try {
+        const pkgPath = path.resolve(__dirname, "../../package.json");
+        if (existsSync(pkgPath)) {
+          const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
+          version = pkg.version || "0.1.0";
+        }
+      } catch {}
+
+      pushMessage({
+        sender: "system",
+        text: `⬡ Crayon v${version} · Workspace: ${workspaceName}`
+      });
+
       const git = getGitInfo(workspaceRoot);
       if (active) {
         setGitBranch(git.branch);
@@ -191,6 +202,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     setStreamingText("");
     setStreamingReasoning("");
     setActivePlan([]);
+    activePlanRef.current = [];
     setCurrentStepIndex(0);
     setError(null);
     abortedRef.current = false;
@@ -229,6 +241,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     switch (event.type) {
       case "plan":
         setActivePlan(event.steps);
+        activePlanRef.current = event.steps;
         setCurrentStepIndex(0);
         break;
       case "thinking":
@@ -242,7 +255,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         setActiveToolName(event.name);
         setActiveToolArgs(event.args);
         if (event.name !== "thinking") {
-          setCurrentStepIndex((prev) => Math.min(prev + 1, activePlan.length - 1));
+          setCurrentStepIndex((prev) => Math.min(prev + 1, Math.max(0, activePlanRef.current.length - 1)));
         } else {
           setActiveToolArgs({ status: "Thinking..." });
         }
@@ -279,10 +292,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       case "usage":
         setTokens((prev) => prev + event.totalTokens);
         setCost((prev) => {
-          // Model-aware cost estimate per token
-          // Default to Claude Sonnet pricing: $3/M input, $15/M output
-          const inputCostPerToken = 3 / 1_000_000;
-          const outputCostPerToken = 15 / 1_000_000;
+          const pricing = getModelPricing(defaultModel);
+          const inputCostPerToken = pricing.input / 1_000_000;
+          const outputCostPerToken = pricing.output / 1_000_000;
           return prev + (event.promptTokens * inputCostPerToken) + (event.completionTokens * outputCostPerToken);
         });
         break;
@@ -460,8 +472,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           pushMessage({ sender: "system", text: `✅ Compacted ${agentHistory.length} messages → ${compacted.length} messages.` });
           break;
         }
+        case "/help":
+          pushMessage({
+            sender: "system",
+            text: `Available Commands:\n${AVAILABLE_COMMANDS.map(c => `  ${c.cmd.padEnd(10)} - ${c.desc}`).join("\n")}`
+          });
+          break;
         default:
-          pushMessage({ sender: "system", text: `Unknown command "${cmd}". Supported: /clear, /mode, /cost, /files, /compact` });
+          pushMessage({ sender: "system", text: `Unknown command "${cmd}". Supported: /clear, /mode, /cost, /files, /compact, /help` });
       }
       return;
     }
