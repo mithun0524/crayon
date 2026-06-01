@@ -12,10 +12,7 @@ import { marked } from "marked";
 import TerminalRenderer from "marked-terminal";
 
 marked.setOptions({
-  renderer: new TerminalRenderer({
-    reflowText: true,
-    width: 80
-  }) as any
+  renderer: new TerminalRenderer() as any
 });
 import { loadConfig } from "../config.js";
 import { getGitInfo } from "./gitHelper.js";
@@ -60,6 +57,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [gitBranch, setGitBranch] = useState("main");
   const [gitDirtyCount, setGitDirtyCount] = useState(0);
   const [history, setHistory] = useState<ChatMessage[]>([]);
+  const [queuedTasks, setQueuedTasks] = useState<string[]>([]);
+  const [commandIndex, setCommandIndex] = useState(-1);
   const [activePlan, setActivePlan] = useState<string[]>([]);
   const activePlanRef = useRef<string[]>([]);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
@@ -383,26 +382,37 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
-    if (!isExecuting && !approvalRequest && mode === "chat") {
-      if (key.upArrow) {
-        if (inputHistory.length > 0) {
-          const newIndex = inputHistoryIndex < inputHistory.length - 1 ? inputHistoryIndex + 1 : inputHistoryIndex;
-          setInputHistoryIndex(newIndex);
-          setCurrentInput(inputHistory[inputHistory.length - 1 - newIndex]);
-        }
-      } else if (key.downArrow) {
-        if (inputHistoryIndex > 0) {
-          const newIndex = inputHistoryIndex - 1;
-          setInputHistoryIndex(newIndex);
-          setCurrentInput(inputHistory[inputHistory.length - 1 - newIndex]);
-        } else if (inputHistoryIndex === 0) {
-          setInputHistoryIndex(-1);
-          setCurrentInput("");
-        }
-      } else if (key.tab && currentInput.startsWith("/")) {
+    if (!approvalRequest && mode === "chat") {
+      if (currentInput.startsWith("/")) {
         const matches = AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput));
-        if (matches.length > 0) {
-          setCurrentInput(matches[0].cmd + " ");
+        if (key.upArrow) {
+          setCommandIndex(prev => Math.max(0, prev - 1));
+        } else if (key.downArrow) {
+          setCommandIndex(prev => Math.min(matches.length - 1, prev + 1));
+        } else if (key.tab) {
+          const idx = Math.max(0, commandIndex);
+          if (matches.length > 0 && idx < matches.length) {
+            setCurrentInput(matches[idx].cmd + " ");
+            setCommandIndex(-1);
+          }
+        }
+      } else {
+        if (commandIndex !== -1) setCommandIndex(-1);
+        if (key.upArrow) {
+          if (inputHistory.length > 0) {
+            const newIndex = inputHistoryIndex < inputHistory.length - 1 ? inputHistoryIndex + 1 : inputHistoryIndex;
+            setInputHistoryIndex(newIndex);
+            setCurrentInput(inputHistory[inputHistory.length - 1 - newIndex]);
+          }
+        } else if (key.downArrow) {
+          if (inputHistoryIndex > 0) {
+            const newIndex = inputHistoryIndex - 1;
+            setInputHistoryIndex(newIndex);
+            setCurrentInput(inputHistory[inputHistory.length - 1 - newIndex]);
+          } else if (inputHistoryIndex === 0) {
+            setInputHistoryIndex(-1);
+            setCurrentInput("");
+          }
         }
       }
     }
@@ -499,11 +509,26 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
+    if (isExecuting) {
+      setQueuedTasks((prev) => [...prev, trimmed]);
+      return;
+    }
+
     if (agentRef.current) {
       const enrichedText = await parseMentions(trimmed);
       runTask(agentRef.current, enrichedText);
     }
   };
+
+  useEffect(() => {
+    if (!isExecuting && queuedTasks.length > 0 && agentRef.current) {
+      const nextTask = queuedTasks[0];
+      setQueuedTasks((prev) => prev.slice(1));
+      parseMentions(nextTask).then((enrichedText) => {
+        runTask(agentRef.current!, enrichedText);
+      });
+    }
+  }, [isExecuting, queuedTasks]);
 
   const getToolDisplay = () => {
     if (!activeToolName || activeToolName === "thinking") return streamingText || "Thinking...";
@@ -534,14 +559,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
           if (msg.sender === "user") {
             return (
-              <Box key={msg.id} marginY={0} marginTop={1}>
+              <Box key={msg.id}>
                 <Text color={theme.subtle} bold>❯ You: </Text>
                 <Text color={theme.text}>{msg.text}</Text>
               </Box>
             );
           } else if (msg.sender === "system") {
             return (
-              <Box key={msg.id} marginY={0} flexDirection="column">
+              <Box key={msg.id} flexDirection="column">
                 <Text color={theme.subtle} italic>{msg.text}</Text>
                 {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
               </Box>
@@ -549,7 +574,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           } else {
             const parts = msg.text.split(/(```[\s\S]*?```)/g);
             return (
-              <Box key={msg.id} marginY={1} flexDirection="column">
+              <Box key={msg.id} flexDirection="column">
                 <Text color={theme.brand} bold>Crayon: </Text>
                 {msg.reasoning && (
                   <ThinkingMessage thinking={msg.reasoning} />
@@ -639,25 +664,28 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         <Text color={theme.border}>{"─".repeat(columns || 80)}</Text>
       </Box>
 
-      {!isExecuting && !approvalRequest && mode === "chat" && (
+      {!approvalRequest && mode === "chat" && (
         <Box flexDirection="column">
           {currentInput.startsWith("/") && (
             <Box flexDirection="column" paddingLeft={1} marginBottom={1} borderStyle="round" borderColor={theme.border} paddingX={1} width="80%">
               <Text color={theme.brand} bold>Available Commands:</Text>
-              {AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput)).map((c) => (
-                <Text key={c.cmd}>
-                  <Text color={theme.success} bold>{c.cmd}</Text>
-                  <Text color={theme.subtle}> - {c.desc}</Text>
-                </Text>
-              ))}
+              {AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput)).map((c, idx) => {
+                const isSelected = commandIndex === idx;
+                return (
+                  <Text key={c.cmd} backgroundColor={isSelected ? theme.brand : undefined}>
+                    <Text color={isSelected ? "black" : theme.success} bold>{c.cmd}</Text>
+                    <Text color={isSelected ? "black" : theme.subtle}> - {c.desc}</Text>
+                  </Text>
+                );
+              })}
               {AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput)).length === 0 && (
                 <Text color={theme.error}>No matching commands.</Text>
               )}
             </Box>
           )}
           <Box marginTop={0} flexDirection="row" paddingLeft={1}>
-            <Text color={theme.success} bold>crayon ❯ </Text>
-            <TextInput value={currentInput} onChange={setCurrentInput} onSubmit={handleSubmit} />
+            <Text color={isExecuting ? theme.subtle : theme.success} bold>crayon ❯ </Text>
+            <TextInput value={currentInput} onChange={(v) => { setCurrentInput(v); setCommandIndex(-1); }} onSubmit={handleSubmit} />
           </Box>
         </Box>
       )}
