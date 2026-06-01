@@ -136,15 +136,14 @@ export class CrayonAgent {
     try {
       const mode: TaskMode = classifyTask(task);
 
+    this.emit({ type: "thinking", content: "Thinking..." });
+
     if (mode === "chat") {
-      this.emit({ type: "thinking", content: "Initializing indexer..." });
       await this.indexer.init();
     } else {
-      this.emit({ type: "thinking", content: "Indexing workspace..." });
       await this.init();
     }
 
-    this.emit({ type: "thinking", content: "Connecting to MCP servers..." });
     await this.mcpClient.connectAll();
 
     const modelConfig: ModelConfig = {
@@ -156,10 +155,8 @@ export class CrayonAgent {
       googleApiKey: this.config.googleApiKey,
     };
 
-    this.emit({ type: "thinking", content: "Gathering project intelligence..." });
     const intelligence = mode === "chat" ? null : await this.indexer.getIntelligence();
     
-    this.emit({ type: "thinking", content: "Planning approach..." });
     const plan = await createPlan(task, modelConfig);
     if (plan.length > 0) {
       this.emit({ type: "plan", steps: plan });
