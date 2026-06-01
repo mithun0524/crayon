@@ -16,17 +16,19 @@
     "scripts": "dist/**/*.js"
   },
   "dependencies": {
-    "crayon-agent": "0.1.1",
-    "crayon-indexer": "0.1.1",
     "@inquirer/prompts": "^8.5.2",
+    "@types/marked-terminal": "^6.1.1",
     "chalk": "^5.4.1",
     "cli-highlight": "^2.1.11",
     "commander": "^13.1.0",
+    "crayon-agent": "workspace:*",
+    "crayon-indexer": "workspace:*",
     "diff": "^9.0.0",
     "ink": "^7.0.5",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
     "marked": "^18.0.4",
+    "marked-terminal": "^7.3.0",
     "ora": "^8.2.0",
     "posthog-node": "^5.35.7",
     "react": "^19.2.6"

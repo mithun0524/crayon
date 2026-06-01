@@ -8,6 +8,15 @@ import { spawnSync } from "node:child_process";
 import { createTwoFilesPatch } from "diff";
 import { CrayonAgent, type AgentEvent, autoCompact, getModelPricing } from "crayon-agent";
 import { highlight } from "cli-highlight";
+import { marked } from "marked";
+import TerminalRenderer from "marked-terminal";
+
+marked.setOptions({
+  renderer: new TerminalRenderer({
+    reflowText: true,
+    width: 80
+  }) as any
+});
 import { loadConfig } from "../config.js";
 import { getGitInfo } from "./gitHelper.js";
 import { PlanView } from "./PlanView.js";
@@ -511,7 +520,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           if (msg.sender === "user") {
             return (
               <Box key={msg.id} marginY={0} marginTop={1}>
-                <Text color={theme.success} bold> crayon ❯ </Text>
+                <Text color={theme.subtle} bold>❯ You: </Text>
                 <Text color={theme.text}>{msg.text}</Text>
               </Box>
             );
@@ -550,9 +559,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                     if (part.trim() === "") return null;
                     let mdText = part;
                     try {
-                      mdText = highlight(part, { language: "markdown", ignoreIllegals: true, theme: syntaxThemeDark });
+                      mdText = marked.parse(part) as string;
                     } catch {}
-                    return <Text key={index} color={theme.text}>{mdText}</Text>;
+                    return <Text key={index}>{mdText}</Text>;
                   })}
                 </Box>
               </Box>
