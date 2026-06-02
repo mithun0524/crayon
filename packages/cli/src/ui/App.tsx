@@ -619,9 +619,15 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               </Box>
             );
           } else {
+            const crayonColors = ["#FF5E5B", "#FFD700", "#00FF7F", "#00FFFF", "#1E90FF", "#FF1493"];
             return (
               <Box key={msg.id} flexDirection="column" marginBottom={1}>
-                <Text color={theme.brand} bold>Crayon: </Text>
+                <Text bold>
+                  {"Crayon".split("").map((char, i) => (
+                    <Text key={i} color={crayonColors[i % crayonColors.length]}>{char}</Text>
+                  ))}
+                  <Text color={theme.brand}>: </Text>
+                </Text>
                 {msg.reasoning && (
                   <ThinkingMessage thinking={msg.reasoning} />
                 )}
@@ -646,8 +652,13 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             )}
             
             {streamingText && (
-              <Box flexDirection="column" marginBottom={1}>
-                <Text color={theme.brand} bold>Crayon: </Text>
+                <Text bold>
+                  {"Crayon".split("").map((char, i) => {
+                    const crayonColors = ["#FF5E5B", "#FFD700", "#00FF7F", "#00FFFF", "#1E90FF", "#FF1493"];
+                    return <Text key={i} color={crayonColors[i % crayonColors.length]}>{char}</Text>
+                  })}
+                  <Text color={theme.brand}>: </Text>
+                </Text>
                 {streamingReasoning && (
                   <ThinkingMessage thinking={streamingReasoning} />
                 )}
@@ -665,8 +676,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             />
           </Box>
         )}
-
-
 
         {approvalRequest && (
           <Box flexDirection="column" borderStyle="single" borderColor={theme.warning} paddingX={1} marginY={1} width="100%">
@@ -754,7 +763,13 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             </Box>
           )}
           <Box marginTop={0} flexDirection="row" paddingLeft={1}>
-            <Text color={isExecuting ? theme.subtle : theme.success} bold>crayon ❯ </Text>
+            <Text bold>
+              {"crayon".split("").map((char, i) => {
+                const crayonColors = ["#FF5E5B", "#FFD700", "#00FF7F", "#00FFFF", "#1E90FF", "#FF1493"];
+                return <Text key={i} color={isExecuting ? theme.subtle : crayonColors[i % crayonColors.length]}>{char}</Text>
+              })}
+              <Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
+            </Text>
             <TextInput value={currentInput} onChange={(v) => { setCurrentInput(v); setCommandIndex(-1); }} onSubmit={handleSubmit} />
             {(() => {
               const parts = currentInput.split(" ");
