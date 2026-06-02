@@ -129,6 +129,14 @@ export class CrayonAgent {
     this.history = history;
   }
 
+  setModel(model: string): void {
+    this.config.model = model;
+  }
+
+  setProvider(provider: "anthropic" | "openai" | "openrouter" | "google"): void {
+    this.config.provider = provider;
+  }
+
   async run(
     task: string,
     options: { currentFile?: string; selection?: string; skipHistory?: boolean; signal?: AbortSignal } = {}

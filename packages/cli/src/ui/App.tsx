@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Box, Text, useInput, useApp, Static } from "ink";
 import TextInput from "ink-text-input";
+import SelectInput from "ink-select-input";
 import path from "node:path";
+import os from "node:os";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { createTwoFilesPatch } from "diff";
 import { CrayonAgent, type AgentEvent, autoCompact, getModelPricing } from "crayon-agent";
@@ -50,9 +52,37 @@ const AVAILABLE_COMMANDS = [
   { cmd: "/cost", desc: "View token usage and cost" },
   { cmd: "/files", desc: "View modified files this session" },
   { cmd: "/compact", desc: "Compact conversation history" },
+  { cmd: "/model", desc: "Change the AI model", usage: "[model-name]" },
   { cmd: "/config", desc: "Change provider, model, or theme" },
   { cmd: "/help", desc: "Show help information" }
 ];
+
+const POPULAR_MODELS = {
+  anthropic: [
+    { label: "Claude 3.7 Sonnet (Latest)", value: "claude-3-7-sonnet-latest" },
+    { label: "Claude 3.5 Sonnet", value: "claude-3-5-sonnet-20241022" },
+    { label: "Claude 3.5 Haiku", value: "claude-3-5-haiku-20241022" },
+    { label: "Claude 3 Opus", value: "claude-3-opus-20240229" }
+  ],
+  openai: [
+    { label: "GPT-4o (Latest)", value: "gpt-4o" },
+    { label: "GPT-4o Mini", value: "gpt-4o-mini" },
+    { label: "o1", value: "o1" },
+    { label: "o1 Mini", value: "o1-mini" }
+  ],
+  google: [
+    { label: "Gemini 2.5 Pro", value: "gemini-2.5-pro" },
+    { label: "Gemini 2.0 Flash", value: "gemini-2.0-flash" }
+  ],
+  openrouter: [
+    { label: "Anthropic: Claude 3.7 Sonnet", value: "anthropic/claude-3.7-sonnet" },
+    { label: "OpenAI: GPT-4o", value: "openai/gpt-4o" },
+    { label: "Google: Gemini 2.5 Pro", value: "google/gemini-2.5-pro" },
+    { label: "DeepSeek: R1", value: "deepseek/deepseek-r1" },
+    { label: "DeepSeek: V3", value: "deepseek/deepseek-chat" },
+    { label: "Meta: Llama 3.3 70B", value: "meta-llama/llama-3.3-70b-instruct" }
+  ]
+};
 
 export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) => {
   const { exit } = useApp();
@@ -81,6 +111,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [sessionFiles, setSessionFiles] = useState<string[]>([]);
   const [agentMode, setAgentMode] = useState<string>(permissionMode || "ask");
   const [defaultModel, setDefaultModel] = useState<string>("");
+  const [currentProvider, setCurrentProvider] = useState<"anthropic" | "openai" | "google" | "openrouter">("anthropic");
+  const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
 
   const agentRef = useRef<CrayonAgent | null>(null);
   const abortedRef = useRef(false);
@@ -133,6 +165,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       const loadedMode = permissionMode || config.permissionMode || "ask";
       setAgentMode(loadedMode);
       setDefaultModel(config.defaultModel || "");
+      setCurrentProvider(config.provider as any);
 
       const agent = new CrayonAgent({
         workspaceRoot,
@@ -439,6 +472,24 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     return resolvedText;
   };
 
+  const updateModel = async (newModel: string) => {
+    setDefaultModel(newModel);
+    if (agentRef.current) agentRef.current.setModel(newModel);
+    pushMessage({ sender: "system", text: `🧠 Model changed to: ${newModel}` });
+    setIsModelSelectorOpen(false);
+    
+    try {
+      const configPath = path.join(os.homedir(), ".crayon", "config.json");
+      if (existsSync(configPath)) {
+        const configObj = JSON.parse(await readFile(configPath, "utf-8"));
+        configObj.defaultModel = newModel;
+        await writeFile(configPath, JSON.stringify(configObj, null, 2));
+      }
+    } catch (e) {
+      pushMessage({ sender: "system", text: `Warning: Failed to save config: ${e}` });
+    }
+  };
+
   const handleSubmit = async (inputStr: string) => {
     if (currentInput.startsWith("/") && !currentInput.includes(" ")) {
       const matches = AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput));
@@ -517,7 +568,13 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           agentRef.current.setHistory(compacted);
           pushMessage({ sender: "system", text: `✅ Compacted ${agentHistory.length} messages → ${compacted.length} messages.` });
           break;
-        }
+        case "/model":
+          if (parts.length > 1) {
+            updateModel(parts[1]);
+          } else {
+            setIsModelSelectorOpen(true);
+          }
+          break;
         case "/config":
           pushMessage({ sender: "system", text: "⚙️ To change your AI provider, model, or UI theme, please exit the chat (Ctrl+C) and run `crayon config` in your terminal." });
           break;
@@ -767,8 +824,17 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               })()}
             </Box>
           )}
-          <Box marginTop={0} flexDirection="row" paddingLeft={1}>
-            <Text bold>
+          {isModelSelectorOpen ? (
+            <Box flexDirection="column" marginTop={0} paddingLeft={1}>
+              <Text color={theme.success} bold>Select a model for {currentProvider}:</Text>
+              <SelectInput
+                items={POPULAR_MODELS[currentProvider as keyof typeof POPULAR_MODELS] || POPULAR_MODELS.anthropic}
+                onSelect={(item) => updateModel(item.value)}
+              />
+            </Box>
+          ) : (
+            <Box marginTop={0} flexDirection="row" paddingLeft={1}>
+              <Text bold>
               {"crayon".split("").map((char, i) => {
                 const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
                 return <Text key={i} color={isExecuting ? theme.subtle : crayonColors[i % crayonColors.length]}>{char}</Text>
@@ -787,6 +853,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               return null;
             })()}
           </Box>
+          )}
         </Box>
       )}
 
