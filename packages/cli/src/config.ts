@@ -11,6 +11,7 @@ export interface CrayonConfig {
   openrouterApiKey?: string;
   googleApiKey?: string;
   permissionMode?: "ask" | "auto-edit" | "plan" | "auto" | "bypass";
+  updateMode?: "auto" | "prompt" | "notify";
   mcpServers?: any[];
   disableTelemetry?: boolean;
 }
@@ -58,6 +59,7 @@ export async function loadConfig(): Promise<CrayonConfig> {
         openrouterApiKey: config.openrouterApiKey ?? file.openrouterApiKey,
         googleApiKey: config.googleApiKey ?? file.googleApiKey,
         permissionMode: config.permissionMode ?? file.permissionMode,
+        updateMode: config.updateMode ?? file.updateMode,
         disableTelemetry: config.disableTelemetry ?? file.disableTelemetry,
       };
       merged.mcpServers = await loadMcpServers();

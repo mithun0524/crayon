@@ -12,14 +12,22 @@ import { loadConfig, hasApiKey } from "./config.js";
 import { App } from "./ui/App.js";
 import { initTelemetry, trackEvent, flushTelemetry } from "./telemetry.js";
 import { runOnboardingFlow } from "./onboarding.js";
+import { handleUpdateOnBoot, showPassiveNotification, runInternalUpdateCheck, spawnBackgroundUpdateCheck } from "./updater.js";
 
 async function exitCLI(code: number = 0) {
+  await showPassiveNotification();
   trackEvent("Agent Exited", { code });
   await flushTelemetry();
   process.exit(code);
 }
 
 const program = new Command();
+
+// Internal command for background update check
+if (process.argv.includes("--internal-check-update")) {
+  await runInternalUpdateCheck();
+  process.exit(0);
+}
 
 program
   .name("crayon")
@@ -75,6 +83,9 @@ program
   .argument("<task>", "Task description")
   .action(async (task: string) => {
     const config = await loadConfig();
+    await handleUpdateOnBoot(config);
+    spawnBackgroundUpdateCheck();
+
     if (!hasApiKey(config)) {
       await runOnboardingFlow();
       Object.assign(config, await loadConfig());
@@ -103,6 +114,9 @@ program
   .option("-m, --mode <mode>", "Permission mode (ask, auto-edit, plan, auto, bypass)")
   .action(async (options) => {
     const config = await loadConfig();
+    await handleUpdateOnBoot(config);
+    spawnBackgroundUpdateCheck();
+
     if (!hasApiKey(config)) {
       await runOnboardingFlow();
       Object.assign(config, await loadConfig());
@@ -252,6 +266,27 @@ program
     const configPath = getConfigPath();
     console.log(chalk.green(`Configuration path: ${configPath}`));
     console.log(chalk.dim("Use CRAYON_THEME=light or high-contrast to change themes."));
+  });
+
+program
+  .command("update")
+  .description("Force update Crayon to the latest version")
+  .action(async () => {
+    const ora = (await import("ora")).default;
+    const spinner = ora("Checking for updates...").start();
+    try {
+      const { runInternalUpdateCheck } = await import("./updater.js");
+      await runInternalUpdateCheck();
+      
+      const { execSync } = await import("node:child_process");
+      spinner.text = "Updating Crayon via npm...";
+      execSync("npm install -g crayon-cli@latest", { stdio: "inherit" });
+      spinner.succeed("Update complete! You are now running the latest version of Crayon.");
+    } catch (e: any) {
+      spinner.fail("Failed to update.");
+      console.error(chalk.red(e.message));
+      await exitCLI(1);
+    }
   });
 
 program

@@ -41,7 +41,6 @@ export const PlanView: React.FC<PlanViewProps> = ({ steps, currentStepIndex, isE
             <Box key={index} paddingLeft={2}>
               <Text color={color}>
                 {isExecuting ? (
-                  // @ts-expect-error type mismatch
                   <Spinner type="dots" />
                 ) : "●"}{" "}
               </Text>

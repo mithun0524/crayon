@@ -36,8 +36,11 @@ export const DiffRenderer: React.FC<DiffRendererProps> = ({ diff, maxLines = 15 
           isDim = true;
         }
 
+        const boxProps: any = { key: i, width: "100%", paddingX: 1 };
+        if (bgColor) boxProps.backgroundColor = bgColor;
+
         return (
-          <Box key={i} width="100%" backgroundColor={bgColor} paddingX={1}>
+          <Box {...boxProps}>
             <Text color={fgColor} dimColor={isDim}>
               {line}
             </Text>

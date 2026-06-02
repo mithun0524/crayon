@@ -80,6 +80,15 @@ export async function runOnboardingFlow(): Promise<void> {
     ],
   });
 
+  const updateMode = await select({
+    message: 'How should Crayon handle CLI updates?',
+    choices: [
+      { name: 'Prompt (Ask before updating on boot) [Default]', value: 'prompt' },
+      { name: 'Auto (Silently update on boot)', value: 'auto' },
+      { name: 'Notify (Passive notification on exit)', value: 'notify' },
+    ],
+  });
+
   const configPath = path.join(os.homedir(), ".crayon", "config.json");
   const configDir = path.dirname(configPath);
   
@@ -93,6 +102,7 @@ export async function runOnboardingFlow(): Promise<void> {
     telemetry,
     permissionMode,
     theme,
+    updateMode,
   };
 
   if (provider === "anthropic") configObj.anthropicApiKey = apiKey;
