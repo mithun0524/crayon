@@ -386,7 +386,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
 
     if (!approvalRequest && mode === "chat") {
-      if (currentInput.startsWith("/")) {
+      if (currentInput.startsWith("/") && !currentInput.includes(" ")) {
         const matches = AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput));
         if (key.upArrow) {
           setCommandIndex(prev => Math.max(0, prev - 1));
@@ -439,7 +439,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   };
 
   const handleSubmit = async (inputStr: string) => {
-    if (currentInput.startsWith("/")) {
+    if (currentInput.startsWith("/") && !currentInput.includes(" ")) {
       const matches = AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput));
       
       if (commandIndex !== -1 && matches.length > 0 && commandIndex < matches.length) {
@@ -686,7 +686,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
       {!approvalRequest && mode === "chat" && (
         <Box flexDirection="column">
-          {currentInput.startsWith("/") && (
+          {currentInput.startsWith("/") && !currentInput.includes(" ") && (
             <Box flexDirection="column" paddingLeft={1} marginBottom={1} borderStyle="round" borderColor={theme.border} paddingX={1} width="80%">
               <Text color={theme.brand} bold>Available Commands:</Text>
               {AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput)).map((c, idx) => {
