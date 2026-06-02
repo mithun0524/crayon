@@ -687,19 +687,24 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       {!approvalRequest && mode === "chat" && (
         <Box flexDirection="column">
           {currentInput.startsWith("/") && !currentInput.includes(" ") && (
-            <Box flexDirection="column" paddingLeft={1} marginBottom={1} borderStyle="round" borderColor={theme.border} paddingX={1} width="80%">
-              <Text color={theme.brand} bold>Available Commands:</Text>
-              {AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput)).map((c, idx) => {
+            <Box flexDirection="column" paddingLeft={1} marginBottom={1} borderStyle="round" borderColor={theme.border} paddingX={1} width={60}>
+              {AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput)).slice(0, 5).map((c, idx) => {
                 const isSelected = commandIndex === idx;
+                const paddedCmd = c.cmd.padEnd(10, " ");
                 return (
-                  <Text key={c.cmd} backgroundColor={isSelected ? theme.brand : undefined}>
-                    <Text color={isSelected ? "black" : theme.success} bold>{c.cmd}</Text>
-                    <Text color={isSelected ? "black" : theme.subtle}> - {c.desc}</Text>
-                  </Text>
+                  <Box key={c.cmd} flexDirection="row">
+                    <Text color={isSelected ? "white" : theme.subtle} bold={isSelected}>
+                      {isSelected ? "❯ " : "  "}
+                    </Text>
+                    <Text color={isSelected ? "white" : theme.success} bold={isSelected}>{paddedCmd}</Text>
+                    <Text color={isSelected ? "white" : theme.subtle}>  {c.desc}</Text>
+                  </Box>
                 );
               })}
-              {AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput)).length === 0 && (
-                <Text color={theme.error}>No matching commands.</Text>
+              {AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput)).length > 5 && (
+                <Box flexDirection="row" marginTop={1}>
+                  <Text color={theme.subtle}>  ... ({AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput)).length - 5} more command{AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput)).length - 5 > 1 ? "s" : ""})</Text>
+                </Box>
               )}
             </Box>
           )}
