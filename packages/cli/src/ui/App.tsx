@@ -447,6 +447,35 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
 
     if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isCommandPaletteOpen) {
+      if ((key.ctrl && input === "t") || (key.shift && key.tab)) {
+        const modes = ["ask", "auto-edit", "plan", "auto", "bypass"];
+        const currentIdx = modes.indexOf(agentMode);
+        const nextMode = modes[(currentIdx + 1) % modes.length];
+        setAgentMode(nextMode);
+        if (agentRef.current) agentRef.current.setPermissionMode(nextMode as any);
+        return;
+      }
+
+      if (key.ctrl && input === "e") {
+        const editor = process.env.EDITOR || (process.platform === "win32" ? "notepad" : "nano");
+        const tmpPath = path.join(os.tmpdir(), `crayon-prompt-${Date.now()}.txt`);
+        try {
+          if (currentInput) {
+             require("fs").writeFileSync(tmpPath, currentInput, "utf8");
+          } else {
+             require("fs").writeFileSync(tmpPath, "", "utf8");
+          }
+          spawnSync(editor, [tmpPath], { stdio: "inherit" });
+          const newContent = require("fs").readFileSync(tmpPath, "utf8");
+          if (newContent.trim()) {
+            handleSubmit(newContent);
+          }
+        } catch (e) {
+           pushMessage({ sender: "system", text: `Failed to open editor: ${e}` });
+        }
+        return;
+      }
+
       if (currentInput === "/") {
         setIsCommandPaletteOpen(true);
         setCurrentInput("");
@@ -658,10 +687,28 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       <Static items={history}>
         {(msg) => {
           if (msg.text.startsWith("⬡ Crayon v")) {
+            const versionMatch = msg.text.match(/v([0-9.]+)/);
+            const version = versionMatch ? versionMatch[1] : "0.1.0";
+            
+            const tips = [
+              "Tip: Hit Ctrl+E to open your editor for multi-line prompts.",
+              "Tip: Hit Ctrl+T to quickly cycle permission modes.",
+              "Tip: Type / to open the Command Palette.",
+              "Tip: Crayon works best with a detailed system prompt."
+            ];
+            // Use msg.id as a stable seed so it doesn't blink on re-renders
+            const randomTip = tips[parseInt(msg.id) % tips.length] || tips[0];
+
             return (
-              <Box key={msg.id} flexDirection="column" marginBottom={1}>
-                <Text color={theme.brand} bold>{msg.text}</Text>
-                <Text color={theme.border}>{"─".repeat(columns || 80)}</Text>
+              <Box key={msg.id} flexDirection="column" marginBottom={1} borderStyle="round" borderColor={theme.brand} paddingX={1}>
+                <Text color={theme.brand} bold>✶ Welcome to Crayon Code v{version}!</Text>
+                <Box marginTop={1} flexDirection="column">
+                  <Text color={theme.subtle} italic>/help for help, /config for settings</Text>
+                  <Text color={theme.text}>cwd: {workspaceRoot}</Text>
+                </Box>
+                <Box marginTop={1}>
+                  <Text color={theme.subtle}>※ {randomTip}</Text>
+                </Box>
               </Box>
             );
           }
@@ -846,23 +893,29 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               />
             </Box>
           ) : (
-            <Box marginTop={0} flexDirection="row" paddingLeft={1}>
-              <Text bold>
-              {"crayon".split("").map((char, i) => {
-                const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
-                return <Text key={i} color={isExecuting ? theme.subtle : crayonColors[i % crayonColors.length]}>{char}</Text>
-              })}
-              <Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
-            </Text>
-            <TextInput value={currentInput} onChange={(v) => { 
-              if (v === "/") {
-                setIsCommandPaletteOpen(true);
-                setCurrentInput("");
-              } else {
-                setCurrentInput(v); 
-              }
-            }} onSubmit={handleSubmit} />
-          </Box>
+            <Box marginTop={0} flexDirection="column" paddingLeft={1}>
+              <Box flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1}>
+                <Text bold>
+                  {"crayon".split("").map((char, i) => {
+                    const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
+                    return <Text key={i} color={isExecuting ? theme.subtle : crayonColors[i % crayonColors.length]}>{char}</Text>
+                  })}
+                  <Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
+                </Text>
+                <TextInput value={currentInput} onChange={(v) => { 
+                  if (v === "/") {
+                    setIsCommandPaletteOpen(true);
+                    setCurrentInput("");
+                  } else {
+                    setCurrentInput(v); 
+                  }
+                }} onSubmit={handleSubmit} />
+              </Box>
+              <Box paddingLeft={1}>
+                <Text color={theme.success}>⏸ {agentMode} mode on </Text>
+                <Text color={theme.subtle}>(Ctrl+T or Shift+Tab to cycle)</Text>
+              </Box>
+            </Box>
           )}
         </Box>
       )}

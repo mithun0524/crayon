@@ -9,7 +9,6 @@ interface StatusBarProps {
   tokens: number;
   cost: number;
   isExecuting: boolean;
-  agentMode?: string;
   modelName?: string;
 }
 
@@ -19,7 +18,6 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   tokens,
   cost,
   isExecuting,
-  agentMode,
   modelName,
 }) => {
   const dirtyStr = gitDirtyCount > 0 ? ` (+${gitDirtyCount})` : "";
@@ -39,10 +37,6 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       <Text color={theme.subtle} dimColor> ⎇ </Text>
       <Text color={theme.brand}>{gitBranch || "none"}</Text>
       <Text color={theme.warning}>{dirtyStr}</Text>
-
-      <Text color={theme.subtle} dimColor>  •  </Text>
-      <Text color={theme.subtle} dimColor>Mode: </Text>
-      <Text color={theme.success}>{agentMode || "ask"}</Text>
 
       <Text color={theme.subtle} dimColor>  •  </Text>
       <Text color={theme.subtle} dimColor>Tokens: </Text>
