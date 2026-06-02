@@ -275,10 +275,21 @@ program
   .command("config")
   .description("Manage Crayon configuration")
   .action(async () => {
+    const chalk = (await import("chalk")).default;
+    const { confirm } = await import("@inquirer/prompts");
     const { getConfigPath } = await import("./config.js");
     const configPath = getConfigPath();
     console.log(chalk.green(`Configuration path: ${configPath}`));
-    console.log(chalk.dim("Use CRAYON_THEME=light or high-contrast to change themes."));
+    
+    const reconfigure = await confirm({
+      message: 'Would you like to re-run the configuration wizard?',
+      default: false,
+    });
+    
+    if (reconfigure) {
+      const { runOnboardingFlow } = await import("./onboarding.js");
+      await runOnboardingFlow();
+    }
   });
 
 program
