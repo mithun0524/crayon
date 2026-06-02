@@ -377,6 +377,11 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
+    if (isModelSelectorOpen && key.escape) {
+      setIsModelSelectorOpen(false);
+      return;
+    }
+
     if (isExecuting && !approvalRequest) {
       if (key.escape) handleAbort();
       return;
