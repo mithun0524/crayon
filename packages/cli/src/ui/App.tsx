@@ -688,31 +688,52 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         <Box flexDirection="column">
           {currentInput.startsWith("/") && !currentInput.includes(" ") && (
             <Box flexDirection="column" paddingLeft={1} marginBottom={1} borderStyle="round" borderColor={theme.border} paddingX={1}>
-              {AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput)).slice(0, 5).map((c, idx) => {
-                const isSelected = commandIndex === idx;
-                const cmdName = c.cmd.replace("/", "");
+              {(() => {
+                const matches = AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput));
+                const MAX_VISIBLE = 5;
+                let startIdx = 0;
+                if (commandIndex >= MAX_VISIBLE) {
+                  startIdx = commandIndex - MAX_VISIBLE + 1;
+                }
+                const visibleMatches = matches.slice(startIdx, startIdx + MAX_VISIBLE);
+                
                 return (
-                  <Box key={c.cmd} flexDirection="row">
-                    <Box width={3}>
-                      <Text color={isSelected ? "white" : theme.subtle} bold={isSelected}>
-                        {isSelected ? " ❯ " : "   "}
-                      </Text>
-                    </Box>
-                    <Box width={12}>
-                      <Text color={isSelected ? "white" : theme.success} bold={isSelected}>{cmdName}</Text>
-                    </Box>
-                    <Box>
-                      <Text color={isSelected ? "white" : theme.subtle}>{c.desc}</Text>
-                    </Box>
-                  </Box>
+                  <React.Fragment>
+                    {startIdx > 0 && (
+                      <Box flexDirection="row" marginBottom={1}>
+                        <Box width={15}></Box>
+                        <Text color={theme.subtle} italic>... ({startIdx} more commands above)</Text>
+                      </Box>
+                    )}
+                    {visibleMatches.map((c, idx) => {
+                      const actualIdx = startIdx + idx;
+                      const isSelected = commandIndex === actualIdx;
+                      const cmdName = c.cmd.replace("/", "");
+                      return (
+                        <Box key={c.cmd} flexDirection="row">
+                          <Box width={3}>
+                            <Text color={isSelected ? "white" : theme.subtle} bold={isSelected}>
+                              {isSelected ? " ❯ " : "   "}
+                            </Text>
+                          </Box>
+                          <Box width={12}>
+                            <Text color={isSelected ? "white" : theme.success} bold={isSelected}>{cmdName}</Text>
+                          </Box>
+                          <Box>
+                            <Text color={isSelected ? "white" : theme.subtle}>{c.desc}</Text>
+                          </Box>
+                        </Box>
+                      );
+                    })}
+                    {startIdx + MAX_VISIBLE < matches.length && (
+                      <Box flexDirection="row" marginTop={1}>
+                        <Box width={15}></Box>
+                        <Text color={theme.subtle} italic>... ({matches.length - (startIdx + MAX_VISIBLE)} more commands)</Text>
+                      </Box>
+                    )}
+                  </React.Fragment>
                 );
-              })}
-              {AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput)).length > 5 && (
-                <Box flexDirection="row" marginTop={1}>
-                  <Box width={15}></Box>
-                  <Text color={theme.subtle} italic>... ({AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput)).length - 5} more commands)</Text>
-                </Box>
-              )}
+              })()}
             </Box>
           )}
           <Box marginTop={0} flexDirection="row" paddingLeft={1}>
