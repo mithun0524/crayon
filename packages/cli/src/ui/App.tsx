@@ -50,6 +50,7 @@ const AVAILABLE_COMMANDS = [
   { cmd: "/cost", desc: "View token usage and cost" },
   { cmd: "/files", desc: "View modified files this session" },
   { cmd: "/compact", desc: "Compact conversation history" },
+  { cmd: "/config", desc: "Change provider, model, or theme" },
   { cmd: "/help", desc: "Show help information" }
 ];
 
@@ -517,6 +518,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           pushMessage({ sender: "system", text: `✅ Compacted ${agentHistory.length} messages → ${compacted.length} messages.` });
           break;
         }
+        case "/config":
+          pushMessage({ sender: "system", text: "⚙️ To change your AI provider, model, or UI theme, please exit the chat (Ctrl+C) and run `crayon config` in your terminal." });
+          break;
         case "/help":
           pushMessage({
             sender: "system",
@@ -524,7 +528,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           });
           break;
         default:
-          pushMessage({ sender: "system", text: `Unknown command "${cmd}". Supported: /clear, /mode, /cost, /files, /compact, /help` });
+          pushMessage({ sender: "system", text: `Unknown command "${cmd}". Supported: /clear, /mode, /cost, /files, /compact, /config, /help` });
       }
       return;
     }
