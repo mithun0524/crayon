@@ -5,6 +5,7 @@
   <img src="./assets/crayon-logo.svg?v=4" alt="Crayon" width="620">
   <br/>
   <p><strong>The Autonomous AI Coding Agent for your Terminal & IDE</strong></p>
+  <p><strong>Live Demo:</strong> <a href="https://crayon-umber.vercel.app/">https://crayon-umber.vercel.app/</a></p>
   
   <p>
     <a href="https://www.npmjs.com/package/crayon-cli"><img alt="NPM Version" src="https://img.shields.io/npm/v/crayon-cli?color=cyan&label=npm&style=flat-square&logo=npm"></a>
