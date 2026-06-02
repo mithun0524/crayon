@@ -10,6 +10,9 @@ import { CrayonAgent, type AgentEvent, autoCompact, getModelPricing } from "cray
 import { highlight } from "cli-highlight";
 import { marked } from "marked";
 import TerminalRenderer from "marked-terminal";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 marked.setOptions({
   renderer: new TerminalRenderer() as any
@@ -565,7 +568,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     <Box flexDirection="column" width="100%">
       <Static items={history}>
         {(msg) => {
-          if (msg.text.startsWith("⬡ Crayon v0.1.0")) {
+          if (msg.text.startsWith("⬡ Crayon v")) {
             return (
               <Box key={msg.id} flexDirection="column" marginBottom={1}>
                 <Text color={theme.brand} bold>{msg.text}</Text>

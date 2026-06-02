@@ -29,10 +29,23 @@ if (process.argv.includes("--internal-check-update")) {
   process.exit(0);
 }
 
+import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+let pkgVersion = "0.1.0";
+try {
+  const pkgPath = path.resolve(__dirname, "../../package.json");
+  if (existsSync(pkgPath)) {
+    const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
+    pkgVersion = pkg.version || "0.1.0";
+  }
+} catch {}
+
 program
   .name("crayon")
   .description("Crayon — autonomous AI coding agent")
-  .version("0.1.0");
+  .version(pkgVersion);
 
 program
   .command("init")
