@@ -38,7 +38,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
     setSelectedIndex(0);
   }, [query]);
 
-  useInput((input, key) => {
+  useInput((_, key) => {
     if (key.escape) {
       onCancel?.();
       return;

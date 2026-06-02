@@ -92,7 +92,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [gitDirtyCount, setGitDirtyCount] = useState(0);
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [queuedTasks, setQueuedTasks] = useState<string[]>([]);
-  const [commandIndex, setCommandIndex] = useState(-1);
+
   const [activePlan, setActivePlan] = useState<string[]>([]);
   const activePlanRef = useRef<string[]>([]);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
