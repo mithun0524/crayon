@@ -782,7 +782,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               statusText={getToolDisplay()}
               tokens={tokens}
               startTime={executionStartTime.current}
-              modelName={defaultModel}
             />
           </Box>
         )}
@@ -927,7 +926,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         tokens={tokens}
         cost={cost}
         isExecuting={isExecuting}
-        agentMode={agentMode}
         modelName={defaultModel}
       />
     </Box>
