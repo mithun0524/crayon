@@ -1,6 +1,23 @@
 {
   "name": "crayon-cli",
   "version": "0.1.7",
+  "description": "An AI-powered terminal coding assistant that can search your codebase, create plans, and automatically execute them.",
+  "author": "mithun0524",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mithun0524/crayon"
+  },
+  "keywords": [
+    "ai",
+    "cli",
+    "assistant",
+    "terminal",
+    "coding",
+    "agent",
+    "developer-tools",
+    "copilot"
+  ],
   "type": "module",
   "bin": {
     "crayon": "./dist/index.js"

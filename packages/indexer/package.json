@@ -1,6 +1,13 @@
 {
   "name": "crayon-indexer",
   "version": "0.1.7",
+  "description": "Codebase indexing and semantic search package for Crayon Terminal AI assistant.",
+  "author": "mithun0524",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mithun0524/crayon"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
