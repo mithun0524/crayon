@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/CRAYON-Terminal%20AI-cyan?style=for-the-badge&logo=openai" alt="Crayon AI" />
   <br/>
   <br/>
-  <img src="https://raw.githubusercontent.com/mithun0524/crayon/main/assets/logo.svg" alt="Crayon" width="620">
+  <img src="./assets/logo.svg" alt="Crayon" width="620">
   <br/>
   <p><strong>The Autonomous AI Coding Agent for your Terminal & IDE</strong></p>
   
