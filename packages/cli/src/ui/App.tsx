@@ -750,7 +750,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       </Static>
 
       <Box flexShrink={0} flexDirection="column" paddingLeft={1}>
-        {activePlan.length > 0 && (
+        {activePlan.length > 0 && currentStepIndex < activePlan.length && (
           <PlanView steps={activePlan} currentStepIndex={currentStepIndex} isExecuting={isExecuting} />
         )}
 
