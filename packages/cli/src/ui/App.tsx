@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Box, Text, useInput, useApp, Static } from "ink";
 import TextInput from "ink-text-input";
-import SelectInput from "ink-select-input";
+import { SearchableSelect, SelectOption } from "./components/SearchableSelect.js";
 import path from "node:path";
 import os from "node:os";
 import { existsSync } from "node:fs";
@@ -113,6 +113,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [defaultModel, setDefaultModel] = useState<string>("");
   const [currentProvider, setCurrentProvider] = useState<"anthropic" | "openai" | "google" | "openrouter">("anthropic");
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [availableModels, setAvailableModels] = useState<SelectOption[]>([]);
 
   const agentRef = useRef<CrayonAgent | null>(null);
   const abortedRef = useRef(false);
@@ -166,6 +168,25 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       setAgentMode(loadedMode);
       setDefaultModel(config.defaultModel || "");
       setCurrentProvider(config.provider as any);
+      
+      let baseModels = POPULAR_MODELS[config.provider as keyof typeof POPULAR_MODELS] || POPULAR_MODELS.anthropic;
+      setAvailableModels(baseModels);
+
+      if (config.provider === "openrouter") {
+        fetch("https://openrouter.ai/api/v1/models")
+          .then(res => res.json())
+          .then((data: any) => {
+            if (data && data.data && Array.isArray(data.data)) {
+              const fetchedModels = data.data.map((m: any) => ({
+                label: m.name,
+                value: m.id,
+                description: m.context_length ? `${Math.round(m.context_length/1000)}k ctx` : undefined
+              }));
+              setAvailableModels(fetchedModels);
+            }
+          })
+          .catch(() => {});
+      }
 
       const agent = new CrayonAgent({
         workspaceRoot,
@@ -377,8 +398,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
-    if (isModelSelectorOpen && key.escape) {
+    if ((isModelSelectorOpen || isCommandPaletteOpen) && key.escape) {
       setIsModelSelectorOpen(false);
+      setIsCommandPaletteOpen(false);
       return;
     }
 
@@ -424,22 +446,11 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
-    if (!approvalRequest && mode === "chat") {
-      if (currentInput.startsWith("/") && !currentInput.includes(" ")) {
-        const matches = AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput));
-        if (key.upArrow) {
-          setCommandIndex(prev => Math.max(0, prev - 1));
-        } else if (key.downArrow) {
-          setCommandIndex(prev => Math.min(matches.length - 1, prev + 1));
-        } else if (key.tab) {
-          const idx = Math.max(0, commandIndex);
-          if (matches.length > 0 && idx < matches.length) {
-            setCurrentInput(matches[idx].cmd + " ");
-            setCommandIndex(-1);
-          }
-        }
+    if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isCommandPaletteOpen) {
+      if (currentInput === "/") {
+        setIsCommandPaletteOpen(true);
+        setCurrentInput("");
       } else {
-        if (commandIndex !== -1) setCommandIndex(-1);
         if (key.upArrow) {
           if (inputHistory.length > 0) {
             const newIndex = inputHistoryIndex < inputHistory.length - 1 ? inputHistoryIndex + 1 : inputHistoryIndex;
@@ -496,22 +507,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   };
 
   const handleSubmit = async (inputStr: string) => {
-    if (currentInput.startsWith("/") && !currentInput.includes(" ")) {
-      const matches = AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput));
-      
-      if (commandIndex !== -1 && matches.length > 0 && commandIndex < matches.length) {
-        setCurrentInput(matches[commandIndex].cmd + " ");
-        setCommandIndex(-1);
-        return;
-      }
-
-      const exactMatch = matches.find(c => c.cmd === inputStr.trim());
-      if (!exactMatch && matches.length > 0) {
-        setCurrentInput(matches[0].cmd + " ");
-        setCommandIndex(-1);
-        return;
-      }
-    }
 
     const trimmed = inputStr.trim();
     if (!trimmed) return;
@@ -752,7 +747,20 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                 <Text color={theme.warning} bold>⚠️ Approve terminal command?</Text>
                 <Text color={theme.text} italic>  {approvalRequest.command}</Text>
                 <Box marginTop={1}>
-                  <Text color={theme.warning} bold>Accept? [y] / [n]</Text>
+                  <SearchableSelect
+                    items={[
+                      { label: "Accept", value: "accept", description: "Execute the command" },
+                      { label: "Reject", value: "reject", description: "Skip the command" }
+                    ]}
+                    onSelect={(val) => {
+                      approvalRequest.resolve(val === "accept");
+                      setApprovalRequest(null);
+                    }}
+                    onCancel={() => {
+                      approvalRequest.resolve(false);
+                      setApprovalRequest(null);
+                    }}
+                  />
                 </Box>
               </Box>
             ) : (
@@ -760,7 +768,37 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                 <Text color={theme.warning} bold>⚠️ Approve file edits in {approvalRequest.path}?</Text>
                 <DiffRenderer diff={approvalRequest.diff} maxLines={10} />
                 <Box marginTop={1}>
-                  <Text color={theme.warning} bold>Accept? [y] / [n] / [e] edit / [s] skip</Text>
+                  <SearchableSelect
+                    items={[
+                      { label: "Accept", value: "accept", description: "Apply these changes" },
+                      { label: "Reject", value: "reject", description: "Discard these changes" },
+                      { label: "Edit Manually", value: "edit", description: "Open file in your terminal editor" }
+                    ]}
+                    onSelect={(val) => {
+                      if (val === "accept") {
+                        approvalRequest.resolve(true);
+                        setApprovalRequest(null);
+                      } else if (val === "reject") {
+                        approvalRequest.resolve(false);
+                        setApprovalRequest(null);
+                      } else if (val === "edit") {
+                        const editor = process.env.EDITOR || (process.platform === "win32" ? "notepad" : "nano");
+                        const absPath = path.resolve(workspaceRoot, approvalRequest.path);
+                        try {
+                          spawnSync(editor, [absPath], { stdio: "inherit" });
+                          pushMessage({ sender: "system", text: `Opened ${approvalRequest.path} in ${editor}. Rejecting automated edit.` });
+                        } catch {
+                          pushMessage({ sender: "system", text: `Failed to open editor ${editor}.` });
+                        }
+                        approvalRequest.resolve(false);
+                        setApprovalRequest(null);
+                      }
+                    }}
+                    onCancel={() => {
+                      approvalRequest.resolve(false);
+                      setApprovalRequest(null);
+                    }}
+                  />
                 </Box>
               </Box>
             )}
@@ -780,62 +818,31 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
       {!approvalRequest && mode === "chat" && (
         <Box flexDirection="column">
-          {currentInput.startsWith("/") && !currentInput.includes(" ") && (
-            <Box flexDirection="column" paddingLeft={1} marginBottom={1} borderStyle="round" borderColor={theme.border} paddingX={1}>
-              {(() => {
-                const matches = AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput));
-                const MAX_VISIBLE = 5;
-                let startIdx = 0;
-                if (commandIndex >= MAX_VISIBLE) {
-                  startIdx = commandIndex - MAX_VISIBLE + 1;
-                }
-                const visibleMatches = matches.slice(startIdx, startIdx + MAX_VISIBLE);
-                
-                return (
-                  <React.Fragment>
-                    {startIdx > 0 && (
-                      <Box flexDirection="row" marginBottom={1}>
-                        <Box width={15}></Box>
-                        <Text color={theme.subtle} italic>... ({startIdx} more commands above)</Text>
-                      </Box>
-                    )}
-                    {visibleMatches.map((c, idx) => {
-                      const actualIdx = startIdx + idx;
-                      const isSelected = commandIndex === actualIdx;
-                      const cmdName = c.cmd.replace("/", "");
-                      return (
-                        <Box key={c.cmd} flexDirection="row">
-                          <Box width={3}>
-                            <Text color={isSelected ? "white" : theme.subtle} bold={isSelected}>
-                              {isSelected ? " ❯ " : "   "}
-                            </Text>
-                          </Box>
-                          <Box width={12}>
-                            <Text color={isSelected ? "white" : theme.success} bold={isSelected}>{cmdName}</Text>
-                          </Box>
-                          <Box>
-                            <Text color={isSelected ? "white" : theme.subtle}>{c.desc}</Text>
-                          </Box>
-                        </Box>
-                      );
-                    })}
-                    {startIdx + MAX_VISIBLE < matches.length && (
-                      <Box flexDirection="row" marginTop={1}>
-                        <Box width={15}></Box>
-                        <Text color={theme.subtle} italic>... ({matches.length - (startIdx + MAX_VISIBLE)} more commands)</Text>
-                      </Box>
-                    )}
-                  </React.Fragment>
-                );
-              })()}
-            </Box>
-          )}
-          {isModelSelectorOpen ? (
+          {isCommandPaletteOpen ? (
             <Box flexDirection="column" marginTop={0} paddingLeft={1}>
-              <Text color={theme.success} bold>Select a model for {currentProvider} (or use /model &lt;name&gt;):</Text>
-              <SelectInput
-                items={POPULAR_MODELS[currentProvider as keyof typeof POPULAR_MODELS] || POPULAR_MODELS.anthropic}
-                onSelect={(item) => updateModel(item.value)}
+              <Text color={theme.success} bold>Command Palette</Text>
+              <SearchableSelect
+                items={AVAILABLE_COMMANDS.map(c => ({
+                  label: c.cmd,
+                  value: c.cmd,
+                  description: c.desc + (c.usage ? `  ${c.usage}` : "")
+                }))}
+                placeholder="Search commands..."
+                onSelect={(val) => {
+                  setIsCommandPaletteOpen(false);
+                  handleSubmit(val);
+                }}
+                onCancel={() => setIsCommandPaletteOpen(false)}
+              />
+            </Box>
+          ) : isModelSelectorOpen ? (
+            <Box flexDirection="column" marginTop={0} paddingLeft={1}>
+              <Text color={theme.success} bold>Select a model for {currentProvider}</Text>
+              <SearchableSelect
+                items={availableModels}
+                placeholder="Search models..."
+                onSelect={(val) => updateModel(val)}
+                onCancel={() => setIsModelSelectorOpen(false)}
               />
             </Box>
           ) : (
@@ -847,17 +854,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               })}
               <Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
             </Text>
-            <TextInput value={currentInput} onChange={(v) => { setCurrentInput(v); setCommandIndex(-1); }} onSubmit={handleSubmit} />
-            {(() => {
-              const parts = currentInput.split(" ");
-              if (parts.length > 0 && parts[0].startsWith("/")) {
-                const cmd = AVAILABLE_COMMANDS.find(c => c.cmd === parts[0]);
-                if (cmd && cmd.usage && parts.length <= 2 && !parts[1]) {
-                  return <Text color={theme.subtle}>  {cmd.usage}</Text>;
-                }
+            <TextInput value={currentInput} onChange={(v) => { 
+              if (v === "/") {
+                setIsCommandPaletteOpen(true);
+                setCurrentInput("");
+              } else {
+                setCurrentInput(v); 
               }
-              return null;
-            })()}
+            }} onSubmit={handleSubmit} />
           </Box>
           )}
         </Box>
