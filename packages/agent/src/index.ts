@@ -129,6 +129,10 @@ export class CrayonAgent {
     this.history = history;
   }
 
+  getContextFiles(): string[] {
+    return this.fileState.getTrackedFiles();
+  }
+
   setModel(model: string): void {
     this.config.model = model;
   }

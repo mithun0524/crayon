@@ -61,4 +61,11 @@ export class FileStateCache {
   clear(): void {
     this.cache.clear();
   }
+
+  /**
+   * Get all currently tracked file paths.
+   */
+  getTrackedFiles(): string[] {
+    return Array.from(this.cache.keys());
+  }
 }

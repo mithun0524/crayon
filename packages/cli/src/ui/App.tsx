@@ -54,8 +54,38 @@ const AVAILABLE_COMMANDS = [
   { cmd: "/compact", desc: "Compact conversation history" },
   { cmd: "/model", desc: "Change the AI model", usage: "[model-name]" },
   { cmd: "/config", desc: "Change provider, model, or theme" },
+  { cmd: "/easel", desc: "View the active agent context (files read)" },
   { cmd: "/help", desc: "Show help information" }
 ];
+
+function buildAsciiTree(paths: string[]): string {
+  if (paths.length === 0) return "  (Empty Context)";
+  
+  const tree: any = {};
+  paths.forEach(p => {
+    const parts = p.split(/[/\\]/).filter(Boolean);
+    let curr = tree;
+    parts.forEach(part => {
+      if (!curr[part]) curr[part] = {};
+      curr = curr[part];
+    });
+  });
+
+  const lines: string[] = [];
+  function traverse(node: any, prefix: string) {
+    const keys = Object.keys(node).sort();
+    keys.forEach((key, index) => {
+      const isLast = index === keys.length - 1;
+      const marker = isLast ? "└─ " : "├─ ";
+      lines.push(`${prefix}${marker}${key}`);
+      const nextPrefix = prefix + (isLast ? "   " : "│  ");
+      traverse(node[key], nextPrefix);
+    });
+  }
+  
+  traverse(tree, "");
+  return lines.join("\n");
+}
 
 const POPULAR_MODELS = {
   anthropic: [
@@ -608,6 +638,20 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         case "/config":
           pushMessage({ sender: "system", text: "⚙️ To change your AI provider, model, or UI theme, please exit the chat (Ctrl+C) and run `crayon config` in your terminal." });
           break;
+        case "/easel": {
+          if (!agentRef.current) {
+            pushMessage({ sender: "system", text: "Agent not initialized." });
+            break;
+          }
+          const files = agentRef.current.getContextFiles();
+          if (files.length === 0) {
+            pushMessage({ sender: "system", text: "🎨 Easel (Active Context)\n  (Empty Context)" });
+          } else {
+            const relativeFiles = files.map((f: string) => path.relative(workspaceRoot, f));
+            pushMessage({ sender: "system", text: `🎨 Easel (Active Context)\n${buildAsciiTree(relativeFiles)}` });
+          }
+          break;
+        }
         case "/help":
           pushMessage({
             sender: "system",
@@ -656,7 +700,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     return `⚙ Running ${activeToolName}`;
   };
 
-  const renderMarkdown = (text: string) => {
+  const renderMarkdown = (text: string, isStreaming: boolean = false) => {
     const parts = text.split(/(```[\s\S]*?```)/g);
     return parts.map((part, index) => {
       if (part.startsWith("```") && part.endsWith("```")) {
@@ -675,9 +719,19 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         );
       }
       if (part.trim() === "") return null;
-      let mdText = part;
+      let rawText = part;
+      if (isStreaming && index === parts.length - 1) {
+        // Wet ink effect: color the last word
+        const match = rawText.match(/([^\s`*_*~]+)(\s*)$/);
+        if (match) {
+           const brandColor = "\x1b[38;2;77;150;255m"; // theme.brand
+           const resetCode = "\x1b[0m";
+           rawText = rawText.slice(0, match.index) + `${brandColor}${match[1]}${resetCode}` + match[2];
+        }
+      }
+      let mdText = rawText;
       try {
-        mdText = (marked.parse(part) as string).trim();
+        mdText = (marked.parse(rawText) as string).trim();
       } catch {}
       return <Text key={index}>{mdText}</Text>;
     });
@@ -788,7 +842,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                   <ThinkingMessage thinking={streamingReasoning} />
                 )}
                 <Box flexDirection="column">
-                  {renderMarkdown(streamingText)}
+                  {renderMarkdown(streamingText, true)}
                 </Box>
               </Box>
             )}
