@@ -8,24 +8,33 @@ import os from 'node:os';
 export async function runOnboardingFlow(): Promise<void> {
   console.clear();
   
-  // Animated typing effect for the header
-  const title = "⬡ Crayon";
-  const subtitle = "The Autonomous Terminal AI";
+  // Big block ASCII logo for CRAYON (ANSI Shadow style)
+  const logoLines = [
+    "  ██████╗██████╗  █████╗ ██╗   ██╗ ██████╗ ███╗   ██╗",
+    " ██╔════╝██╔══██╗██╔══██╗╚██╗ ██╔╝██╔═══██╗████╗  ██║",
+    " ██║     ██████╔╝███████║ ╚████╔╝ ██║   ██║██╔██╗ ██║",
+    " ██║     ██╔══██╗██╔══██║  ╚██╔╝  ██║   ██║██║╚██╗██║",
+    " ╚██████╗██║  ██║██║  ██║   ██║   ╚██████╔╝██║ ╚████║",
+    "  ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝  ╚═══╝"
+  ];
+
+  const gradientColors = ["#00e6cc", "#00d5e6", "#00bfff", "#4d94ff", "#8c66ff", "#cc33ff"];
   
   process.stdout.write("\n");
-  for (const char of title) {
-    process.stdout.write(chalk.bold.cyan(char));
-    await new Promise(r => setTimeout(r, 60)); // Typewriter delay
+  for (let i = 0; i < logoLines.length; i++) {
+    const line = logoLines[i];
+    const colorHex = gradientColors[i % gradientColors.length];
+    process.stdout.write(chalk.hex(colorHex).bold(line) + "\n");
+    await new Promise(r => setTimeout(r, 60)); // Fast slide-down effect
   }
   process.stdout.write("\n");
   
+  const subtitle = "  The Autonomous Terminal AI";
   for (const char of subtitle) {
     process.stdout.write(chalk.dim(char));
-    await new Promise(r => setTimeout(r, 20)); // Faster subtitle delay
+    await new Promise(r => setTimeout(r, 15)); // Subtitle typewriter
   }
   process.stdout.write("\n\n");
-  
-  await new Promise(r => setTimeout(r, 500)); // Pause before continuing
   
   console.log("Welcome! Let's get your environment configured.");
   console.log(chalk.dim("This will only take a moment.\n"));
