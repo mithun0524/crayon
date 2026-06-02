@@ -568,6 +568,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           agentRef.current.setHistory(compacted);
           pushMessage({ sender: "system", text: `✅ Compacted ${agentHistory.length} messages → ${compacted.length} messages.` });
           break;
+        }
         case "/model":
           if (parts.length > 1) {
             updateModel(parts[1]);
