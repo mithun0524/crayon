@@ -36,10 +36,11 @@
 ## ⚡ Features
 
 - **🧠 Autonomous ReAct Loop**: Crayon thinks, plans, and executes. If a test fails or a build breaks, it intercepts the error and fixes it autonomously.
-- **🛡️ Secure by Design**: Fine-grained permission modes (`Ask`, `Auto-Edit`, `Auto (God Mode)`). Built-in safety guards against path traversal, oversized file reads, and destructive bash commands (e.g., `rm -rf /`).
-- **✨ Beautiful CLI Interface**: Built with React for the Terminal (`ink`). Features predictive autocomplete for slash commands, interactive setup wizards, and dynamic native markdown rendering.
+- **🛡️ Secure by Design**: Fine-grained permission modes (`Ask`, `Auto-Edit`, `Auto (God Mode)`). Built-in safety guards against path traversal, oversized file reads, and destructive bash commands.
+- **✨ Beautiful CLI Interface**: Built with React for the Terminal (`ink`). Features predictive autocomplete for slash commands, an interactive onboarding setup wizard, and dynamic native markdown rendering.
+- **🎨 Interactive Model Swapping**: Hot-swap between Anthropic, OpenAI, Google, and OpenRouter directly in chat via an inline dropdown menu—without ever leaving your terminal flow.
 - **🚀 Advanced Local Indexer**: Rapid semantic codebase search and dependency graph resolution via a blazing-fast local SQLite and Tree-sitter backbone.
-- **🔌 Multi-Provider Support**: First-class support for Anthropic (Claude 3.7 Sonnet), OpenAI, Google (Gemini), and OpenRouter models.
+- **💾 Auto-Context Compaction**: Keep token burn low with intelligent conversation history compaction (`/compact`) and real-time session cost tracking (`/cost`).
 - **🧩 Extensible Architecture**: Integrates universally via Model Context Protocol (MCP) servers and exposes a highly modular TypeScript SDK.
 
 ## 📦 Quick Start
