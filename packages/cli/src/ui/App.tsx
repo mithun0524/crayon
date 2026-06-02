@@ -59,10 +59,10 @@ const AVAILABLE_COMMANDS = [
 
 const POPULAR_MODELS = {
   anthropic: [
-    { label: "Claude 3.7 Sonnet (Latest)", value: "claude-3-7-sonnet-latest" },
-    { label: "Claude 3.5 Sonnet", value: "claude-3-5-sonnet-20241022" },
-    { label: "Claude 3.5 Haiku", value: "claude-3-5-haiku-20241022" },
-    { label: "Claude 3 Opus", value: "claude-3-opus-20240229" }
+    { label: "Claude 4.6 Sonnet (Latest)", value: "claude-sonnet-4-6" },
+    { label: "Claude 4.8 Opus", value: "claude-opus-4-8" },
+    { label: "Claude 4.5 Haiku", value: "claude-haiku-4-5-20251001" },
+    { label: "Claude 3.7 Sonnet", value: "claude-3-7-sonnet-latest" }
   ],
   openai: [
     { label: "GPT-4.5", value: "gpt-4.5" },
@@ -75,11 +75,11 @@ const POPULAR_MODELS = {
     { label: "Gemini 2.0 Flash", value: "gemini-2.0-flash" }
   ],
   openrouter: [
-    { label: "Anthropic: Claude 3.7 Sonnet", value: "anthropic/claude-3.7-sonnet" },
-    { label: "OpenAI: GPT-4o", value: "openai/gpt-4o" },
+    { label: "Anthropic: Claude 4.6 Sonnet", value: "anthropic/claude-sonnet-4-6" },
+    { label: "OpenAI: GPT-4.5", value: "openai/gpt-4.5" },
+    { label: "OpenAI: o3 Mini", value: "openai/o3-mini" },
     { label: "Google: Gemini 2.5 Pro", value: "google/gemini-2.5-pro" },
     { label: "DeepSeek: R1", value: "deepseek/deepseek-r1" },
-    { label: "DeepSeek: V3", value: "deepseek/deepseek-chat" },
     { label: "Meta: Llama 3.3 70B", value: "meta-llama/llama-3.3-70b-instruct" }
   ]
 };
