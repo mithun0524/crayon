@@ -65,10 +65,10 @@ const POPULAR_MODELS = {
     { label: "Claude 3 Opus", value: "claude-3-opus-20240229" }
   ],
   openai: [
+    { label: "GPT-4.5", value: "gpt-4.5" },
     { label: "GPT-4o (Latest)", value: "gpt-4o" },
-    { label: "GPT-4o Mini", value: "gpt-4o-mini" },
-    { label: "o1", value: "o1" },
-    { label: "o1 Mini", value: "o1-mini" }
+    { label: "o3 Mini", value: "o3-mini" },
+    { label: "o1", value: "o1" }
   ],
   google: [
     { label: "Gemini 2.5 Pro", value: "gemini-2.5-pro" },
@@ -827,7 +827,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           )}
           {isModelSelectorOpen ? (
             <Box flexDirection="column" marginTop={0} paddingLeft={1}>
-              <Text color={theme.success} bold>Select a model for {currentProvider}:</Text>
+              <Text color={theme.success} bold>Select a model for {currentProvider} (or use /model &lt;name&gt;):</Text>
               <SelectInput
                 items={POPULAR_MODELS[currentProvider as keyof typeof POPULAR_MODELS] || POPULAR_MODELS.anthropic}
                 onSelect={(item) => updateModel(item.value)}
