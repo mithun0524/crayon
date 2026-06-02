@@ -551,7 +551,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   }, [isExecuting, queuedTasks]);
 
   const getToolDisplay = () => {
-    if (!activeToolName || activeToolName === "thinking") return streamingText || "Thinking...";
+    if (!activeToolName || activeToolName === "thinking") return "Thinking...";
     let argInfo = "";
     try {
       if (activeToolArgs) {
@@ -562,6 +562,33 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       }
     } catch {}
     return `Running ${activeToolName}${argInfo}...`;
+  };
+
+  const renderMarkdown = (text: string) => {
+    const parts = text.split(/(```[\s\S]*?```)/g);
+    return parts.map((part, index) => {
+      if (part.startsWith("```") && part.endsWith("```")) {
+        const lines = part.split("\n");
+        const lang = lines[0].slice(3).trim();
+        const code = lines.slice(1, -1).join("\n");
+        let highlighted = code;
+        try {
+          highlighted = highlight(code, { language: lang || "typescript", ignoreIllegals: true, theme: syntaxThemeDark });
+        } catch {}
+        return (
+          <Box key={index} marginY={1} paddingX={1} borderStyle="round" borderColor={theme.border} flexDirection="column">
+            {lang && <Text color={theme.subtle} italic>{lang}</Text>}
+            <Text>{highlighted}</Text>
+          </Box>
+        );
+      }
+      if (part.trim() === "") return null;
+      let mdText = part;
+      try {
+        mdText = (marked.parse(part) as string).trim();
+      } catch {}
+      return <Text key={index}>{mdText}</Text>;
+    });
   };
 
   return (
@@ -592,7 +619,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               </Box>
             );
           } else {
-            const parts = msg.text.split(/(```[\s\S]*?```)/g);
             return (
               <Box key={msg.id} flexDirection="column" marginBottom={1}>
                 <Text color={theme.brand} bold>Crayon: </Text>
@@ -600,29 +626,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                   <ThinkingMessage thinking={msg.reasoning} />
                 )}
                 <Box flexDirection="column">
-                  {parts.map((part, index) => {
-                    if (part.startsWith("```") && part.endsWith("```")) {
-                      const lines = part.split("\n");
-                      const lang = lines[0].slice(3).trim();
-                      const code = lines.slice(1, -1).join("\n");
-                      let highlighted = code;
-                      try {
-                        highlighted = highlight(code, { language: lang || "typescript", ignoreIllegals: true, theme: syntaxThemeDark });
-                      } catch {}
-                      return (
-                        <Box key={index} marginY={1} paddingX={1} borderStyle="round" borderColor={theme.border} flexDirection="column">
-                          {lang && <Text color={theme.subtle} italic>{lang}</Text>}
-                          <Text>{highlighted}</Text>
-                        </Box>
-                      );
-                    }
-                    if (part.trim() === "") return null;
-                    let mdText = part;
-                    try {
-                      mdText = (marked.parse(part) as string).trim();
-                    } catch {}
-                    return <Text key={index}>{mdText}</Text>;
-                  })}
+                  {renderMarkdown(msg.text)}
                 </Box>
               </Box>
             );
@@ -637,9 +641,22 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
         {isExecuting && activePlan.length === 0 && !approvalRequest && (
           <Box flexDirection="column" width="100%">
-            {streamingReasoning && (
+            {streamingReasoning && !streamingText && (
               <ThinkingMessage thinking={streamingReasoning} />
             )}
+            
+            {streamingText && (
+              <Box flexDirection="column" marginBottom={1}>
+                <Text color={theme.brand} bold>Crayon: </Text>
+                {streamingReasoning && (
+                  <ThinkingMessage thinking={streamingReasoning} />
+                )}
+                <Box flexDirection="column">
+                  {renderMarkdown(streamingText)}
+                </Box>
+              </Box>
+            )}
+
             <AgentProgress
               statusText={getToolDisplay()}
               tokens={tokens}
