@@ -46,7 +46,7 @@ interface ChatMessage {
 
 const AVAILABLE_COMMANDS = [
   { cmd: "/clear", desc: "Clear conversation history" },
-  { cmd: "/mode", desc: "Change permission mode (ask, auto-edit, plan, auto, bypass)" },
+  { cmd: "/mode", desc: "Change permission mode", usage: "ask | auto-edit | plan | auto | bypass" },
   { cmd: "/cost", desc: "View token usage and cost" },
   { cmd: "/files", desc: "View modified files this session" },
   { cmd: "/compact", desc: "Compact conversation history" },
@@ -739,6 +739,16 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           <Box marginTop={0} flexDirection="row" paddingLeft={1}>
             <Text color={isExecuting ? theme.subtle : theme.success} bold>crayon ❯ </Text>
             <TextInput value={currentInput} onChange={(v) => { setCurrentInput(v); setCommandIndex(-1); }} onSubmit={handleSubmit} />
+            {(() => {
+              const parts = currentInput.split(" ");
+              if (parts.length > 0 && parts[0].startsWith("/")) {
+                const cmd = AVAILABLE_COMMANDS.find(c => c.cmd === parts[0]);
+                if (cmd && cmd.usage && parts.length <= 2 && !parts[1]) {
+                  return <Text color={theme.subtle}>  {cmd.usage}</Text>;
+                }
+              }
+              return null;
+            })()}
           </Box>
         </Box>
       )}
