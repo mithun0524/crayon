@@ -579,14 +579,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
           if (msg.sender === "user") {
             return (
-              <Box key={msg.id}>
+              <Box key={msg.id} marginBottom={1}>
                 <Text color={theme.subtle} bold>❯ You: </Text>
                 <Text color={theme.text}>{msg.text}</Text>
               </Box>
             );
           } else if (msg.sender === "system") {
             return (
-              <Box key={msg.id} flexDirection="column">
+              <Box key={msg.id} flexDirection="column" marginBottom={1}>
                 <Text color={theme.subtle} italic>{msg.text}</Text>
                 {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
               </Box>
@@ -594,7 +594,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           } else {
             const parts = msg.text.split(/(```[\s\S]*?```)/g);
             return (
-              <Box key={msg.id} flexDirection="column">
+              <Box key={msg.id} flexDirection="column" marginBottom={1}>
                 <Text color={theme.brand} bold>Crayon: </Text>
                 {msg.reasoning && (
                   <ThinkingMessage thinking={msg.reasoning} />
@@ -619,7 +619,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                     if (part.trim() === "") return null;
                     let mdText = part;
                     try {
-                      mdText = marked.parse(part) as string;
+                      mdText = (marked.parse(part) as string).trim();
                     } catch {}
                     return <Text key={index}>{mdText}</Text>;
                   })}
