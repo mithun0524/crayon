@@ -652,6 +652,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             )}
             
             {streamingText && (
+              <Box flexDirection="column" marginBottom={1}>
                 <Text bold>
                   {"Crayon".split("").map((char, i) => {
                     const crayonColors = ["#FF5E5B", "#FFD700", "#00FF7F", "#00FFFF", "#1E90FF", "#FF1493"];
