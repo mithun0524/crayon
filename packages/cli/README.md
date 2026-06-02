@@ -1,7 +1,14 @@
 <div align="center">
   <img src="https://img.shields.io/badge/CRAYON-Terminal%20AI-cyan?style=for-the-badge&logo=openai" alt="Crayon AI" />
   <br/>
-  <h1>⬡ Crayon</h1>
+<pre>
+  ██████╗ ██████╗   █████╗  ██╗   ██╗  ██████╗  ███╗   ██╗
+ ██╔════╝ ██╔══██╗ ██╔══██╗ ╚██╗ ██╔╝ ██╔═══██╗ ████╗  ██║
+ ██║      ██████╔╝ ███████║  ╚████╔╝  ██║   ██║ ██╔██╗ ██║
+ ██║      ██╔══██╗ ██╔══██║   ╚██╔╝   ██║   ██║ ██║╚██╗██║
+ ╚██████╗ ██║  ██║ ██║  ██║    ██║    ╚██████╔╝ ██║ ╚████║
+  ╚═════╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝    ╚═╝     ╚═════╝  ╚═╝  ╚═══╝
+</pre>
   <p><strong>The Autonomous AI Coding Agent for your Terminal & IDE</strong></p>
   
   <p>
@@ -76,6 +83,8 @@ crayon chat
 ### In-Chat Slash Commands
 Once inside the interactive `chat` interface, use the `/` prefix to access predictive commands (navigate with arrow keys & `<Tab>` to autocomplete):
 - `/mode` - Hot-swap permission levels (`ask`, `auto-edit`, `plan`, `auto`, `bypass`)
+- `/model` - Hot-swap AI models via an inline interactive dropdown or direct argument
+- `/config` - Interactive setup wizard to change providers, models, or theme settings
 - `/cost` - View real-time token burn and session cost
 - `/files` - View files modified during the current session
 - `/clear` - Purge the conversation history buffer
