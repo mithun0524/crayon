@@ -619,7 +619,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               </Box>
             );
           } else {
-            const crayonColors = ["#00e6cc", "#00d5e6", "#00bfff", "#4d94ff", "#8c66ff", "#cc33ff"];
+            const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
             return (
               <Box key={msg.id} flexDirection="column" marginBottom={1}>
                 <Text bold>
@@ -655,7 +655,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               <Box flexDirection="column" marginBottom={1}>
                 <Text bold>
                   {"Crayon".split("").map((char, i) => {
-                    const crayonColors = ["#00e6cc", "#00d5e6", "#00bfff", "#4d94ff", "#8c66ff", "#cc33ff"];
+                    const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
                     return <Text key={i} color={crayonColors[i % crayonColors.length]}>{char}</Text>
                   })}
                   <Text color={theme.brand}>: </Text>
@@ -766,7 +766,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           <Box marginTop={0} flexDirection="row" paddingLeft={1}>
             <Text bold>
               {"crayon".split("").map((char, i) => {
-                const crayonColors = ["#00e6cc", "#00d5e6", "#00bfff", "#4d94ff", "#8c66ff", "#cc33ff"];
+                const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
                 return <Text key={i} color={isExecuting ? theme.subtle : crayonColors[i % crayonColors.length]}>{char}</Text>
               })}
               <Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>

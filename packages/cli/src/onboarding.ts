@@ -18,7 +18,7 @@ export async function runOnboardingFlow(): Promise<void> {
     "  ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝  ╚═══╝"
   ];
 
-  const gradientColors = ["#00e6cc", "#00d5e6", "#00bfff", "#4d94ff", "#8c66ff", "#cc33ff"];
+  const gradientColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
   
   process.stdout.write("\n");
   for (let i = 0; i < logoLines.length; i++) {
