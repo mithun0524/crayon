@@ -436,6 +436,23 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   };
 
   const handleSubmit = async (inputStr: string) => {
+    if (currentInput.startsWith("/")) {
+      const matches = AVAILABLE_COMMANDS.filter(c => c.cmd.startsWith(currentInput));
+      
+      if (commandIndex !== -1 && matches.length > 0 && commandIndex < matches.length) {
+        setCurrentInput(matches[commandIndex].cmd + " ");
+        setCommandIndex(-1);
+        return;
+      }
+
+      const exactMatch = matches.find(c => c.cmd === inputStr.trim());
+      if (!exactMatch && matches.length > 0) {
+        setCurrentInput(matches[0].cmd + " ");
+        setCommandIndex(-1);
+        return;
+      }
+    }
+
     const trimmed = inputStr.trim();
     if (!trimmed) return;
     
