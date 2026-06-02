@@ -36,16 +36,35 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
   const isStalled = elapsedMs > 10000;
   const spinnerColor = isStalled ? theme.warning : theme.brand;
   
-  // Create a gentle pulsing effect on the asterisk instead of a spinning char
   const isPulseHigh = Math.floor(time / 500) % 2 === 0;
   const asteriskColor = isPulseHigh ? spinnerColor : theme.border;
 
   const kTokens = (tokens / 1000).toFixed(1);
 
+  // If statusText is just "Thinking...", replace it with Crayon-themed words
+  const isThinking = statusText === "Thinking...";
+  const crayonWords = ["Sketching", "Coloring", "Drawing", "Drafting", "Painting", "Outlining"];
+  const wordIndex = Math.floor(time / 2000) % crayonWords.length;
+  const displayWord = isThinking ? crayonWords[wordIndex] : statusText;
+
+  const CRAYON_COLORS = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
+
   return (
     <Box flexDirection="row" marginTop={0} paddingLeft={2}>
       <Text color={asteriskColor}>✶ </Text>
-      <Text color={spinnerColor}>{statusText}... </Text>
+      
+      {isThinking && !isStalled ? (
+        <Box flexDirection="row">
+          {displayWord.split("").map((char, i) => {
+            const colorIndex = (i + Math.floor(time / 150)) % CRAYON_COLORS.length;
+            return <Text key={i} color={CRAYON_COLORS[colorIndex]} bold>{char}</Text>;
+          })}
+          <Text color={CRAYON_COLORS[Math.floor(time / 150) % CRAYON_COLORS.length]} bold>... </Text>
+        </Box>
+      ) : (
+        <Text color={spinnerColor}>{displayWord}... </Text>
+      )}
+
       <Text color={theme.subtle} dimColor>
         ({formatDuration(elapsedMs)} · ↓ {kTokens}k tokens · esc to interrupt)
       </Text>
