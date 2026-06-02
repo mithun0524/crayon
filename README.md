@@ -1,7 +1,14 @@
 <div align="center">
   <img src="https://img.shields.io/badge/CRAYON-Terminal%20AI-cyan?style=for-the-badge&logo=openai" alt="Crayon AI" />
   <br/>
-  <h1>⬡ Crayon</h1>
+<pre>
+  ██████╗ ██████╗   █████╗  ██╗   ██╗  ██████╗  ███╗   ██╗
+ ██╔════╝ ██╔══██╗ ██╔══██╗ ╚██╗ ██╔╝ ██╔═══██╗ ████╗  ██║
+ ██║      ██████╔╝ ███████║  ╚████╔╝  ██║   ██║ ██╔██╗ ██║
+ ██║      ██╔══██╗ ██╔══██║   ╚██╔╝   ██║   ██║ ██║╚██╗██║
+ ╚██████╗ ██║  ██║ ██║  ██║    ██║    ╚██████╔╝ ██║ ╚████║
+  ╚═════╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝    ╚═╝     ╚═════╝  ╚═╝  ╚═══╝
+</pre>
   <p><strong>The Autonomous AI Coding Agent for your Terminal & IDE</strong></p>
   
   <p>
@@ -29,10 +36,11 @@
 ## ⚡ Features
 
 - **🧠 Autonomous ReAct Loop**: Crayon thinks, plans, and executes. If a test fails or a build breaks, it intercepts the error and fixes it autonomously.
-- **🛡️ Secure by Design**: Fine-grained permission modes (`Ask`, `Auto-Edit`, `Auto (God Mode)`). Built-in safety guards against path traversal, oversized file reads, and destructive bash commands (e.g., `rm -rf /`).
-- **✨ Beautiful CLI Interface**: Built with React for the Terminal (`ink`). Features predictive autocomplete for slash commands, interactive setup wizards, and dynamic native markdown rendering.
+- **🛡️ Secure by Design**: Fine-grained permission modes (`Ask`, `Auto-Edit`, `Auto (God Mode)`). Built-in safety guards against path traversal, oversized file reads, and destructive bash commands.
+- **✨ Beautiful CLI Interface**: Built with React for the Terminal (`ink`). Features predictive autocomplete for slash commands, an interactive onboarding setup wizard, and dynamic native markdown rendering.
+- **🎨 Interactive Model Swapping**: Hot-swap between Anthropic, OpenAI, Google, and OpenRouter directly in chat via an inline dropdown menu—without ever leaving your terminal flow.
 - **🚀 Advanced Local Indexer**: Rapid semantic codebase search and dependency graph resolution via a blazing-fast local SQLite and Tree-sitter backbone.
-- **🔌 Multi-Provider Support**: First-class support for Anthropic (Claude 3.7 Sonnet), OpenAI, Google (Gemini), and OpenRouter models.
+- **💾 Auto-Context Compaction**: Keep token burn low with intelligent conversation history compaction (`/compact`) and real-time session cost tracking (`/cost`).
 - **🧩 Extensible Architecture**: Integrates universally via Model Context Protocol (MCP) servers and exposes a highly modular TypeScript SDK.
 
 ## 📦 Quick Start
@@ -76,6 +84,8 @@ crayon chat
 ### In-Chat Slash Commands
 Once inside the interactive `chat` interface, use the `/` prefix to access predictive commands (navigate with arrow keys & `<Tab>` to autocomplete):
 - `/mode` - Hot-swap permission levels (`ask`, `auto-edit`, `plan`, `auto`, `bypass`)
+- `/model` - Hot-swap AI models via an inline interactive dropdown or direct argument
+- `/config` - Interactive setup wizard to change providers, models, or theme settings
 - `/cost` - View real-time token burn and session cost
 - `/files` - View files modified during the current session
 - `/clear` - Purge the conversation history buffer
