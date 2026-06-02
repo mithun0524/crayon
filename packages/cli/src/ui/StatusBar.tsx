@@ -34,12 +34,12 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
   return (
     <Box marginTop={1} paddingLeft={1} flexDirection="row" alignItems="center">
-      <Text color={theme.subtle} dimColor> ⎇ </Text>
+      <Text color={theme.brand} bold>⑆ </Text>
       <Text color={theme.brand}>{gitBranch || "none"}</Text>
       <Text color={theme.warning}>{dirtyStr}</Text>
 
       <Text color={theme.subtle} dimColor>  •  </Text>
-      <Text color={theme.subtle} dimColor>Tokens: </Text>
+      <Text color={theme.subtle} dimColor>∿ </Text>
       <Text color={theme.warning}>{kTokens}/{maxContext}</Text>
       <Text color={theme.success}> (${costStr})</Text>
 

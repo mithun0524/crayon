@@ -66,7 +66,7 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
       )}
 
       <Text color={theme.subtle} dimColor>
-        ({formatDuration(elapsedMs)} · ↓ {kTokens}k tokens · esc to interrupt)
+        ({formatDuration(elapsedMs)} · ∿ {kTokens}k strokes · esc to interrupt)
       </Text>
     </Box>
   );

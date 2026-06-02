@@ -15,7 +15,10 @@ export const DiffRenderer: React.FC<DiffRendererProps> = ({ diff, maxLines = 15 
   const hasMore = lines.length > maxLines;
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={theme.border} paddingX={0} marginY={1}>
+    <Box flexDirection="column" borderStyle="double" borderColor={theme.border} paddingX={0} marginY={1}>
+      <Box paddingX={1} borderBottom={false}>
+        <Text color={theme.brand} bold> ▤ Sketchpad </Text>
+      </Box>
       {visibleLines.map((line, i) => {
         let fgColor = theme.subtle;
         let bgColor: string | undefined = undefined;

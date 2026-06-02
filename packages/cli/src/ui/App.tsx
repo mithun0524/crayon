@@ -643,16 +643,17 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
   const getToolDisplay = () => {
     if (!activeToolName || activeToolName === "thinking") return "Thinking...";
-    let argInfo = "";
-    try {
-      if (activeToolArgs) {
-        if (activeToolArgs.path) argInfo = ` ${activeToolArgs.path}`;
-        else if (activeToolArgs.file_path) argInfo = ` ${activeToolArgs.file_path}`;
-        else if (activeToolArgs.command) argInfo = ` ${activeToolArgs.command}`;
-        else if (activeToolArgs.query) argInfo = ` '${activeToolArgs.query}'`;
-      }
-    } catch {}
-    return `Running ${activeToolName}${argInfo}...`;
+    
+    if (activeToolName === "read_file" || activeToolName === "view_file" || activeToolName === "list_dir") {
+      return "▤ Inspecting canvas";
+    } else if (activeToolName === "run_command") {
+      return "◧ Mixing colors";
+    } else if (activeToolName === "search_web" || activeToolName === "grep_search") {
+      return "⌕ Looking for inspiration";
+    } else if (activeToolName === "write_to_file" || activeToolName === "replace_file_content" || activeToolName === "multi_replace_file_content") {
+      return "✎ Sketching details";
+    }
+    return `⚙ Running ${activeToolName}`;
   };
 
   const renderMarkdown = (text: string) => {
@@ -721,6 +722,20 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               </Box>
             );
           } else if (msg.sender === "system") {
+            if (msg.text.startsWith("⬡ Crayon v")) {
+              const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
+              const [crayonPart, restPart] = msg.text.split(" · Workspace: ");
+              const version = crayonPart.split(" v")[1];
+              return (
+                <Box key={msg.id} flexDirection="row" marginBottom={1}>
+                  <Text color={theme.subtle}>⬡ </Text>
+                  {"Crayon".split("").map((char, i) => (
+                    <Text key={i} color={crayonColors[i % crayonColors.length]} bold>{char}</Text>
+                  ))}
+                  <Text color={theme.subtle}> v{version} · Workspace: {restPart}</Text>
+                </Box>
+              );
+            }
             return (
               <Box key={msg.id} flexDirection="column" marginBottom={1}>
                 <Text color={theme.subtle} italic>{msg.text}</Text>
