@@ -1,16 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 130" width="650" height="130">
   <defs>
-    <linearGradient id="cyanPurpleGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#00FFFF" />
-      <stop offset="50%" stop-color="#6A5ACD" />
-      <stop offset="100%" stop-color="#8A2BE2" />
+    <linearGradient id="rainbowGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FF6B6B" />
+      <stop offset="20%" stop-color="#FF9E79" />
+      <stop offset="40%" stop-color="#FFD93D" />
+      <stop offset="60%" stop-color="#6BCB77" />
+      <stop offset="80%" stop-color="#4D96FF" />
+      <stop offset="100%" stop-color="#9D4EDD" />
     </linearGradient>
     <style>
       .ascii-art {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
         font-size: 16px;
         font-weight: 700;
-        fill: url(#cyanPurpleGradient);
+        fill: url(#rainbowGradient);
         white-space: pre;
       }
     </style>
