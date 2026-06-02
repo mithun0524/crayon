@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 130" width="620" height="130">
+  <defs>
+    <linearGradient id="cyanPurpleGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00FFFF" />
+      <stop offset="50%" stop-color="#6A5ACD" />
+      <stop offset="100%" stop-color="#8A2BE2" />
+    </linearGradient>
+    <style>
+      .ascii-art {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 16px;
+        font-weight: 700;
+        fill: url(#cyanPurpleGradient);
+        white-space: pre;
+      }
+    </style>
+  </defs>
+  <text x="0" y="0" class="ascii-art">
+    <tspan x="10" dy="1.2em">  ██████╗ ██████╗   █████╗  ██╗   ██╗  ██████╗  ███╗   ██╗</tspan>
+    <tspan x="10" dy="1.2em"> ██╔════╝ ██╔══██╗ ██╔══██╗ ╚██╗ ██╔╝ ██╔═══██╗ ████╗  ██║</tspan>
+    <tspan x="10" dy="1.2em"> ██║      ██████╔╝ ███████║  ╚████╔╝  ██║   ██║ ██╔██╗ ██║</tspan>
+    <tspan x="10" dy="1.2em"> ██║      ██╔══██╗ ██╔══██║   ╚██╔╝   ██║   ██║ ██║╚██╗██║</tspan>
+    <tspan x="10" dy="1.2em"> ╚██████╗ ██║  ██║ ██║  ██║    ██║    ╚██████╔╝ ██║ ╚████║</tspan>
+    <tspan x="10" dy="1.2em">  ╚═════╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝    ╚═╝     ╚═════╝  ╚═╝  ╚═══╝</tspan>
+  </text>
+</svg>
