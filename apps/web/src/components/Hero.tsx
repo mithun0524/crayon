@@ -56,7 +56,7 @@ export default function Hero() {
 
       {/* Immersive Terminal Mockup */}
       <div className="w-full max-w-5xl rounded-3xl overflow-hidden bg-[#121214] border border-white/10 fade-in-up delay-500 relative group shadow-[0_40px_100px_-20px_rgba(0,0,0,1)]" tabIndex={0} aria-label="Terminal demonstration">
-        <div className="absolute top-0 inset-x-0 h-[1px] bg-gradient-to-r from-transparent via-[#00E5FF]/30 to-transparent"></div>
+        <div className="absolute top-0 inset-x-0 h-px bg-linear-to-r from-transparent via-[#00E5FF]/30 to-transparent"></div>
         
         {/* Terminal Header */}
         <div className="flex items-center px-6 py-4 border-b border-white/5 bg-[#09090B]">
@@ -69,7 +69,7 @@ export default function Hero() {
         </div>
 
         {/* Terminal Body */}
-        <div className="p-8 font-mono text-[13px] md:text-[15px] leading-relaxed space-y-5 h-[420px] overflow-hidden bg-[#09090B]">
+        <div className="p-8 font-mono text-[13px] md:text-[15px] leading-relaxed space-y-5 h-105 overflow-hidden bg-[#09090B]">
           <div className="flex gap-4 items-start">
             <span className="text-[#00FF66] shrink-0 font-bold">~</span>
             <div className="text-white/90">
@@ -103,7 +103,7 @@ export default function Hero() {
       </div>
 
       {/* Scroll Indicator */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 fade-in-up delay-500 opacity-50 hidden md:flex">
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 hidden md:flex flex-col items-center gap-2 fade-in-up delay-500 opacity-50">
         <span className="text-[10px] font-inter uppercase tracking-widest text-white/40">Scroll</span>
         <div className="w-5 h-8 border border-white/20 rounded-full flex justify-center p-1">
           <div className="w-1 h-2 bg-white/40 rounded-full animate-bounce"></div>
