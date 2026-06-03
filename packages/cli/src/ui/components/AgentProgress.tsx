@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 
@@ -22,12 +22,21 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
   tokens = 0,
   startTime = Date.now(),
 }) => {
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTick(prev => prev + 1);
+    }, 150);
+    return () => clearInterval(timer);
+  }, []);
+
   const elapsedMs = Date.now() - startTime;
   const isStalled = elapsedMs > 10000;
   const spinnerColor = isStalled ? theme.warning : theme.brand;
   
-  // Drive the animation using tokens so it pulses naturally as the agent streams
-  const pulseFactor = Math.floor(tokens / 50);
+  // Combine tick and tokens for a smooth, continuous pulse
+  const pulseFactor = Math.floor(tick / 2) + Math.floor(tokens / 50);
   const isPulseHigh = pulseFactor % 2 === 0;
   const asteriskColor = isPulseHigh ? spinnerColor : theme.border;
 
@@ -48,10 +57,10 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
       {isThinking && !isStalled ? (
         <Box flexDirection="row">
           {displayWord.split("").map((char, i) => {
-            const colorIndex = (i + pulseFactor) % CRAYON_COLORS.length;
+            const colorIndex = (i + tick) % CRAYON_COLORS.length;
             return <Text key={i} color={CRAYON_COLORS[colorIndex]} bold>{char}</Text>;
           })}
-          <Text color={CRAYON_COLORS[pulseFactor % CRAYON_COLORS.length]} bold>... </Text>
+          <Text color={CRAYON_COLORS[tick % CRAYON_COLORS.length]} bold>... </Text>
         </Box>
       ) : (
         <Text color={spinnerColor}>{displayWord}... </Text>
