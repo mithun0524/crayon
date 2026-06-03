@@ -789,7 +789,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             );
           } else if (msg.sender === "system") {
             if (msg.text.startsWith("⬡ Crayon v")) {
-              const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
+              const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
               const [crayonPart, restPart] = msg.text.split(" · Workspace: ");
               const version = crayonPart.split(" v")[1];
               return (
@@ -809,7 +809,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               </Box>
             );
           } else {
-            const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
+            const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
             return (
               <Box key={msg.id} flexDirection="column" marginBottom={1}>
                 <Text bold>
@@ -845,7 +845,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               <Box flexDirection="column" marginBottom={1}>
                 <Text bold>
                   {"Crayon".split("").map((char, i) => {
-                    const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
+                    const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
                     return <Text key={i} color={crayonColors[i % crayonColors.length]}>{char}</Text>
                   })}
                   <Text color={theme.brand}>: </Text>
@@ -979,7 +979,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             <Box flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1}>
               <Text bold>
                 {"crayon".split("").map((char, i) => {
-                  const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
+                  const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
                   return <Text key={i} color={isExecuting ? theme.subtle : crayonColors[i % crayonColors.length]}>{char}</Text>
                 })}
                 <Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>

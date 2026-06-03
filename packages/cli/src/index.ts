@@ -13,6 +13,10 @@ import { App } from "./ui/App.js";
 import { initTelemetry, trackEvent, flushTelemetry } from "./telemetry.js";
 import { runOnboardingFlow } from "./onboarding.js";
 import { handleUpdateOnBoot, showPassiveNotification, runInternalUpdateCheck, spawnBackgroundUpdateCheck } from "./updater.js";
+import { enableTerminalSync } from "./terminal-sync.js";
+
+// Enable DEC 2026 synchronous updates to prevent terminal tearing on resize
+enableTerminalSync();
 
 async function exitCLI(code: number = 0) {
   await showPassiveNotification();

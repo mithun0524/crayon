@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { Box, Text } from "ink";
-import Spinner from "ink-spinner";
 import { theme } from "./theme.js";
 
 interface PlanViewProps {
@@ -17,22 +16,11 @@ const VERBS = [
   "Shading context..."
 ];
 
-const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
+const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
 
 const ShimmeringVerb: React.FC<{ isExecuting: boolean }> = ({ isExecuting }) => {
   // Pick one verb per mount — stays fixed for this task run
   const [verbIdx] = useState(() => Math.floor(Math.random() * VERBS.length));
-  const [colorOffset, setColorOffset] = useState(0);
-
-  useEffect(() => {
-    if (!isExecuting) return;
-    const colorTimer = setInterval(() => {
-      setColorOffset((prev) => (prev + 1) % crayonColors.length);
-    }, 150);
-    return () => {
-      clearInterval(colorTimer);
-    };
-  }, [isExecuting]);
 
   if (!isExecuting) {
     return <Text bold color={theme.brand}>▶ Task List</Text>;
@@ -43,7 +31,7 @@ const ShimmeringVerb: React.FC<{ isExecuting: boolean }> = ({ isExecuting }) => 
     <Text bold>
       <Text color={theme.brand}>▶ </Text>
       {text.split("").map((char, i) => (
-        <Text key={i} color={crayonColors[(i + colorOffset) % crayonColors.length]}>
+        <Text key={i} color={crayonColors[i % crayonColors.length]}>
           {char}
         </Text>
       ))}
@@ -107,7 +95,7 @@ export const PlanView: React.FC<PlanViewProps> = ({ steps, currentStepIndex, isE
             <Box key={globalIdx} paddingLeft={2}>
               <Text color={theme.border}>{prefix}</Text>
               <Text color={color}>
-                {isExecuting ? <Spinner type="dots" /> : "☐"} 
+                {isExecuting ? "➤" : "☐"} 
               </Text>
               <Text color={color} bold> {step}</Text>
             </Box>

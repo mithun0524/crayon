@@ -8,7 +8,7 @@ interface StartupAnimationProps {
   onComplete: () => void;
 }
 
-const CRAYON_COLORS = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
+const CRAYON_COLORS = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
 
 export const StartupAnimation: React.FC<StartupAnimationProps> = ({ version, workspaceName, onComplete }) => {
   const [charsRevealed, setCharsRevealed] = useState(0);
