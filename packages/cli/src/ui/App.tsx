@@ -698,15 +698,27 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         setIsCommandPaletteOpen(true);
         setCurrentInput("");
       } else {
-        // PageUp / PageDown scroll through history
-        if (key.pageUp || (key.shift && key.upArrow)) {
-          const next = Math.min(scrollOffsetRef.current + 5, history.length - 1);
+        // PageUp / PageDown or Shift+Arrows scroll through history
+        if (key.pageUp) {
+          const next = Math.max(0, Math.min(scrollOffsetRef.current + 5, history.length - 1));
           scrollOffsetRef.current = next;
           setScrollOffset(next);
           return;
         }
-        if (key.pageDown || (key.shift && key.downArrow)) {
-          const next = Math.max(scrollOffsetRef.current - 5, 0);
+        if (key.pageDown) {
+          const next = Math.max(0, scrollOffsetRef.current - 5);
+          scrollOffsetRef.current = next;
+          setScrollOffset(next);
+          return;
+        }
+        if ((key.shift && key.upArrow) || input === "\u001b[1;2A") {
+          const next = Math.max(0, Math.min(scrollOffsetRef.current + 1, history.length - 1));
+          scrollOffsetRef.current = next;
+          setScrollOffset(next);
+          return;
+        }
+        if ((key.shift && key.downArrow) || input === "\u001b[1;2B") {
+          const next = Math.max(0, scrollOffsetRef.current - 1);
           scrollOffsetRef.current = next;
           setScrollOffset(next);
           return;
