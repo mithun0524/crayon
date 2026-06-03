@@ -95,7 +95,12 @@ export class CrayonAgent {
     this.config = config;
     this.indexer = new CodeIndexer(config.workspaceRoot);
     this.episodicMemory = new EpisodicMemory(config.workspaceRoot);
-    this.mcpClient = new McpClient(config.mcpServers || []);
+    this.mcpClient = new McpClient(config.mcpServers || [], {
+      connectTimeoutMs: 30_000,
+      onError: (serverName, error) => {
+        this.emit({ type: "error", message: `MCP server "${serverName}" failed: ${error.message}` });
+      },
+    });
   }
 
   private emit(event: AgentEvent): void {
@@ -156,7 +161,12 @@ export class CrayonAgent {
       await this.init();
     }
 
-    await this.mcpClient.connectAll();
+    try {
+      await this.mcpClient.connectAll();
+    } catch (mcpErr: any) {
+      this.emit({ type: "error", message: `MCP connection failed: ${mcpErr?.message || String(mcpErr)}` });
+      // Continue without MCP tools — agent can still work
+    }
 
     const modelConfig: ModelConfig = {
       model: this.config.model,
@@ -228,7 +238,13 @@ export class CrayonAgent {
       })
     );
 
-    const mcpTools = await this.mcpClient.listTools();
+    let mcpTools: Awaited<ReturnType<typeof this.mcpClient.listTools>> = [];
+    try {
+      mcpTools = await this.mcpClient.listTools();
+    } catch (mcpErr: any) {
+      this.emit({ type: "error", message: `Failed to list MCP tools: ${mcpErr?.message || String(mcpErr)}` });
+      // Continue without MCP tools
+    }
     for (const t of mcpTools) {
       const safeName = `mcp_${t.server}_${t.tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_");
 
@@ -434,6 +450,18 @@ export class CrayonAgent {
         // Suppress usage resolution error if not supported
       }
 
+      // Check if the agent hit the maximum step limit
+      try {
+        const finishReason = await streamResult.finishReason;
+        if (finishReason === "tool-calls" || finishReason === "length") {
+          const warnMsg = "\n\n⚠️ [System: The agent reached the maximum number of steps allowed for this task without completing it. You may need to break the task down or increase the limit.]";
+          responseText += warnMsg;
+          this.emit({ type: "text_delta", content: warnMsg });
+        }
+      } catch {
+        // Suppress
+      }
+
       // Fallback: if textStream was empty but steps had text
       if (!responseText && steps?.length) {
         for (const step of steps) {
@@ -541,7 +569,8 @@ export class CrayonAgent {
     this.workingMemory.clear();
     this.episodicMemory.close?.();
     this.indexer.stopWatching?.();
-    this.mcpClient?.close?.();
+    // Fire-and-forget async close — we don't need to await during cleanup
+    this.mcpClient?.close?.().catch?.(() => {});
   }
 }
 

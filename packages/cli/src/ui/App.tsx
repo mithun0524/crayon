@@ -128,11 +128,13 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [streamingText, setStreamingText] = useState("");
   const [streamingReasoning, setStreamingReasoning] = useState("");
+  // We keep the state for triggering re-renders (used by getToolDisplay)
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
-  const [activeToolArgs, setActiveToolArgs] = useState<any>(null);
+  const [, setActiveToolArgs] = useState<any>(null); // State kept for potential future use, but ignored to fix TS6133
+  const activeToolNameRef = useRef<string | null>(null);
+  const activeToolArgsRef = useRef<any>(null);
   const [tokens, setTokens] = useState(0);
   const [cost, setCost] = useState(0);
-  const [error, setError] = useState<string | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
   const [currentInput, setCurrentInput] = useState("");
   const [inputHistory, setInputHistory] = useState<string[]>([]);
@@ -152,6 +154,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const historyCountRef = useRef(0);
   const executionStartTime = useRef<number | undefined>(undefined);
 
+  const modeSwitchTimeRef = useRef(0);
   const workspaceRoot = process.cwd();
   const workspaceName = path.basename(workspaceRoot);
 
@@ -299,7 +302,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     setActivePlan([]);
     activePlanRef.current = [];
     setCurrentStepIndex(0);
-    setError(null);
     abortedRef.current = false;
     abortControllerRef.current = new AbortController();
     executionStartTime.current = Date.now();
@@ -327,7 +329,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       setActiveToolName(null);
       setActivePlan([]);
       activePlanRef.current = [];
-      setError(err?.message || String(err));
       pushMessage({ sender: "system", text: `Error: ${err?.message || String(err)}` });
 
       if (mode === "run") {
@@ -351,30 +352,38 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         setStreamingReasoning((prev) => prev + event.content);
         break;
       case "tool_call":
+        activeToolNameRef.current = event.name;
+        activeToolArgsRef.current = event.args;
         setActiveToolName(event.name);
         setActiveToolArgs(event.args);
         setStreamingText("");
         if (event.name !== "thinking") {
           setCurrentStepIndex((prev) => Math.min(prev + 1, Math.max(0, activePlanRef.current.length - 1)));
         } else {
+          activeToolArgsRef.current = { status: "Thinking..." };
           setActiveToolArgs({ status: "Thinking..." });
         }
         break;
-      case "tool_result":
-        if (activeToolName && activeToolName !== "thinking") {
-          let activityText = `✓ Ran tool ${activeToolName}`;
-          const args = activeToolArgs || {};
-          if (activeToolName === "read_file") activityText = `✓ Reading ${args.path}`;
-          else if (activeToolName === "edit_file" || activeToolName === "edit_ast") activityText = `✓ Edited ${args.path}`;
-          else if (activeToolName === "write_file") activityText = `✓ Created ${args.path}`;
-          else if (activeToolName === "grep") activityText = `✓ Searched for "${args.pattern}"`;
-          else if (activeToolName === "search_codebase") activityText = `✓ Semantic search "${args.query}"`;
-          else if (activeToolName === "terminal") activityText = `✓ Ran command: ${args.command}`;
+      case "tool_result": {
+        // Read from refs to avoid stale closure — state may not have updated yet
+        const toolName = activeToolNameRef.current;
+        const toolArgs = activeToolArgsRef.current || {};
+        if (toolName && toolName !== "thinking") {
+          let activityText = `✓ Ran tool ${toolName}`;
+          if (toolName === "read_file") activityText = `✓ Reading ${toolArgs.path}`;
+          else if (toolName === "edit_file" || toolName === "edit_ast") activityText = `✓ Edited ${toolArgs.path}`;
+          else if (toolName === "write_file") activityText = `✓ Created ${toolArgs.path}`;
+          else if (toolName === "grep") activityText = `✓ Searched for "${toolArgs.pattern}"`;
+          else if (toolName === "search_codebase") activityText = `✓ Semantic search "${toolArgs.query}"`;
+          else if (toolName === "terminal") activityText = `✓ Ran command: ${toolArgs.command}`;
           pushMessage({ sender: "system", text: activityText });
         }
+        activeToolNameRef.current = null;
+        activeToolArgsRef.current = null;
         setActiveToolName(null);
         setActiveToolArgs(null);
         break;
+      }
       case "text_delta":
         setStreamingText((prev) => prev + event.content);
         break;
@@ -399,7 +408,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         });
         break;
       case "error":
-        setError(event.message);
+        pushMessage({ sender: "system", text: `Error: ${event.message}` });
         break;
     }
   };
@@ -408,6 +417,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     abortedRef.current = true;
     abortControllerRef.current?.abort();
     setIsExecuting(false);
+    activeToolNameRef.current = null;
+    activeToolArgsRef.current = null;
     setActiveToolName(null);
     setActiveToolArgs(null);
     setActivePlan([]);
@@ -477,11 +488,12 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
 
     if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isCommandPaletteOpen) {
-      if ((key.ctrl && input === "t") || (key.shift && key.tab)) {
+      if ((key.ctrl && input === "t") || input === "\u001b[Z" || (key.shift && (key.tab || input === "\t"))) {
         const modes = ["ask", "auto-edit", "plan", "auto", "bypass"];
         const currentIdx = modes.indexOf(agentMode);
         const nextMode = modes[(currentIdx + 1) % modes.length];
         setAgentMode(nextMode);
+        modeSwitchTimeRef.current = Date.now();
         if (agentRef.current) agentRef.current.setPermissionMode(nextMode as any);
         return;
       }
@@ -625,7 +637,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             googleApiKey: config.googleApiKey,
           });
           agentRef.current.setHistory(compacted);
-          pushMessage({ sender: "system", text: `✅ Compacted ${agentHistory.length} messages → ${compacted.length} messages.` });
+          pushMessage({ sender: "system", text: `[✓] Compacted ${agentHistory.length} messages → ${compacted.length} messages.` });
           break;
         }
         case "/model":
@@ -636,7 +648,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           }
           break;
         case "/config":
-          pushMessage({ sender: "system", text: "⚙️ To change your AI provider, model, or UI theme, please exit the chat (Ctrl+C) and run `crayon config` in your terminal." });
+          pushMessage({ sender: "system", text: "[!] To change your AI provider, model, or UI theme, please exit the chat (Ctrl+C) and run `crayon config` in your terminal." });
           break;
         case "/easel": {
           if (!agentRef.current) {
@@ -645,10 +657,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           }
           const files = agentRef.current.getContextFiles();
           if (files.length === 0) {
-            pushMessage({ sender: "system", text: "🎨 Easel (Active Context)\n  (Empty Context)" });
+            pushMessage({ sender: "system", text: "▶ Easel (Active Context)\n  (Empty Context)" });
           } else {
             const relativeFiles = files.map((f: string) => path.relative(workspaceRoot, f));
-            pushMessage({ sender: "system", text: `🎨 Easel (Active Context)\n${buildAsciiTree(relativeFiles)}` });
+            pushMessage({ sender: "system", text: `▶ Easel (Active Context)\n${buildAsciiTree(relativeFiles)}` });
           }
           break;
         }
@@ -697,7 +709,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     } else if (activeToolName === "write_to_file" || activeToolName === "replace_file_content" || activeToolName === "multi_replace_file_content") {
       return "✎ Sketching details";
     }
-    return `⚙ Running ${activeToolName}`;
+    return `▶ Running ${activeToolName}`;
   };
 
   const renderMarkdown = (text: string, isStreaming: boolean = false) => {
@@ -847,11 +859,16 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               </Box>
             )}
 
-            <AgentProgress
-              statusText={getToolDisplay()}
-              tokens={tokens}
-              startTime={executionStartTime.current}
-            />
+            {/* Only show the animated progress when there's no streaming text yet —
+                prevents the "two sketching" bug where both the response text and
+                the progress animation render simultaneously */}
+            {!streamingText && (
+              <AgentProgress
+                statusText={getToolDisplay()}
+                tokens={tokens}
+                startTime={executionStartTime.current}
+              />
+            )}
           </Box>
         )}
 
@@ -919,12 +936,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             )}
           </Box>
         )}
-
-        {error && (
-          <Box borderStyle="single" borderColor={theme.error} paddingX={1} marginY={1} width="100%">
-            <Text color={theme.error} bold>Error: {error}</Text>
-          </Box>
-        )}
       </Box>
 
       <Box marginTop={1}>
@@ -933,8 +944,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
       {!approvalRequest && mode === "chat" && (
         <Box flexDirection="column">
-          {isCommandPaletteOpen ? (
-            <Box flexDirection="column" marginTop={0} paddingLeft={1}>
+          {isCommandPaletteOpen && (
+            <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
               <Text color={theme.success} bold>Command Palette</Text>
               <SearchableSelect
                 items={AVAILABLE_COMMANDS.map(c => ({
@@ -950,8 +961,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                 onCancel={() => setIsCommandPaletteOpen(false)}
               />
             </Box>
-          ) : isModelSelectorOpen ? (
-            <Box flexDirection="column" marginTop={0} paddingLeft={1}>
+          )}
+          
+          {isModelSelectorOpen && (
+            <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
               <Text color={theme.success} bold>Select a model for {currentProvider}</Text>
               <SearchableSelect
                 items={availableModels}
@@ -960,31 +973,40 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                 onCancel={() => setIsModelSelectorOpen(false)}
               />
             </Box>
-          ) : (
-            <Box marginTop={0} flexDirection="column" paddingLeft={1}>
-              <Box flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1}>
-                <Text bold>
-                  {"crayon".split("").map((char, i) => {
-                    const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
-                    return <Text key={i} color={isExecuting ? theme.subtle : crayonColors[i % crayonColors.length]}>{char}</Text>
-                  })}
-                  <Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
-                </Text>
-                <TextInput value={currentInput} onChange={(v) => { 
+          )}
+
+          <Box marginTop={0} flexDirection="column" paddingLeft={1}>
+            <Box flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1}>
+              <Text bold>
+                {"crayon".split("").map((char, i) => {
+                  const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
+                  return <Text key={i} color={isExecuting ? theme.subtle : crayonColors[i % crayonColors.length]}>{char}</Text>
+                })}
+                <Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
+              </Text>
+              <TextInput 
+                focus={!isCommandPaletteOpen && !isModelSelectorOpen}
+                value={currentInput} 
+                onChange={(v) => { 
+                  if (Date.now() - modeSwitchTimeRef.current < 50 && v.endsWith("t")) {
+                    setCurrentInput(v.slice(0, -1));
+                    return;
+                  }
                   if (v === "/") {
                     setIsCommandPaletteOpen(true);
                     setCurrentInput("");
                   } else {
                     setCurrentInput(v); 
                   }
-                }} onSubmit={handleSubmit} />
-              </Box>
-              <Box paddingLeft={1}>
-                <Text color={theme.success}>⏸ {agentMode} mode on </Text>
-                <Text color={theme.subtle}>(Ctrl+T or Shift+Tab to cycle)</Text>
-              </Box>
+                }} 
+                onSubmit={handleSubmit} 
+              />
             </Box>
-          )}
+            <Box paddingLeft={1}>
+              <Text color={theme.success}>⏸ {agentMode} mode on </Text>
+              <Text color={theme.subtle}>(Ctrl+T or Shift+Tab to cycle)</Text>
+            </Box>
+          </Box>
         </Box>
       )}
 

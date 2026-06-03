@@ -1,6 +1,4 @@
-export { Theme } from "../theme.js";
-
-import { Theme } from "../theme.js";
+import type { Theme } from "../theme.js";
 
 export const lightTheme: Theme = {
   brand: '#8A2BE2',

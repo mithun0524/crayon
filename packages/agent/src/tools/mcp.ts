@@ -14,15 +14,26 @@ export interface McpTool {
   inputSchema: unknown;
 }
 
+export interface McpClientOptions {
+  /** Connection timeout per server in milliseconds (default: 30000) */
+  connectTimeoutMs?: number;
+  /** Called when a server fails to connect */
+  onError?: (serverName: string, error: Error) => void;
+}
+
 export class McpClient {
   private servers: Map<string, Client> = new Map();
   private serverConfigs: McpServerConfig[];
+  private options: McpClientOptions;
 
-  constructor(servers: McpServerConfig[] = []) {
+  constructor(servers: McpServerConfig[] = [], options: McpClientOptions = {}) {
     this.serverConfigs = servers;
+    this.options = options;
   }
 
   async connectAll(): Promise<void> {
+    const timeout = this.options.connectTimeoutMs ?? 30_000;
+
     for (const config of this.serverConfigs) {
       try {
         const env: Record<string, string> = {};
@@ -37,6 +48,7 @@ export class McpClient {
           command: config.command,
           args: config.args || [],
           env,
+          stderr: "ignore",
         });
 
         const client = new Client(
@@ -44,10 +56,22 @@ export class McpClient {
           { capabilities: {} }
         );
 
-        await client.connect(transport);
+        // Race between connect and timeout
+        await Promise.race([
+          client.connect(transport),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Connection timed out after ${timeout / 1000}s`)), timeout)
+          ),
+        ]);
+
         this.servers.set(config.name, client);
       } catch (err) {
-        console.error(`Crayon: Failed to connect to MCP server ${config.name}`, err);
+        const error = err instanceof Error ? err : new Error(String(err));
+        // Surface through callback instead of console.error
+        if (this.options.onError) {
+          this.options.onError(config.name, error);
+        }
+        // Don't add to this.servers — the server is not connected
       }
     }
   }
@@ -56,16 +80,26 @@ export class McpClient {
     const allTools: { server: string; tool: McpTool }[] = [];
     
     for (const [serverName, client] of this.servers.entries()) {
-      const response = await client.listTools();
-      for (const t of response.tools) {
-        allTools.push({
-          server: serverName,
-          tool: {
-            name: t.name,
-            description: t.description || "",
-            inputSchema: t.inputSchema,
-          }
-        });
+      try {
+        const response = await client.listTools();
+        for (const t of response.tools) {
+          allTools.push({
+            server: serverName,
+            tool: {
+              name: t.name,
+              description: t.description || "",
+              inputSchema: t.inputSchema,
+            }
+          });
+        }
+      } catch (err) {
+        // One server failing to list tools shouldn't break others
+        const error = err instanceof Error ? err : new Error(String(err));
+        if (this.options.onError) {
+          this.options.onError(serverName, error);
+        }
+        // Remove the broken server so we don't try to call tools on it
+        this.servers.delete(serverName);
       }
     }
     
@@ -86,15 +120,20 @@ export class McpClient {
     return response;
   }
 
-  close(): void {
+  async close(): Promise<void> {
+    const closePromises: Promise<void>[] = [];
     for (const client of this.servers.values()) {
-      // The SDK doesn't have a synchronous close on Client, but usually transports can be closed
-      // If client.close exists we'd call it, otherwise ignore.
-      if (typeof (client as any).close === 'function') {
-        (client as any).close();
+      try {
+        if (typeof (client as any).close === 'function') {
+          closePromises.push(
+            Promise.resolve((client as any).close()).catch(() => {})
+          );
+        }
+      } catch {
+        // Ignore close errors
       }
     }
+    await Promise.allSettled(closePromises);
     this.servers.clear();
   }
 }
-

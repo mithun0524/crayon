@@ -44,7 +44,7 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
   // If statusText is just "Thinking...", replace it with Crayon-themed words
   const isThinking = statusText === "Thinking...";
   const crayonWords = ["Sketching", "Coloring", "Drawing", "Drafting", "Painting", "Outlining"];
-  const wordIndex = Math.floor(time / 2000) % crayonWords.length;
+  const [wordIndex] = useState(() => Math.floor(Math.random() * crayonWords.length));
   const displayWord = isThinking ? crayonWords[wordIndex] : statusText;
 
   const CRAYON_COLORS = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];

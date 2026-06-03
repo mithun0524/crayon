@@ -27,7 +27,9 @@
     "build": "tsc -p tsconfig.json",
     "build:binaries": "node scripts/build-binaries.cjs",
     "dev": "tsx src/index.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "start": "node ./dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
   },
   "pkg": {
     "scripts": "dist/**/*.js"
@@ -53,12 +55,15 @@
   },
   "devDependencies": {
     "@types/ink-select-input": "^3.0.5",
+    "@types/ink-testing-library": "^1.0.4",
     "@types/ink-text-input": "^2.0.5",
     "@types/marked": "^6.0.0",
     "@types/node": "^22.13.10",
     "@types/react": "^18.3.12",
+    "ink-testing-library": "^4.0.0",
     "pkg": "^5.8.1",
     "tsx": "^4.19.3",
-    "typescript": "^5.8.2"
+    "typescript": "^5.8.2",
+    "vitest": "^3.2.4"
   }
 }

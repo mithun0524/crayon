@@ -1,4 +1,4 @@
-import { Theme } from "../theme.js";
+import type { Theme } from "../theme.js";
 
 export const highContrastTheme: Theme = {
   brand: '#00FFFF',          // Cyan

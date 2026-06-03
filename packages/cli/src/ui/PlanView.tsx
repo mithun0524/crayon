@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
 import { theme } from "./theme.js";
@@ -9,10 +9,57 @@ interface PlanViewProps {
   isExecuting: boolean;
 }
 
+const VERBS = [
+  "Sketching details...",
+  "Blending colors...",
+  "Sharpening thoughts...",
+  "Drawing outlines...",
+  "Shading context..."
+];
+
+const crayonColors = ["#FF6B6B", "#FF9E79", "#FFD93D", "#6BCB77", "#4D96FF", "#9D4EDD"];
+
+const ShimmeringVerb: React.FC<{ isExecuting: boolean }> = ({ isExecuting }) => {
+  // Pick one verb per mount — stays fixed for this task run
+  const [verbIdx] = useState(() => Math.floor(Math.random() * VERBS.length));
+  const [colorOffset, setColorOffset] = useState(0);
+
+  useEffect(() => {
+    if (!isExecuting) return;
+    const colorTimer = setInterval(() => {
+      setColorOffset((prev) => (prev + 1) % crayonColors.length);
+    }, 150);
+    return () => {
+      clearInterval(colorTimer);
+    };
+  }, [isExecuting]);
+
+  if (!isExecuting) {
+    return <Text bold color={theme.brand}>▶ Task List</Text>;
+  }
+
+  const text = VERBS[verbIdx];
+  return (
+    <Text bold>
+      <Text color={theme.brand}>▶ </Text>
+      {text.split("").map((char, i) => (
+        <Text key={i} color={crayonColors[(i + colorOffset) % crayonColors.length]}>
+          {char}
+        </Text>
+      ))}
+    </Text>
+  );
+};
+
 export const PlanView: React.FC<PlanViewProps> = ({ steps, currentStepIndex, isExecuting }) => {
   if (!steps || steps.length === 0) return null;
 
-  const MAX_VISIBLE = 5;
+  // If all steps are done, hide the plan view
+  if (currentStepIndex >= steps.length) return null;
+
+  // Max 5 items total visible (including the "+X more" if needed)
+  const MAX_VISIBLE = steps.length > 5 ? 4 : 5;
+  
   let startIdx = Math.max(0, currentStepIndex - 1);
   let endIdx = startIdx + MAX_VISIBLE;
 
@@ -28,7 +75,7 @@ export const PlanView: React.FC<PlanViewProps> = ({ steps, currentStepIndex, isE
 
   return (
     <Box flexDirection="column" marginY={1}>
-      <Text bold color={theme.brand}>● Update Todos</Text>
+      <ShimmeringVerb isExecuting={isExecuting} />
       
       {hiddenCompleted > 0 && (
         <Box paddingLeft={2}>
