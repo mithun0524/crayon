@@ -850,7 +850,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     <Box flexDirection="column" height={rows || 24} width="100%" overflow="hidden">
 
       {/* Scrollable history region — flexGrow takes all available space */}
-      <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingLeft={1}>
+      <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingLeft={1} justifyContent="flex-end">
         {visibleHistory.map(renderMsg)}
       </Box>
 
