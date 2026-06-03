@@ -160,6 +160,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [availableModels, setAvailableModels] = useState<SelectOption[]>([]);
+  // How many messages scrolled up from the bottom (0 = at bottom / live view)
+  const [scrollOffset, setScrollOffset] = useState(0);
+  const scrollOffsetRef = useRef(0);
 
   const agentRef = useRef<CrayonAgent | null>(null);
   const abortedRef = useRef(false);
@@ -181,6 +184,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       }
       return next;
     });
+    // Auto-snap to bottom whenever a new message arrives
+    scrollOffsetRef.current = 0;
+    setScrollOffset(0);
   };
 
   useEffect(() => {
@@ -535,6 +541,20 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         setIsCommandPaletteOpen(true);
         setCurrentInput("");
       } else {
+        // PageUp / PageDown scroll through history
+        if (key.pageUp || (key.shift && key.upArrow)) {
+          const next = Math.min(scrollOffsetRef.current + 5, history.length - 1);
+          scrollOffsetRef.current = next;
+          setScrollOffset(next);
+          return;
+        }
+        if (key.pageDown || (key.shift && key.downArrow)) {
+          const next = Math.max(scrollOffsetRef.current - 5, 0);
+          scrollOffsetRef.current = next;
+          setScrollOffset(next);
+          return;
+        }
+
         if (key.upArrow) {
           if (inputHistory.length > 0) {
             const newIndex = inputHistoryIndex < inputHistory.length - 1 ? inputHistoryIndex + 1 : inputHistoryIndex;
@@ -837,10 +857,15 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     );
   };
 
-  // Cap visible history to last 60 items so outputHeight never explodes.
-  // In alt-screen the viewport is fixed so old messages scroll off the top
-  // naturally — users can scroll up with the terminal's native scroll.
-  const visibleHistory = history.slice(-60);
+  // Sliding window: when scrolled up, show older messages.
+  // scrollOffset=0 means live bottom view; scrollOffset=N means scrolled N messages up.
+  const WINDOW = 80; // max messages rendered at once
+  const totalMessages = history.length;
+  const endIdx   = scrollOffset > 0 ? totalMessages - scrollOffset : totalMessages;
+  const startIdx = Math.max(0, endIdx - WINDOW);
+  const visibleHistory = history.slice(startIdx, endIdx);
+  const olderCount = startIdx; // messages above the window
+  const atBottom = scrollOffset === 0;
 
   return (
     // height={rows} + overflow="hidden" tells Ink's yoga layout that this Box
@@ -851,7 +876,19 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
       {/* Scrollable history region — flexGrow takes all available space */}
       <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingLeft={1} justifyContent="flex-end">
+        {/* "More above" indicator when scrolled into history */}
+        {olderCount > 0 && (
+          <Box paddingLeft={1}>
+            <Text color={theme.subtle} italic>↑ {olderCount} older message{olderCount !== 1 ? 's' : ''} — PgUp to scroll</Text>
+          </Box>
+        )}
         {visibleHistory.map(renderMsg)}
+        {/* "At bottom" indicator when scrolled up */}
+        {!atBottom && (
+          <Box paddingLeft={1}>
+            <Text color={theme.subtle} italic>↓ {scrollOffset} newer message{scrollOffset !== 1 ? 's' : ''} — PgDn to scroll down</Text>
+          </Box>
+        )}
       </Box>
 
       <Box flexShrink={0} flexDirection="column" paddingLeft={1}>
