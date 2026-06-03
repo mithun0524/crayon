@@ -44,6 +44,7 @@ interface ChatMessage {
   text: string;
   diff?: string;
   reasoning?: string;
+  isCommandOutput?: boolean;
   toolCall?: {
     name: string;
     args: any;
@@ -271,6 +272,11 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [availableModels, setAvailableModels] = useState<SelectOption[]>([]);
+  const [sessionId] = useState(() => {
+    return Math.random().toString(36).substring(2, 10).toUpperCase();
+  });
+  const sessionStartTimeRef = useRef(Date.now());
+  const apiDurationRef = useRef(0);
   // How many messages scrolled up from the bottom (0 = at bottom / live view)
   const [scrollOffset, setScrollOffset] = useState(0);
   const scrollOffsetRef = useRef(0);
@@ -436,6 +442,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     abortControllerRef.current = new AbortController();
     executionStartTime.current = Date.now();
 
+    const start = Date.now();
     try {
       const result = await agent.run(taskText, { skipHistory: mode === "run", signal: abortControllerRef.current.signal });
       if (abortedRef.current) return;
@@ -464,6 +471,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       if (mode === "run") {
         setTimeout(() => exit(), 1500);
       }
+    } finally {
+      apiDurationRef.current += Math.round((Date.now() - start) / 1000);
     }
   };
 
@@ -798,14 +807,23 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       const parts = trimmed.split(" ");
       const cmd = parts[0].toLowerCase();
       switch (cmd) {
-        case "/clear":
+        case "/clear": {
           if (agentRef.current) agentRef.current.clearHistory();
           setHistory([]);
           setSessionFiles([]);
           setTokens(0);
           setCost(0);
-          pushMessage({ sender: "system", text: "🧼 Conversation history cleared." });
+          let version = "0.1.0";
+          try {
+            const pkgPath = path.resolve(__dirname, "../../package.json");
+            if (existsSync(pkgPath)) {
+              const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
+              version = pkg.version || "0.1.0";
+            }
+          } catch {}
+          pushMessage({ sender: "system", text: `⬡ Crayon v${version} · Workspace: ${workspaceName}` });
           break;
+        }
         case "/undo": {
           if (!agentRef.current) {
             pushMessage({ sender: "system", text: "Agent not initialized." });
@@ -838,23 +856,40 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             const res = spawnSync("git", ["diff"], { cwd: workspaceRoot, encoding: "utf-8" });
             const output = res.stdout || "";
             if (output.trim()) {
-              pushMessage({ sender: "system", text: "Git Diff:", diff: output });
+              pushMessage({ sender: "system", text: "Git Diff (git diff HEAD):", diff: output, isCommandOutput: true });
             } else {
-              pushMessage({ sender: "system", text: "📭 No changes detected (clean working tree)." });
+              pushMessage({ sender: "system", text: "📭 No changes detected (clean working tree).", isCommandOutput: true });
             }
           } catch (e: any) {
-            pushMessage({ sender: "system", text: `Error running git diff: ${e.message || String(e)}` });
+            pushMessage({ sender: "system", text: `Error running git diff: ${e.message || String(e)}`, isCommandOutput: true });
           }
           break;
         }
         case "/status": {
+          let version = "0.1.0";
           try {
-            const res = spawnSync("git", ["status"], { cwd: workspaceRoot, encoding: "utf-8" });
-            const output = res.stdout || res.stderr || "Git status is empty.";
-            pushMessage({ sender: "system", text: `Git Status:\n${output.trim()}` });
-          } catch (e: any) {
-            pushMessage({ sender: "system", text: `Error running git status: ${e.message || String(e)}` });
-          }
+            const pkgPath = path.resolve(__dirname, "../../package.json");
+            if (existsSync(pkgPath)) {
+              const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
+              version = pkg.version || "0.1.0";
+            }
+          } catch {}
+
+          const text =
+            `\x1b[1mVersion:\x1b[22m         ${version}\n` +
+            `\x1b[1mSession name:\x1b[22m    Crayon Chat Session\n` +
+            `\x1b[1mSession ID:\x1b[22m      ${sessionId}\n` +
+            `\x1b[1mcwd:\x1b[22m             ${workspaceRoot}\n` +
+            `\x1b[1mModel:\x1b[22m           ${defaultModel || "default"}\n` +
+            `\x1b[1mProvider:\x1b[22m        ${currentProvider}\n` +
+            `\x1b[1mPermission:\x1b[22m      ${agentMode}\n` +
+            `\x1b[1mGit branch:\x1b[22m      ${gitBranch} (${gitDirtyCount} dirty files)`;
+            
+          pushMessage({
+            sender: "system",
+            text,
+            isCommandOutput: true
+          });
           break;
         }
         case "/exit":
@@ -871,14 +906,41 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             pushMessage({ sender: "system", text: `Invalid mode. Use: ask, auto-edit, plan, auto, bypass` });
           }
           break;
-        case "/cost":
-          pushMessage({ sender: "system", text: `Usage: ${tokens.toLocaleString()} tokens (~$${cost.toFixed(5)})` });
+        case "/cost": {
+          const costUSD = cost.toFixed(4);
+          const wallDuration = Math.round((Date.now() - sessionStartTimeRef.current) / 1000);
+          const apiDuration = apiDurationRef.current;
+          const filesCount = sessionFiles.length;
+          
+          const text = 
+            `\x1b[1mTotal cost:\x1b[22m            $${costUSD}\n` +
+            `\x1b[1mTotal duration (API):\x1b[22m  ${apiDuration}s\n` +
+            `\x1b[1mTotal duration (wall):\x1b[22m ${wallDuration}s\n` +
+            `\x1b[1mTotal code changes:\x1b[22m    ${filesCount} ${filesCount === 1 ? "file" : "files"} modified\n` +
+            `\x1b[1mUsage by model:\x1b[22m\n` +
+            `  \x1b[1m${(defaultModel || "default").padStart(21)}:\x1b[22m  ${tokens.toLocaleString()} tokens ($${costUSD})`;
+          
+          pushMessage({
+            sender: "system",
+            text,
+            isCommandOutput: true
+          });
           break;
+        }
         case "/files":
           if (sessionFiles.length > 0) {
-            pushMessage({ sender: "system", text: `Touched files this session:\n${sessionFiles.map((f) => `  - ${f}`).join("\n")}` });
+            const list = sessionFiles.map((f) => `  - ${f}`).join("\n");
+            pushMessage({
+              sender: "system",
+              text: `\x1b[1mTouched files this session:\x1b[22m\n${list}`,
+              isCommandOutput: true
+            });
           } else {
-            pushMessage({ sender: "system", text: "📭 No files modified in this session." });
+            pushMessage({
+              sender: "system",
+              text: "📭 No files modified in this session.",
+              isCommandOutput: true
+            });
           }
           break;
         case "/compact": {
@@ -918,21 +980,37 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           }
           const files = agentRef.current.getContextFiles();
           if (files.length === 0) {
-            pushMessage({ sender: "system", text: "▶ Easel (Active Context)\n  (Empty Context)" });
+            pushMessage({
+              sender: "system",
+              text: `\x1b[1m▶ Easel (Active Context)\x1b[22m\n  (Empty Context)`,
+              isCommandOutput: true
+            });
           } else {
             const relativeFiles = files.map((f: string) => path.relative(workspaceRoot, f));
-            pushMessage({ sender: "system", text: `▶ Easel (Active Context)\n${buildAsciiTree(relativeFiles)}` });
+            pushMessage({
+              sender: "system",
+              text: `\x1b[1m▶ Easel (Active Context)\x1b[22m\n${buildAsciiTree(relativeFiles)}`,
+              isCommandOutput: true
+            });
           }
           break;
         }
-        case "/help":
+        case "/help": {
+          const header = "\x1b[1mAvailable Commands:\x1b[22m";
+          const lines = AVAILABLE_COMMANDS.map(c => {
+            const cmdStr = `\x1b[1m${c.cmd.padEnd(10)}\x1b[22m`;
+            const descStr = `\x1b[2m${c.desc}\x1b[22m`;
+            return `  ${cmdStr} ${descStr}`;
+          }).join("\n");
           pushMessage({
             sender: "system",
-            text: `Available Commands:\n${AVAILABLE_COMMANDS.map(c => `  ${c.cmd.padEnd(10)} - ${c.desc}`).join("\n")}`
+            text: `${header}\n${lines}`,
+            isCommandOutput: true
           });
           break;
+        }
         default:
-          pushMessage({ sender: "system", text: `Unknown command "${cmd}". Supported: /clear, /mode, /cost, /files, /compact, /config, /help` });
+          pushMessage({ sender: "system", text: `Unknown command "${cmd}". Supported: ${AVAILABLE_COMMANDS.map(c => c.cmd).join(", ")}` });
       }
       return;
     }
@@ -1165,6 +1243,15 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             </Box>
             {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
             {detailsComponent}
+          </Box>
+        );
+      }
+
+      if (msg.isCommandOutput) {
+        return (
+          <Box key={msg.id} flexDirection="column" marginBottom={1}>
+            <Text color={theme.text}>{msg.text}</Text>
+            {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
           </Box>
         );
       }
