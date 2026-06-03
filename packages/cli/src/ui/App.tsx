@@ -27,7 +27,7 @@ import { DiffRenderer } from "./DiffRenderer.js";
 import { saveSession, loadSession } from "../session.js";
 import { theme } from "./theme.js";
 import { syntaxThemeDark } from "./syntaxTheme.js";
-import { useTerminalSize } from "./hooks/useTerminalSize.js";
+
 import { AgentProgress } from "./components/AgentProgress.js";
 import { ThinkingMessage } from "./messages/ThinkingMessage.js";
 
@@ -116,7 +116,6 @@ const POPULAR_MODELS = {
 
 export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) => {
   const { exit } = useApp();
-  const { columns } = useTerminalSize();
 
   const [gitBranch, setGitBranch] = useState("main");
   const [gitDirtyCount, setGitDirtyCount] = useState(0);
