@@ -33,7 +33,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   const kTokens = tokens > 1000 ? `${(tokens / 1000).toFixed(1)}k` : tokens;
 
   return (
-    <Box marginTop={1} paddingLeft={1} flexDirection="row" alignItems="center">
+    <Box marginTop={1} paddingLeft={1} flexDirection="row" alignItems="center" flexShrink={0}>
       <Text color={theme.brand} bold>⑆ </Text>
       <Text color={theme.brand}>{gitBranch || "none"}</Text>
       <Text color={theme.warning}>{dirtyStr}</Text>

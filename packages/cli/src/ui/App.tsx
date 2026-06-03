@@ -1028,6 +1028,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
 
     if (msg.text.startsWith("⬡ Crayon v")) {
+      const hasUserMessages = history.some((m) => m.sender === "user");
+      if (hasUserMessages) return null;
+
       const versionMatch = msg.text.match(/v([0-9.]+)/);
       const version = versionMatch ? versionMatch[1] : "0.1.0";
       const tips = [
@@ -1274,12 +1277,12 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         )}
       </Box>
 
-      <Box marginTop={1} paddingLeft={1}>
+      <Box marginTop={1} paddingLeft={1} flexShrink={0}>
         <Text color={theme.border}>{"─".repeat(40)}</Text>
       </Box>
 
       {!approvalRequest && mode === "chat" && (
-        <Box flexDirection="column">
+        <Box flexDirection="column" flexShrink={0}>
           {isCommandPaletteOpen && (
             <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
               <Text color={theme.success} bold>Command Palette</Text>
