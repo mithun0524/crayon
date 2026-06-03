@@ -44,6 +44,13 @@ interface ChatMessage {
   text: string;
   diff?: string;
   reasoning?: string;
+  toolCall?: {
+    name: string;
+    args: any;
+    result?: any;
+    status: "running" | "success" | "error";
+    error?: string;
+  };
 }
 
 const AVAILABLE_COMMANDS = [
@@ -114,6 +121,95 @@ const POPULAR_MODELS = {
   ]
 };
 
+const getToolCallInitialText = (name: string, args: any) => {
+  switch (name) {
+    case "read_file":
+      return `⏳ Reading ${args?.path || ""}`;
+    case "edit_file":
+    case "edit_ast":
+      return `⏳ Editing ${args?.path || ""}`;
+    case "write_file":
+      return `⏳ Creating ${args?.path || ""}`;
+    case "overwrite_file":
+      return `⏳ Overwriting ${args?.path || ""}`;
+    case "grep":
+      return `⏳ Searching for "${args?.pattern || ""}"`;
+    case "search_codebase":
+      return `⏳ Searching codebase for "${args?.query || ""}"`;
+    case "terminal":
+      return `⏳ Running command: ${args?.command || ""}`;
+    case "list_directory":
+      return `⏳ Listing directory: ${args?.path || "."}`;
+    case "fetch_url":
+      return `⏳ Fetching URL: ${args?.url || ""}`;
+    case "delete_file":
+      return `⏳ Deleting ${args?.path || ""}`;
+    case "rename_file":
+      return `⏳ Renaming ${args?.old_path || ""} -> ${args?.new_path || ""}`;
+    case "git_status":
+      return `⏳ Getting Git status`;
+    case "git_diff":
+      return `⏳ Getting Git diff`;
+    case "git_commit":
+      return `⏳ Committing changes`;
+    default:
+      return `⏳ Running tool ${name}`;
+  }
+};
+
+const getToolCallCompletedText = (name: string, args: any, result: any, isError: boolean) => {
+  const icon = isError ? "✗" : "✓";
+  if (isError) {
+    const errMsg = result?.error || "Error";
+    return `${icon} Failed tool ${name}: ${errMsg}`;
+  }
+  
+  switch (name) {
+    case "read_file": {
+      const lineCount = result?.content ? result.content.split("\n").length : 0;
+      const byteCount = result?.content ? Buffer.byteLength(result.content, "utf-8") : 0;
+      return `${icon} Read ${args?.path || ""} (${lineCount} lines, ${byteCount} bytes)`;
+    }
+    case "edit_file":
+    case "edit_ast":
+      return `${icon} Edited ${args?.path || ""}`;
+    case "write_file":
+      return `${icon} Created ${args?.path || ""}`;
+    case "overwrite_file":
+      return `${icon} Overwrote ${args?.path || ""}`;
+    case "grep": {
+      const matchesCount = result?.matches?.length || 0;
+      return `${icon} Searched for "${args?.pattern || ""}" (${matchesCount} matches)`;
+    }
+    case "search_codebase": {
+      const matchesCount = result?.matches?.length || 0;
+      return `${icon} Searched codebase for "${args?.query || ""}" (${matchesCount} matches)`;
+    }
+    case "terminal":
+      return `${icon} Ran command: ${args?.command || ""}`;
+    case "list_directory": {
+      const entryCount = result?.entries?.length || 0;
+      return `${icon} Listed directory: ${args?.path || "."} (${entryCount} entries)`;
+    }
+    case "fetch_url": {
+      const byteCount = result?.content ? Buffer.byteLength(result.content, "utf-8") : 0;
+      return `${icon} Fetched URL: ${args?.url || ""} (${byteCount} bytes)`;
+    }
+    case "delete_file":
+      return `${icon} Deleted ${args?.path || ""}`;
+    case "rename_file":
+      return `${icon} Renamed ${args?.old_path || ""} -> ${args?.new_path || ""}`;
+    case "git_status":
+      return `${icon} Got Git status (branch: ${result?.branch || "unknown"})`;
+    case "git_diff":
+      return `${icon} Got Git diff`;
+    case "git_commit":
+      return `${icon} Committed with message: ${args?.message || ""}`;
+    default:
+      return `${icon} Ran tool ${name}`;
+  }
+};
+
 export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) => {
   const { exit } = useApp();
   const { rows } = useTerminalSize();
@@ -143,9 +239,20 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [streamingReasoning, setStreamingReasoning] = useState("");
   // We keep the state for triggering re-renders (used by getToolDisplay)
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
-  const [, setActiveToolArgs] = useState<any>(null); // State kept for potential future use, but ignored to fix TS6133
+  const [activeToolArgs, setActiveToolArgs] = useState<any>(null);
   const activeToolNameRef = useRef<string | null>(null);
   const activeToolArgsRef = useRef<any>(null);
+  const activeToolMessageIdRef = useRef<string | null>(null);
+
+  const updateMessage = (id: string, updates: Partial<Omit<ChatMessage, "id">>) => {
+    setHistory((prev) => {
+      const next = prev.map((msg) => (msg.id === id ? { ...msg, ...updates } : msg));
+      if (agentRef.current) {
+        saveSession(workspaceRoot, agentRef.current.getHistory(), next).catch(() => {});
+      }
+      return next;
+    });
+  };
   const [tokens, setTokens] = useState(0);
   const [cost, setCost] = useState(0);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -378,6 +485,29 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         setStreamingText("");
         if (event.name !== "thinking") {
           setCurrentStepIndex((prev) => Math.min(prev + 1, Math.max(0, activePlanRef.current.length - 1)));
+          // Push initial running message into history
+          historyCountRef.current += 1;
+          const msgId = String(historyCountRef.current);
+          activeToolMessageIdRef.current = msgId;
+          const initialText = getToolCallInitialText(event.name, event.args);
+          setHistory((prev) => {
+            const next = [...prev, {
+              id: msgId,
+              sender: "system" as const,
+              text: initialText,
+              toolCall: {
+                name: event.name,
+                args: event.args,
+                status: "running" as const
+              }
+            }];
+            if (agentRef.current) {
+              saveSession(workspaceRoot, agentRef.current.getHistory(), next).catch(() => {});
+            }
+            return next;
+          });
+          scrollOffsetRef.current = 0;
+          setScrollOffset(0);
         } else {
           activeToolArgsRef.current = { status: "Thinking..." };
           setActiveToolArgs({ status: "Thinking..." });
@@ -387,18 +517,41 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         // Read from refs to avoid stale closure — state may not have updated yet
         const toolName = activeToolNameRef.current;
         const toolArgs = activeToolArgsRef.current || {};
+        const toolResult = event.result as any;
+        const isError = toolResult && (toolResult.success === false || toolResult.error);
+        const errorText = toolResult?.error || "";
+
         if (toolName && toolName !== "thinking") {
-          let activityText = `✓ Ran tool ${toolName}`;
-          if (toolName === "read_file") activityText = `✓ Reading ${toolArgs.path}`;
-          else if (toolName === "edit_file" || toolName === "edit_ast") activityText = `✓ Edited ${toolArgs.path}`;
-          else if (toolName === "write_file") activityText = `✓ Created ${toolArgs.path}`;
-          else if (toolName === "grep") activityText = `✓ Searched for "${toolArgs.pattern}"`;
-          else if (toolName === "search_codebase") activityText = `✓ Semantic search "${toolArgs.query}"`;
-          else if (toolName === "terminal") activityText = `✓ Ran command: ${toolArgs.command}`;
-          pushMessage({ sender: "system", text: activityText });
+          const completedText = getToolCallCompletedText(toolName, toolArgs, toolResult, !!isError);
+          
+          if (activeToolMessageIdRef.current) {
+            updateMessage(activeToolMessageIdRef.current, {
+              text: completedText,
+              toolCall: {
+                name: toolName,
+                args: toolArgs,
+                result: toolResult,
+                status: isError ? "error" : "success",
+                error: errorText
+              }
+            });
+          } else {
+            pushMessage({
+              sender: "system",
+              text: completedText,
+              toolCall: {
+                name: toolName,
+                args: toolArgs,
+                result: toolResult,
+                status: isError ? "error" : "success",
+                error: errorText
+              }
+            });
+          }
         }
         activeToolNameRef.current = null;
         activeToolArgsRef.current = null;
+        activeToolMessageIdRef.current = null;
         setActiveToolName(null);
         setActiveToolArgs(null);
         break;
@@ -415,7 +568,11 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           setGitBranch(git.branch);
           setGitDirtyCount(git.dirtyCount);
         }, 0);
-        pushMessage({ sender: "system", text: `Diff showing changes in ${event.path}:`, diff: event.diff });
+        if (activeToolMessageIdRef.current) {
+          updateMessage(activeToolMessageIdRef.current, { diff: event.diff });
+        } else {
+          pushMessage({ sender: "system", text: `Diff showing changes in ${event.path}:`, diff: event.diff });
+        }
         break;
       case "usage":
         setTokens((prev) => prev + event.totalTokens);
@@ -730,19 +887,37 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
   }, [isExecuting, queuedTasks]);
 
+  const truncate = (str: string, maxLen: number = 50) => {
+    if (!str) return "";
+    return str.length > maxLen ? str.slice(0, maxLen - 3) + "..." : str;
+  };
+
   const getToolDisplay = () => {
     if (!activeToolName || activeToolName === "thinking") return "Thinking...";
     
-    if (activeToolName === "read_file" || activeToolName === "view_file" || activeToolName === "list_dir") {
-      return "▤ Inspecting canvas";
-    } else if (activeToolName === "run_command") {
-      return "◧ Mixing colors";
-    } else if (activeToolName === "search_web" || activeToolName === "grep_search") {
-      return "⌕ Looking for inspiration";
-    } else if (activeToolName === "write_to_file" || activeToolName === "replace_file_content" || activeToolName === "multi_replace_file_content") {
-      return "✎ Sketching details";
+    const args = activeToolArgs || {};
+    const pathBase = args.path ? path.basename(args.path) : "";
+    const argStr = args.command || args.pattern || args.query || args.Query || args.CommandLine || pathBase || "";
+    const suffix = argStr ? ` · ${truncate(argStr)}` : "";
+
+    if (activeToolName === "read_file" || activeToolName === "view_file" || activeToolName === "list_directory" || activeToolName === "list_dir") {
+      return `▤ Inspecting canvas${suffix}`;
+    } else if (activeToolName === "terminal" || activeToolName === "run_command") {
+      return `◧ Mixing colors${suffix}`;
+    } else if (activeToolName === "search_web" || activeToolName === "grep" || activeToolName === "grep_search" || activeToolName === "search_codebase") {
+      return `⌕ Looking for inspiration${suffix}`;
+    } else if (
+      activeToolName === "write_file" ||
+      activeToolName === "write_to_file" ||
+      activeToolName === "edit_file" ||
+      activeToolName === "replace_file_content" ||
+      activeToolName === "multi_replace_file_content" ||
+      activeToolName === "edit_ast" ||
+      activeToolName === "overwrite_file"
+    ) {
+      return `✎ Sketching details${suffix}`;
     }
-    return `▶ Running ${activeToolName}`;
+    return `▶ Running ${activeToolName}${suffix}`;
   };
 
   const renderMarkdown = (text: string, isStreaming: boolean = false) => {
@@ -780,6 +955,61 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       } catch {}
       return <Text key={index}>{mdText}</Text>;
     });
+  };
+
+
+  const renderTerminalOutput = (stdout?: string, stderr?: string) => {
+    if (!stdout && !stderr) return null;
+    const lines: string[] = [];
+    if (stdout) {
+      const clean = stdout.trim();
+      if (clean) lines.push(clean);
+    }
+    if (stderr) {
+      const clean = stderr.trim();
+      if (clean) lines.push(`Error Output:\n${clean}`);
+    }
+    if (lines.length === 0) return null;
+
+    const fullText = lines.join("\n");
+    const allLines = fullText.split("\n");
+    const limit = 15;
+    const truncated = allLines.slice(0, limit).join("\n");
+    const hasMore = allLines.length > limit;
+
+    return (
+      <Box key="term-out" flexDirection="column" marginY={1} paddingX={1} borderStyle="round" borderColor={theme.border} width="100%">
+        <Text color={theme.subtle} dimColor>stdout/stderr:</Text>
+        <Text>{truncated}</Text>
+        {hasMore && (
+          <Text color={theme.subtle} italic dimColor>
+            ... (truncated {allLines.length - limit} lines)
+          </Text>
+        )}
+      </Box>
+    );
+  };
+
+  const renderMatches = (matches?: any[]) => {
+    if (!matches || !Array.isArray(matches) || matches.length === 0) return null;
+    const limit = 5;
+    const displayed = matches.slice(0, limit);
+    const hasMore = matches.length > limit;
+
+    return (
+      <Box key="matches-out" flexDirection="column" marginY={1} paddingLeft={1} width="100%">
+        {displayed.map((m: any, i: number) => (
+          <Text key={i} color={theme.text}>
+            <Text color={theme.brand}>{m.path}:{m.line}</Text> <Text color={theme.subtle}>{m.snippet?.trim()}</Text>
+          </Text>
+        ))}
+        {hasMore && (
+          <Text color={theme.subtle} italic>
+            ... and {matches.length - limit} more matches
+          </Text>
+        )}
+      </Box>
+    );
   };
 
   const renderMsg = (msg: ChatMessage) => {
@@ -832,6 +1062,39 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           </Box>
         );
       }
+
+      if (msg.toolCall) {
+        const tc = msg.toolCall;
+        const isRunning = tc.status === "running";
+        const isError = tc.status === "error";
+        
+        const icon = isRunning ? "⏳" : isError ? "✗" : "✓";
+        const iconColor = isRunning ? theme.brand : isError ? theme.warning : theme.success;
+        const textColor = isRunning ? theme.subtle : isError ? theme.warning : theme.text;
+        
+        // Compute details to render below
+        let detailsComponent: React.ReactNode = null;
+        if (!isRunning && tc.result) {
+          const res = tc.result;
+          if (tc.name === "terminal") {
+            detailsComponent = renderTerminalOutput(res.stdout, res.stderr);
+          } else if (tc.name === "grep" || tc.name === "search_codebase") {
+            detailsComponent = renderMatches(res.matches);
+          }
+        }
+        
+        return (
+          <Box key={msg.id} flexDirection="column" marginBottom={1}>
+            <Box flexDirection="row">
+              <Text color={iconColor} bold>{icon} </Text>
+              <Text color={textColor}>{msg.text}</Text>
+            </Box>
+            {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
+            {detailsComponent}
+          </Box>
+        );
+      }
+
       return (
         <Box key={msg.id} flexDirection="column" marginBottom={1}>
           <Text color={theme.subtle} italic>{msg.text}</Text>
@@ -849,7 +1112,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           ))}
           <Text color={theme.brand}>: </Text>
         </Text>
-        {msg.reasoning && <ThinkingMessage thinking={msg.reasoning} />}
+        {msg.reasoning && <ThinkingMessage thinking={msg.reasoning} isCollapsed={true} />}
         <Box flexDirection="column">
           {renderMarkdown(msg.text)}
         </Box>
@@ -912,7 +1175,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                   <Text color={theme.brand}>: </Text>
                 </Text>
                 {streamingReasoning && (
-                  <ThinkingMessage thinking={streamingReasoning} />
+                  <ThinkingMessage thinking={streamingReasoning} isCollapsed={true} />
                 )}
                 <Box flexDirection="column">
                   {renderMarkdown(streamingText, true)}
