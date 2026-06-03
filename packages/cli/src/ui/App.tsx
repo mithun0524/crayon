@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
-import { Box, Text, useInput, useApp, Static } from "ink";
+import React, { useState, useEffect, useRef, useInsertionEffect } from "react";
+import { Box, Text, useInput, useApp } from "ink";
 import TextInput from "ink-text-input";
 import { SearchableSelect, SelectOption } from "./components/SearchableSelect.js";
 import path from "node:path";
@@ -116,7 +116,20 @@ const POPULAR_MODELS = {
 
 export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) => {
   const { exit } = useApp();
-  useTerminalSize();
+  const { rows } = useTerminalSize();
+
+  // Enter alternate screen buffer so Ink constrains rendering to the viewport.
+  // useInsertionEffect fires BEFORE Ink's first onRender, so the alt-screen
+  // escape reaches the terminal before any content does (same pattern as
+  // claude-code's AlternateScreen.tsx).
+  useInsertionEffect(() => {
+    const ENTER = '\x1b[?1049h';
+    const EXIT  = '\x1b[?1049l';
+    process.stdout.write(ENTER + '\x1b[2J\x1b[H'); // enter + clear + home cursor
+    return () => {
+      process.stdout.write(EXIT);
+    };
+  }, []);
 
   const [gitBranch, setGitBranch] = useState("main");
   const [gitDirtyCount, setGitDirtyCount] = useState(0);
@@ -749,86 +762,97 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     });
   };
 
+  const renderMsg = (msg: ChatMessage) => {
+    const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
+
+    if (msg.text.startsWith("⬡ Crayon v")) {
+      const versionMatch = msg.text.match(/v([0-9.]+)/);
+      const version = versionMatch ? versionMatch[1] : "0.1.0";
+      const tips = [
+        "Tip: Hit Ctrl+E to open your editor for multi-line prompts.",
+        "Tip: Hit Ctrl+T to quickly cycle permission modes.",
+        "Tip: Type / to open the Command Palette.",
+        "Tip: Crayon works best with a detailed system prompt."
+      ];
+      const randomTip = tips[parseInt(msg.id) % tips.length] || tips[0];
+      return (
+        <Box key={msg.id} flexDirection="column" marginBottom={1} borderStyle="round" borderColor={theme.brand} paddingX={1}>
+          <Text color={theme.brand} bold>✶ Welcome to Crayon Code v{version}!</Text>
+          <Box marginTop={1} flexDirection="column">
+            <Text color={theme.subtle} italic>/help for help, /config for settings</Text>
+            <Text color={theme.text}>cwd: {workspaceRoot}</Text>
+          </Box>
+          <Box marginTop={1}>
+            <Text color={theme.subtle}>※ {randomTip}</Text>
+          </Box>
+        </Box>
+      );
+    }
+
+    if (msg.sender === "user") {
+      return (
+        <Box key={msg.id} marginBottom={1}>
+          <Text color={theme.subtle} bold>❯ You: </Text>
+          <Text color={theme.text}>{msg.text}</Text>
+        </Box>
+      );
+    }
+
+    if (msg.sender === "system") {
+      if (msg.text.startsWith("⬡ Crayon v")) {
+        const [crayonPart, restPart] = msg.text.split(" · Workspace: ");
+        const version = crayonPart.split(" v")[1];
+        return (
+          <Box key={msg.id} flexDirection="row" marginBottom={1}>
+            <Text color={theme.subtle}>⬡ </Text>
+            {"Crayon".split("").map((char, i) => (
+              <Text key={i} color={crayonColors[i % crayonColors.length]} bold>{char}</Text>
+            ))}
+            <Text color={theme.subtle}> v{version} · Workspace: {restPart}</Text>
+          </Box>
+        );
+      }
+      return (
+        <Box key={msg.id} flexDirection="column" marginBottom={1}>
+          <Text color={theme.subtle} italic>{msg.text}</Text>
+          {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
+        </Box>
+      );
+    }
+
+    // crayon sender
+    return (
+      <Box key={msg.id} flexDirection="column" marginBottom={1}>
+        <Text bold>
+          {"Crayon".split("").map((char, i) => (
+            <Text key={i} color={crayonColors[i % crayonColors.length]}>{char}</Text>
+          ))}
+          <Text color={theme.brand}>: </Text>
+        </Text>
+        {msg.reasoning && <ThinkingMessage thinking={msg.reasoning} />}
+        <Box flexDirection="column">
+          {renderMarkdown(msg.text)}
+        </Box>
+      </Box>
+    );
+  };
+
+  // Cap visible history to last 60 items so outputHeight never explodes.
+  // In alt-screen the viewport is fixed so old messages scroll off the top
+  // naturally — users can scroll up with the terminal's native scroll.
+  const visibleHistory = history.slice(-60);
+
   return (
-    <Box flexDirection="column" width="100%">
-      <Static items={history}>
-        {(msg) => {
-          if (msg.text.startsWith("⬡ Crayon v")) {
-            const versionMatch = msg.text.match(/v([0-9.]+)/);
-            const version = versionMatch ? versionMatch[1] : "0.1.0";
-            
-            const tips = [
-              "Tip: Hit Ctrl+E to open your editor for multi-line prompts.",
-              "Tip: Hit Ctrl+T to quickly cycle permission modes.",
-              "Tip: Type / to open the Command Palette.",
-              "Tip: Crayon works best with a detailed system prompt."
-            ];
-            // Use msg.id as a stable seed so it doesn't blink on re-renders
-            const randomTip = tips[parseInt(msg.id) % tips.length] || tips[0];
+    // height={rows} + overflow="hidden" tells Ink's yoga layout that this Box
+    // is exactly the viewport. Ink will never produce outputHeight >= rows,
+    // so the clearTerminal fallback in ink.js never fires.
+    // flexDirection="column" makes the footer (StatusBar) stick to the bottom.
+    <Box flexDirection="column" height={rows || 24} width="100%" overflow="hidden">
 
-            return (
-              <Box key={msg.id} flexDirection="column" marginBottom={1} borderStyle="round" borderColor={theme.brand} paddingX={1}>
-                <Text color={theme.brand} bold>✶ Welcome to Crayon Code v{version}!</Text>
-                <Box marginTop={1} flexDirection="column">
-                  <Text color={theme.subtle} italic>/help for help, /config for settings</Text>
-                  <Text color={theme.text}>cwd: {workspaceRoot}</Text>
-                </Box>
-                <Box marginTop={1}>
-                  <Text color={theme.subtle}>※ {randomTip}</Text>
-                </Box>
-              </Box>
-            );
-          }
-
-          if (msg.sender === "user") {
-            return (
-              <Box key={msg.id} marginBottom={1}>
-                <Text color={theme.subtle} bold>❯ You: </Text>
-                <Text color={theme.text}>{msg.text}</Text>
-              </Box>
-            );
-          } else if (msg.sender === "system") {
-            if (msg.text.startsWith("⬡ Crayon v")) {
-              const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
-              const [crayonPart, restPart] = msg.text.split(" · Workspace: ");
-              const version = crayonPart.split(" v")[1];
-              return (
-                <Box key={msg.id} flexDirection="row" marginBottom={1}>
-                  <Text color={theme.subtle}>⬡ </Text>
-                  {"Crayon".split("").map((char, i) => (
-                    <Text key={i} color={crayonColors[i % crayonColors.length]} bold>{char}</Text>
-                  ))}
-                  <Text color={theme.subtle}> v{version} · Workspace: {restPart}</Text>
-                </Box>
-              );
-            }
-            return (
-              <Box key={msg.id} flexDirection="column" marginBottom={1}>
-                <Text color={theme.subtle} italic>{msg.text}</Text>
-                {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
-              </Box>
-            );
-          } else {
-            const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
-            return (
-              <Box key={msg.id} flexDirection="column" marginBottom={1}>
-                <Text bold>
-                  {"Crayon".split("").map((char, i) => (
-                    <Text key={i} color={crayonColors[i % crayonColors.length]}>{char}</Text>
-                  ))}
-                  <Text color={theme.brand}>: </Text>
-                </Text>
-                {msg.reasoning && (
-                  <ThinkingMessage thinking={msg.reasoning} />
-                )}
-                <Box flexDirection="column">
-                  {renderMarkdown(msg.text)}
-                </Box>
-              </Box>
-            );
-          }
-        }}
-      </Static>
+      {/* Scrollable history region — flexGrow takes all available space */}
+      <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingLeft={1}>
+        {visibleHistory.map(renderMsg)}
+      </Box>
 
       <Box flexShrink={0} flexDirection="column" paddingLeft={1}>
         {activePlan.length > 0 && currentStepIndex < activePlan.length && (

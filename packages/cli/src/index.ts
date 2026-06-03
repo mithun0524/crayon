@@ -148,7 +148,6 @@ program
 
 
     try {
-      process.stdout.write('\x1b[?1049h'); // Enter alternate screen buffer
       const { waitUntilExit } = render(React.createElement(App, { 
         mode: "chat", 
         resume: options.resume,
@@ -156,11 +155,8 @@ program
       }));
       await waitUntilExit();
     } catch (err) {
-      process.stdout.write('\x1b[?1049l'); // Leave alternate screen buffer on error
       console.error(chalk.red(`TUI Error: ${err instanceof Error ? err.message : String(err)}`));
       await exitCLI(1);
-    } finally {
-      process.stdout.write('\x1b[?1049l'); // Leave alternate screen buffer
     }
   });
 
