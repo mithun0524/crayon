@@ -116,7 +116,7 @@ const POPULAR_MODELS = {
 
 export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) => {
   const { exit } = useApp();
-  const { columns, rows } = useTerminalSize();
+  useTerminalSize();
 
   const [gitBranch, setGitBranch] = useState("main");
   const [gitDirtyCount, setGitDirtyCount] = useState(0);
