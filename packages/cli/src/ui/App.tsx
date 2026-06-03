@@ -55,6 +55,9 @@ interface ChatMessage {
 
 const AVAILABLE_COMMANDS = [
   { cmd: "/clear", desc: "Clear conversation history" },
+  { cmd: "/undo", desc: "Rewind conversation by 1 turn" },
+  { cmd: "/diff", desc: "Show git diff of changes" },
+  { cmd: "/status", desc: "Show git status of workspace" },
   { cmd: "/mode", desc: "Change permission mode", usage: "ask | auto-edit | plan | auto | bypass" },
   { cmd: "/cost", desc: "View token usage and cost" },
   { cmd: "/files", desc: "View modified files this session" },
@@ -62,6 +65,7 @@ const AVAILABLE_COMMANDS = [
   { cmd: "/model", desc: "Change the AI model", usage: "[model-name]" },
   { cmd: "/config", desc: "Change provider, model, or theme" },
   { cmd: "/easel", desc: "View the active agent context (files read)" },
+  { cmd: "/exit", desc: "Exit Crayon" },
   { cmd: "/help", desc: "Show help information" }
 ];
 
@@ -801,6 +805,61 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           setTokens(0);
           setCost(0);
           pushMessage({ sender: "system", text: "🧼 Conversation history cleared." });
+          break;
+        case "/undo": {
+          if (!agentRef.current) {
+            pushMessage({ sender: "system", text: "Agent not initialized." });
+            break;
+          }
+          const agentHistory = agentRef.current.getHistory();
+          const lastUserIdxAgent = [...agentHistory].reverse().findIndex(m => m.role === "user");
+          
+          if (lastUserIdxAgent !== -1) {
+            const actualIdx = agentHistory.length - 1 - lastUserIdxAgent;
+            const newAgentHistory = agentHistory.slice(0, actualIdx);
+            agentRef.current.setHistory(newAgentHistory);
+          }
+
+          // Update UI history
+          const lastUserIdxUI = [...history].reverse().findIndex(m => m.sender === "user");
+          if (lastUserIdxUI !== -1) {
+            const actualIdx = history.length - 1 - lastUserIdxUI;
+            const newUIHistory = history.slice(0, actualIdx);
+            setHistory(newUIHistory);
+            saveSession(workspaceRoot, agentRef.current.getHistory(), newUIHistory).catch(() => {});
+            pushMessage({ sender: "system", text: "↩️ Last turn undone. Ready for your input." });
+          } else {
+            pushMessage({ sender: "system", text: "📭 No messages to undo." });
+          }
+          break;
+        }
+        case "/diff": {
+          try {
+            const res = spawnSync("git", ["diff"], { cwd: workspaceRoot, encoding: "utf-8" });
+            const output = res.stdout || "";
+            if (output.trim()) {
+              pushMessage({ sender: "system", text: "Git Diff:", diff: output });
+            } else {
+              pushMessage({ sender: "system", text: "📭 No changes detected (clean working tree)." });
+            }
+          } catch (e: any) {
+            pushMessage({ sender: "system", text: `Error running git diff: ${e.message || String(e)}` });
+          }
+          break;
+        }
+        case "/status": {
+          try {
+            const res = spawnSync("git", ["status"], { cwd: workspaceRoot, encoding: "utf-8" });
+            const output = res.stdout || res.stderr || "Git status is empty.";
+            pushMessage({ sender: "system", text: `Git Status:\n${output.trim()}` });
+          } catch (e: any) {
+            pushMessage({ sender: "system", text: `Error running git status: ${e.message || String(e)}` });
+          }
+          break;
+        }
+        case "/exit":
+        case "/quit":
+          exit();
           break;
         case "/mode":
           const m = parts[1];
