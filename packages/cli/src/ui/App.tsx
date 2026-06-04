@@ -1503,6 +1503,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         cost={cost}
         isExecuting={isExecuting}
         modelName={defaultModel}
+        scrollOffset={scrollOffset}
+        historyLength={history.length}
       />
     </Box>
   );

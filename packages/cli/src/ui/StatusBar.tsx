@@ -10,6 +10,8 @@ interface StatusBarProps {
   cost: number;
   isExecuting: boolean;
   modelName?: string;
+  scrollOffset: number;
+  historyLength: number;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -19,6 +21,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   cost,
   isExecuting,
   modelName,
+  scrollOffset,
+  historyLength,
 }) => {
   const dirtyStr = gitDirtyCount > 0 ? ` (+${gitDirtyCount})` : "";
   const costStr = cost.toFixed(4);
@@ -54,6 +58,17 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         <>
           <Text color={theme.subtle} dimColor>  •  </Text>
           <Text color={theme.error} bold>[esc] Stop Agent</Text>
+        </>
+      )}
+
+      {historyLength > 0 && (
+        <>
+          <Text color={theme.subtle} dimColor>  •  </Text>
+          {scrollOffset > 0 ? (
+            <Text color={theme.warning} bold>⇳ Scrolled: {scrollOffset} [PgDn]/[Shift+↓] to bottom</Text>
+          ) : (
+            <Text color={theme.subtle} dimColor>⇳ [PgUp]/[Shift+↑] to scroll</Text>
+          )}
         </>
       )}
     </Box>
