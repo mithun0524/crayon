@@ -1,6 +1,6 @@
 {
   "name": "crayon-indexer",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Codebase indexing and semantic search package for Crayon Terminal AI assistant.",
   "author": "mithun0524",
   "license": "MIT",
