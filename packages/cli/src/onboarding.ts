@@ -78,8 +78,15 @@ export async function runOnboardingFlow(): Promise<void> {
         choices: localModels.map(m => ({ name: m, value: m })),
       });
     } else {
-      console.log(chalk.yellow("\n⚠️ Could not detect running Ollama service or no models found on http://localhost:11434."));
-      console.log(chalk.dim("Make sure Ollama is running and you have pulled a model via `ollama run qwen2.5-coder`.\n"));
+      console.log(chalk.yellow("\n⚠️ Could not detect a running Ollama service on http://localhost:11434."));
+      console.log(chalk.cyan("\nHow to install and run Ollama:"));
+      console.log("  1. Download Ollama:");
+      console.log(chalk.dim("     - Windows/macOS: Go to https://ollama.com"));
+      console.log(chalk.dim("     - Linux: Run 'curl -fsSL https://ollama.com/install.sh | sh'"));
+      console.log("  2. Pull a recommended coding model in your terminal:");
+      console.log(chalk.green("     ollama run qwen2.5-coder:7b"));
+      console.log("  3. Make sure the Ollama application is active and running.\n");
+      
       model = await input({
         message: 'Enter the name of the Ollama model you wish to use:',
         default: 'qwen2.5-coder:7b',

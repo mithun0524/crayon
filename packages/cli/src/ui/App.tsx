@@ -994,16 +994,26 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               fetch("http://localhost:11434/api/tags")
                 .then(res => res.json())
                 .then((data: any) => {
-                  if (data && data.models && Array.isArray(data.models)) {
+                  if (data && data.models && Array.isArray(data.models) && data.models.length > 0) {
                     const fetchedModels = data.models.map((m: any) => ({
                       label: m.name,
                       value: m.name,
                       description: m.size ? `${(m.size / (1024 * 1024 * 1024)).toFixed(2)} GB` : "Local model"
                     }));
                     setAvailableModels(fetchedModels);
+                  } else {
+                    pushMessage({
+                      sender: "system",
+                      text: "⚠️ Ollama is active on http://localhost:11434 but no local models were found. Run `ollama run qwen2.5-coder:7b` to pull a model."
+                    });
                   }
                 })
-                .catch(() => {});
+                .catch(() => {
+                  pushMessage({
+                    sender: "system",
+                    text: "⚠️ Could not connect to Ollama. Make sure Ollama is running, or download it from https://ollama.com."
+                  });
+                });
             }
             setIsModelSelectorOpen(true);
           }
