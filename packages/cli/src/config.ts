@@ -5,7 +5,7 @@ import os from "node:os";
 
 export interface CrayonConfig {
   defaultModel?: string;
-  provider?: "openrouter" | "anthropic" | "openai" | "google";
+  provider?: "openrouter" | "anthropic" | "openai" | "google" | "ollama";
   anthropicApiKey?: string;
   openaiApiKey?: string;
   openrouterApiKey?: string;
@@ -83,5 +83,6 @@ export function getConfigPath(): string {
 }
 
 export function hasApiKey(config: CrayonConfig): boolean {
+  if (config.provider === "ollama") return true;
   return !!(config.anthropicApiKey || config.openaiApiKey || config.openrouterApiKey || config.googleApiKey);
 }

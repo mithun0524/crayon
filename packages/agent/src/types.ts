@@ -25,7 +25,7 @@ export type PermissionMode = "ask" | "auto-edit" | "plan" | "auto" | "bypass";
 export interface AgentConfig {
   workspaceRoot: string;
   model?: string;
-  provider?: "openrouter" | "anthropic" | "openai" | "google";
+  provider?: "openrouter" | "anthropic" | "openai" | "google" | "ollama";
   anthropicApiKey?: string;
   openaiApiKey?: string;
   openrouterApiKey?: string;

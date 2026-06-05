@@ -2,7 +2,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 
-export type ModelProvider = "openrouter" | "anthropic" | "openai" | "google";
+export type ModelProvider = "openrouter" | "anthropic" | "openai" | "google" | "ollama";
 
 export interface ModelConfig {
   model?: string;
@@ -18,6 +18,7 @@ const DEFAULT_OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 
 function resolveProvider(config: ModelConfig, modelId: string): ModelProvider {
   if (config.provider) return config.provider as ModelProvider;
+  if (modelId.startsWith("ollama/")) return "ollama";
   if (config.googleApiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
     if (modelId.startsWith("gemini")) return "google";
   }
@@ -53,6 +54,14 @@ export function resolveModel(config: ModelConfig): LanguageModel {
   const provider = resolveProvider(config, modelId);
 
   switch (provider) {
+    case "ollama": {
+      const ollama = createOpenAI({
+        baseURL: "http://localhost:11434/v1",
+        apiKey: "ollama",
+      });
+      const cleanModelId = modelId.startsWith("ollama/") ? modelId.slice(7) : modelId;
+      return ollama(cleanModelId);
+    }
     case "google": {
       const apiKey = config.googleApiKey ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? process.env.GOOGLE_GENERATIVE_AI_API_KEY;
       if (!apiKey) throw new Error("GEMINI_API_KEY, GOOGLE_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY is required for Gemini models");

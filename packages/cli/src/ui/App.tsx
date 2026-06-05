@@ -123,6 +123,12 @@ const POPULAR_MODELS = {
     { label: "Google: Gemini 2.5 Pro", value: "google/gemini-2.5-pro" },
     { label: "DeepSeek: R1", value: "deepseek/deepseek-r1" },
     { label: "Meta: Llama 3.3 70B", value: "meta-llama/llama-3.3-70b-instruct" }
+  ],
+  ollama: [
+    { label: "Qwen 2.5 Coder (7B)", value: "qwen2.5-coder:7b" },
+    { label: "Llama 3 (8B)", value: "llama3:latest" },
+    { label: "Qwen 2.5 Coder (14B)", value: "qwen2.5-coder:14b" },
+    { label: "Llama 3.3 (70B)", value: "llama3.3:latest" }
   ]
 };
 
@@ -268,7 +274,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [sessionFiles, setSessionFiles] = useState<string[]>([]);
   const [agentMode, setAgentMode] = useState<string>(permissionMode || "ask");
   const [defaultModel, setDefaultModel] = useState<string>("");
-  const [currentProvider, setCurrentProvider] = useState<"anthropic" | "openai" | "google" | "openrouter">("anthropic");
+  const [currentProvider, setCurrentProvider] = useState<"anthropic" | "openai" | "google" | "openrouter" | "ollama">("anthropic");
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [availableModels, setAvailableModels] = useState<SelectOption[]>([]);
@@ -350,6 +356,22 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                 label: m.name,
                 value: m.id,
                 description: m.context_length ? `${Math.round(m.context_length/1000)}k ctx` : undefined
+              }));
+              setAvailableModels(fetchedModels);
+            }
+          })
+          .catch(() => {});
+      }
+
+      if (config.provider === "ollama") {
+        fetch("http://localhost:11434/api/tags")
+          .then(res => res.json())
+          .then((data: any) => {
+            if (data && data.models && Array.isArray(data.models)) {
+              const fetchedModels = data.models.map((m: any) => ({
+                label: m.name,
+                value: m.name,
+                description: m.size ? `${(m.size / (1024 * 1024 * 1024)).toFixed(2)} GB` : "Local model"
               }));
               setAvailableModels(fetchedModels);
             }
@@ -967,6 +989,22 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           if (parts.length > 1) {
             updateModel(parts[1]);
           } else {
+            const config = await loadConfig();
+            if (config.provider === "ollama") {
+              fetch("http://localhost:11434/api/tags")
+                .then(res => res.json())
+                .then((data: any) => {
+                  if (data && data.models && Array.isArray(data.models)) {
+                    const fetchedModels = data.models.map((m: any) => ({
+                      label: m.name,
+                      value: m.name,
+                      description: m.size ? `${(m.size / (1024 * 1024 * 1024)).toFixed(2)} GB` : "Local model"
+                    }));
+                    setAvailableModels(fetchedModels);
+                  }
+                })
+                .catch(() => {});
+            }
             setIsModelSelectorOpen(true);
           }
           break;

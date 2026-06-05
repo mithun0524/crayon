@@ -5,6 +5,21 @@ import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 
+async function fetchOllamaModels(): Promise<string[] | null> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000); // 2 second timeout
+    const res = await fetch("http://localhost:11434/api/tags", { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+    const data = await res.json() as { models?: { name: string }[] };
+    if (data.models && data.models.length > 0) {
+      return data.models.map(m => m.name);
+    }
+  } catch {}
+  return null;
+}
+
 export async function runOnboardingFlow(): Promise<void> {
   console.clear();
   
@@ -47,24 +62,46 @@ export async function runOnboardingFlow(): Promise<void> {
       { name: 'OpenAI', value: 'openai' },
       { name: 'Google (Gemini)', value: 'google' },
       { name: 'OpenRouter', value: 'openrouter' },
+      { name: 'Ollama (100% Local & Free)', value: 'ollama' },
     ],
   });
 
-  let defaultModel = "";
-  if (provider === "anthropic") defaultModel = "claude-3-7-sonnet-latest";
-  else if (provider === "openai") defaultModel = "gpt-4o";
-  else if (provider === "google") defaultModel = "gemini-2.5-pro";
-  else if (provider === "openrouter") defaultModel = "anthropic/claude-3.7-sonnet";
+  let model = "";
+  let apiKey = "";
 
-  const model = await input({
-    message: 'Which model would you like to use?',
-    default: defaultModel,
-  });
+  if (provider === "ollama") {
+    console.log(chalk.cyan("Connecting to local Ollama service..."));
+    const localModels = await fetchOllamaModels();
+    if (localModels && localModels.length > 0) {
+      model = await select({
+        message: 'Select an installed Ollama model:',
+        choices: localModels.map(m => ({ name: m, value: m })),
+      });
+    } else {
+      console.log(chalk.yellow("\n⚠️ Could not detect running Ollama service or no models found on http://localhost:11434."));
+      console.log(chalk.dim("Make sure Ollama is running and you have pulled a model via `ollama run qwen2.5-coder`.\n"));
+      model = await input({
+        message: 'Enter the name of the Ollama model you wish to use:',
+        default: 'qwen2.5-coder:7b',
+      });
+    }
+  } else {
+    let defaultModel = "";
+    if (provider === "anthropic") defaultModel = "claude-3-7-sonnet-latest";
+    else if (provider === "openai") defaultModel = "gpt-4o";
+    else if (provider === "google") defaultModel = "gemini-2.5-pro";
+    else if (provider === "openrouter") defaultModel = "anthropic/claude-3.7-sonnet";
 
-  const apiKey = await password({
-    message: `Enter your ${provider} API Key:`,
-    mask: '*',
-  });
+    model = await input({
+      message: 'Which model would you like to use?',
+      default: defaultModel,
+    });
+
+    apiKey = await password({
+      message: `Enter your ${provider} API Key:`,
+      mask: '*',
+    });
+  }
 
   const telemetry = await confirm({
     message: 'Allow Crayon to collect anonymous error telemetry to improve the agent?',
