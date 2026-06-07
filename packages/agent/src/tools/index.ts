@@ -9,9 +9,14 @@ import { parse as shellParse } from "shell-quote";
 import { Project, Node, SyntaxKind } from "ts-morph";
 import type { ToolContext } from "../types.js";
 import { createGitTools } from "./git-workflow.js";
+import { createAskUserTool } from "./ask_user.js";
+import { createGlobTool } from "./glob.js";
+import { createReplTool } from "./repl.js";
+import { createAgentTool } from "./agent.js";
+import { createTodoTool } from "./todo.js";
 
 const DANGEROUS_PATTERNS = [
-  /rm\s+-rf/i,
+  /rm\s+(?:-\w+\s+)*(?:-r\s+-f|-f\s+-r|-rf|-fr)/i,
   /rmdir\s+\/s/i,
   /del\s+\/f/i,
   /format\s+/i,
@@ -42,7 +47,8 @@ export function createTools(ctx: ToolContext) {
         // Fallback to unresolved if realpath fails
       }
 
-      if (!resolved.startsWith(ctx.workspaceRoot)) {
+      const relative = path.relative(ctx.workspaceRoot, resolved);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
         throw new Error(`Path escapes workspace: ${filePath}`);
       }
       return resolved;
@@ -66,6 +72,11 @@ export function createTools(ctx: ToolContext) {
 
   return {
     ...createGitTools(ctx),
+    ask_user: createAskUserTool(ctx),
+    glob_search: createGlobTool(ctx),
+    repl: createReplTool(ctx),
+    spawn_agent: createAgentTool(ctx),
+    todo: createTodoTool(ctx),
 
     // concurrent: true | readonly: true | permission: none
     thinking: {
@@ -164,6 +175,7 @@ export function createTools(ctx: ToolContext) {
         }
 
         const diff = createTwoFilesPatch(filePath, filePath, content, newContent);
+        await ctx.transaction?.snapshotFile(filePath);
         await writeFile(absPath, newContent, "utf-8");
 
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
@@ -287,6 +299,7 @@ export function createTools(ctx: ToolContext) {
         }
 
         const diff = createTwoFilesPatch(filePath, filePath, content, newContent);
+        await ctx.transaction?.snapshotFile(filePath);
         await writeFile(absPath, newContent, "utf-8");
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
         return { success: true, path: filePath, diff };
@@ -316,9 +329,11 @@ export function createTools(ctx: ToolContext) {
         }
 
         await mkdir(path.dirname(absPath), { recursive: true });
+        await ctx.transaction?.snapshotFile(filePath);
         await writeFile(absPath, content, "utf-8");
 
-        ctx.onEvent?.({ type: "edit", path: filePath, diff: `+ Created new file: ${filePath}` });
+        const diff = createTwoFilesPatch(filePath, filePath, "", content);
+        ctx.onEvent?.({ type: "edit", path: filePath, diff });
 
         return { success: true, path: filePath, created: true };
       },
@@ -355,6 +370,7 @@ export function createTools(ctx: ToolContext) {
         }
 
         const diff = createTwoFilesPatch(filePath, filePath, oldContent, content);
+        await ctx.transaction?.snapshotFile(filePath);
         await writeFile(absPath, content, "utf-8");
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
         const result: Record<string, unknown> = { success: true, path: filePath, overwritten: true, diff };
@@ -476,6 +492,23 @@ export function createTools(ctx: ToolContext) {
     },
 
     // concurrent: true | readonly: true | permission: none
+    get_impact_analysis: {
+      description: "Analyze the 'blast radius' of changes to a file by checking dependency graphs and identifying downstream dependents recursively.",
+      parameters: z.object({
+        file_path: z.string().describe("Relative path of the file to analyze"),
+        hops: z.number().optional().default(2).describe("Number of dependency hops to trace (default: 2)"),
+      }),
+      execute: async ({ file_path, hops }: { file_path: string; hops?: number }) => {
+        try {
+          const impacted = ctx.indexer.getImpactedFiles?.(file_path, hops) || [];
+          return { file_path, impacted, hops: hops || 2 };
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      },
+    },
+
+    // concurrent: true | readonly: true | permission: none
     get_dependencies: {
       description: "Find which files the specified file depends on (imports).",
       parameters: z.object({
@@ -530,7 +563,7 @@ export function createTools(ctx: ToolContext) {
             for (const token of parsed) {
               if (typeof token === "string") {
                 const lower = token.toLowerCase();
-                if (["cd", "rm", "del", "mv", "sh", "bash", "cmd", "powershell", "pwsh", "node", "python", "ruby", "perl"].includes(lower)) {
+                if (["cd", "rm", "del", "mv", "sh", "bash", "cmd", "powershell", "pwsh", "node", "python", "ruby", "perl", "curl", "wget", "eval", "exec", "env"].includes(lower)) {
                   isDangerous = true;
                   break;
                 }
@@ -544,7 +577,8 @@ export function createTools(ctx: ToolContext) {
                     }
                   } catch (e) {}
                   
-                  if (!resolvedToken.startsWith(ctx.workspaceRoot)) {
+                  const relToken = path.relative(ctx.workspaceRoot, resolvedToken);
+                  if (relToken.startsWith("..") || path.isAbsolute(relToken)) {
                     isDangerous = true;
                     break;
                   }
@@ -646,10 +680,14 @@ export function createTools(ctx: ToolContext) {
         if (!approved) {
           return { success: false, error: "PERMISSION_DENIED_BY_USER" };
         }
-
+        const oldContent = await readFile(absPath, "utf-8");
+        await ctx.transaction?.snapshotFile(filePath);
         await unlink(absPath);
-        ctx.onEvent?.({ type: "edit", path: filePath, diff: `- Deleted file: ${filePath}` });
-        return { path: filePath, success: true, message: "File deleted" };
+        
+        const diff = createTwoFilesPatch(filePath, filePath, oldContent, "");
+        ctx.onEvent?.({ type: "edit", path: filePath, diff });
+
+        return { success: true, path: filePath, deleted: true, message: "File deleted" };
       },
     },
 
@@ -715,23 +753,10 @@ export function createTools(ctx: ToolContext) {
       },
     },
 
-    // concurrent: true | readonly: true | permission: none
-    ask_user: {
-      description: "Ask the user a question. Use when you need clarification or a decision.",
-      parameters: z.object({
-        question: z.string().describe("The question to ask the user"),
-      }),
-      execute: async ({ question }: { question: string }) => {
-        ctx.onEvent?.({ type: "ask_user", question });
-        if (ctx.approveCommand) {
-          const response = await ctx.approveCommand(question);
-          return { answer: response ? "User approved/responded." : "User declined." };
-        }
-        return { answer: "User interaction not supported in current mode" };
-      },
-    },
   };
 }
+
+
 
 async function listDirRecursive(
   absPath: string,
@@ -780,8 +805,18 @@ function runCommand(command: string, cwd: string, timeoutMs: number, signal?: Ab
     let stdout = "";
     let stderr = "";
 
-    proc.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
-    proc.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+    proc.stdout.on("data", (d: Buffer) => {
+      if (stdout.length < 50000) {
+        stdout += d.toString();
+        if (stdout.length > 50000) stdout = stdout.slice(0, 50000) + "\n...[truncated]";
+      }
+    });
+    proc.stderr.on("data", (d: Buffer) => {
+      if (stderr.length < 10000) {
+        stderr += d.toString();
+        if (stderr.length > 10000) stderr = stderr.slice(0, 10000) + "\n...[truncated]";
+      }
+    });
 
     const timer = setTimeout(() => {
       proc.kill();
@@ -790,7 +825,7 @@ function runCommand(command: string, cwd: string, timeoutMs: number, signal?: Ab
 
     proc.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ success: code === 0, stdout: stdout.slice(0, 20000), stderr: stderr.slice(0, 5000), exitCode: code ?? -1 });
+      resolve({ success: code === 0, stdout, stderr, exitCode: code ?? -1 });
     });
 
     proc.on("error", (err) => {

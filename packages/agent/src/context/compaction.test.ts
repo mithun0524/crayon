@@ -1,6 +1,14 @@
-import { describe, it, expect } from "vitest";
-import { microCompact, estimateTokenCount, getCompactionLevel } from "./compaction.js";
+import { describe, it, expect, vi } from "vitest";
+import { microCompact, estimateTokenCount, getCompactionLevel, autoCompact } from "./compaction.js";
 import type { CoreMessage, ToolMessage } from "ai";
+
+vi.mock("ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("ai")>();
+  return {
+    ...actual,
+    generateText: vi.fn().mockResolvedValue({ text: "Mocked Summary" }),
+  };
+});
 
 describe("compaction", () => {
   describe("microCompact", () => {
@@ -74,6 +82,35 @@ describe("compaction", () => {
     it("returns 'auto' if ratio > 0.8", () => {
       const messages: CoreMessage[] = [{ role: "user", content: "a".repeat(3600) }]; // 900 tokens
       expect(getCompactionLevel(messages, 1000)).toBe("auto");
+    });
+  });
+
+  describe("autoCompact", () => {
+    it("preserves system messages at the start and only compacts conversational ones", async () => {
+      const messages: CoreMessage[] = [
+        { role: "system", content: "Static system prompt" },
+        { role: "system", content: "Dynamic context" },
+        { role: "user", content: "User query 1" },
+        { role: "assistant", content: "Assistant reply 1" },
+        { role: "user", content: "User query 2" },
+        { role: "assistant", content: "Assistant reply 2" },
+        { role: "user", content: "User query 3" },
+        { role: "assistant", content: "Assistant reply 3" },
+        { role: "user", content: "User query 4" },
+      ];
+
+      const result = await autoCompact(messages, { model: "claude-sonnet", anthropicApiKey: "dummy" });
+      
+      expect(result[0]).toEqual({ role: "system", content: "Static system prompt" });
+      expect(result[1]).toEqual({ role: "system", content: "Dynamic context" });
+      
+      expect(result[result.length - 4]).toEqual({ role: "assistant", content: "Assistant reply 2" });
+      expect(result[result.length - 3]).toEqual({ role: "user", content: "User query 3" });
+      expect(result[result.length - 2]).toEqual({ role: "assistant", content: "Assistant reply 3" });
+      expect(result[result.length - 1]).toEqual({ role: "user", content: "User query 4" });
+      
+      expect(result[2].role).toBe("assistant");
+      expect(result[2].content).toContain("Mocked Summary");
     });
   });
 });

@@ -88,18 +88,20 @@ export const PlanView: React.FC<PlanViewProps> = ({ steps, currentStepIndex, isE
         
         const prefix = (globalIdx === 0 && hiddenCompleted === 0 && localIdx === 0) ? "└ " : "  ";
 
+        const itemColor = crayonColors[globalIdx % crayonColors.length];
+
         if (isDone) {
           return (
             <Box key={globalIdx} paddingLeft={2}>
               <Text color={theme.border}>{prefix}</Text>
-              <Text color={theme.success}>☒ </Text>
-              <Text color={theme.success} strikethrough>{step}</Text>
+              <Text color={itemColor}>☒ </Text>
+              <Text color={itemColor} strikethrough>{step}</Text>
             </Box>
           );
         }
 
         if (isCurrent) {
-          const color = isExecuting ? theme.success : theme.brand;
+          const color = isExecuting ? itemColor : theme.brand;
           return (
             <Box key={globalIdx} paddingLeft={2}>
               <Text color={theme.border}>{prefix}</Text>

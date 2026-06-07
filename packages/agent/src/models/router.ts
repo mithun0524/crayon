@@ -19,9 +19,18 @@ const DEFAULT_OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 function resolveProvider(config: ModelConfig, modelId: string): ModelProvider {
   if (config.provider) return config.provider as ModelProvider;
   if (modelId.startsWith("ollama/")) return "ollama";
-  if (config.googleApiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-    if (modelId.startsWith("gemini")) return "google";
+
+  // Prefer direct providers if their respective API keys are set
+  if ((config.anthropicApiKey || process.env.ANTHROPIC_API_KEY) && (modelId.startsWith("claude") || modelId.startsWith("anthropic"))) {
+    return "anthropic";
   }
+  if ((config.openaiApiKey || process.env.OPENAI_API_KEY) && (modelId.startsWith("gpt") || modelId.startsWith("o1") || modelId.startsWith("o3"))) {
+    return "openai";
+  }
+  if ((config.googleApiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY) && modelId.startsWith("gemini")) {
+    return "google";
+  }
+
   if (config.openrouterApiKey || process.env.OPENROUTER_API_KEY) return "openrouter";
   if (modelId.includes("/")) return "openrouter";
   if (modelId.startsWith("gemini")) return "google";
@@ -56,7 +65,7 @@ export function resolveModel(config: ModelConfig): LanguageModel {
   switch (provider) {
     case "ollama": {
       const ollama = createOpenAI({
-        baseURL: "http://localhost:11434/v1",
+        baseURL: process.env.OLLAMA_BASE_URL ?? "http://localhost:11434/v1",
         apiKey: "ollama",
       });
       const cleanModelId = modelId.startsWith("ollama/") ? modelId.slice(7) : modelId;

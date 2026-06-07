@@ -3,6 +3,7 @@ import type { CodeIndexer, RepoIntelligence } from "crayon-indexer";
 import type { z } from "zod";
 import type { McpServerConfig } from "./tools/mcp.js";
 import type { FileStateCache } from "./context/fileState.js";
+import type { TransactionManager } from "./context/transaction.js";
 
 export type AgentEvent =
   | { type: "thinking"; content: string }
@@ -54,6 +55,7 @@ export interface ToolContext {
   approveCommand?: (command: string) => Promise<boolean>;
   approveEdit?: (path: string, newContent: string) => Promise<boolean>;
   fileState?: FileStateCache;
+  transaction?: TransactionManager;
   signal?: AbortSignal;
 }
 

@@ -58,4 +58,24 @@ export class DependencyGraph {
   getRelated(filePath: string, hops = 1): string[] {
     return this.expand([filePath], hops).filter((f) => f !== filePath);
   }
+
+  getImpactedFiles(filePath: string, hops = 2): string[] {
+    const visited = new Set<string>([filePath]);
+    let frontier = [filePath];
+
+    for (let h = 0; h < hops; h++) {
+      const next: string[] = [];
+      for (const file of frontier) {
+        for (const dependent of this.getDependents(file)) {
+          if (!visited.has(dependent)) {
+            visited.add(dependent);
+            next.push(dependent);
+          }
+        }
+      }
+      frontier = next;
+    }
+
+    return [...visited].filter(f => f !== filePath);
+  }
 }

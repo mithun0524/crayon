@@ -15,8 +15,8 @@ export const DiffRenderer: React.FC<DiffRendererProps> = ({ diff, maxLines = 15 
   const hasMore = lines.length > maxLines;
 
   return (
-    <Box flexDirection="column" borderStyle="double" borderColor={theme.border} paddingX={0} marginY={1}>
-      <Box paddingX={1} borderBottom={false}>
+    <Box flexDirection="column" paddingLeft={2} marginY={0}>
+      <Box paddingX={0}>
         <Text color={theme.brand} bold> ▤ Sketchpad </Text>
       </Box>
       {visibleLines.map((line, i) => {
@@ -39,7 +39,7 @@ export const DiffRenderer: React.FC<DiffRendererProps> = ({ diff, maxLines = 15 
           isDim = true;
         }
 
-        const boxProps: any = { key: i, width: "100%", paddingX: 1 };
+        const boxProps: any = { key: i, width: "100%", paddingX: 0 };
         if (bgColor) boxProps.backgroundColor = bgColor;
 
         return (

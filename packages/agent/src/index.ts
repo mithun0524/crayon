@@ -3,8 +3,8 @@ import { CodeIndexer } from "crayon-indexer";
 import type { AgentConfig, AgentEvent, AgentResult } from "./types.js";
 import { WorkingMemory } from "./memory/working.js";
 import { EpisodicMemory } from "./memory/episodic.js";
-import { createPlan, classifyTask, type TaskMode } from "./planner/plan.js";
-import { buildSystemPrompt } from "./context/manager.js";
+import { classifyTask, type TaskMode } from "./planner/plan.js";
+import { buildStaticSystemPrompt, buildDynamicContext } from "./context/manager.js";
 import { getExecutionModel } from "./models/router.js";
 import type { ModelConfig } from "./models/router.js";
 import { createTools } from "./tools/index.js";
@@ -13,6 +13,7 @@ import { runEvaluation } from "./evaluator/check.js";
 import { withRetry } from "./services/withRetry.js";
 import { microCompact, autoCompact, getCompactionLevel } from "./context/compaction.js";
 import { FileStateCache } from "./context/fileState.js";
+import { TransactionManager } from "./context/transaction.js";
 
 /** Tools that are safe to execute concurrently (read-only). Exported for consumer use. */
 export { CONCURRENT_SAFE_TOOLS };
@@ -23,6 +24,7 @@ const CONCURRENT_SAFE_TOOLS = new Set([
   "find_usages",
   "get_dependents",
   "get_dependencies",
+  "get_impact_analysis",
   "list_directory",
   "git_status",
   "git_diff",
@@ -78,6 +80,7 @@ export class CrayonAgent {
   private history: CoreMessage[] = [];
   private mcpClient: McpClient;
   private fileState = new FileStateCache();
+  private transaction: TransactionManager;
 
   public get tools() {
     return createTools({
@@ -88,6 +91,7 @@ export class CrayonAgent {
       approveCommand: this.config.approveCommand,
       approveEdit: this.config.approveEdit,
       fileState: this.fileState,
+      transaction: this.transaction,
     });
   }
 
@@ -101,6 +105,7 @@ export class CrayonAgent {
         this.emit({ type: "error", message: `MCP server "${serverName}" failed: ${error.message}` });
       },
     });
+    this.transaction = new TransactionManager(config.workspaceRoot);
   }
 
   private emit(event: AgentEvent): void {
@@ -155,6 +160,9 @@ export class CrayonAgent {
 
     this.emit({ type: "thinking", content: "Thinking..." });
 
+    const taskId = `task_${Date.now()}`;
+    await this.transaction.beginTransaction(taskId);
+
     if (mode === "chat") {
       await this.indexer.init();
     } else {
@@ -179,10 +187,7 @@ export class CrayonAgent {
 
     const intelligence = mode === "chat" ? null : await this.indexer.getIntelligence();
     
-    const plan = await createPlan(task, modelConfig);
-    if (plan.length > 0) {
-      this.emit({ type: "plan", steps: plan });
-    }
+    const plan: string[] = [];
 
     const toolCtx = {
       workspaceRoot: this.config.workspaceRoot,
@@ -192,13 +197,33 @@ export class CrayonAgent {
       approveCommand: this.config.approveCommand,
       approveEdit: this.config.approveEdit,
       fileState: this.fileState,
+      transaction: this.transaction,
       signal: options.signal,
     };
 
+    this.emit({ type: "thinking", content: "Preparing context and tools..." });
+    const staticSystemPrompt = buildStaticSystemPrompt(mode);
+
+    const staticSystemMessage: CoreMessage = {
+      role: "system",
+      content: staticSystemPrompt,
+      experimental_providerMetadata: {
+        anthropic: { cacheControl: { type: "ephemeral" } },
+      },
+    } as any;
+
+    const dynamicSystemMessage: CoreMessage = {
+      role: "system",
+      content: "", // Will be dynamically updated at the start of each execution loop iteration
+      experimental_providerMetadata: {
+        anthropic: { cacheControl: { type: "ephemeral" } },
+      },
+    } as any;
+
     const userMessage: CoreMessage = { role: "user", content: task };
     const messages: CoreMessage[] = options.skipHistory
-      ? [userMessage]
-      : [...this.history, userMessage];
+      ? [staticSystemMessage, dynamicSystemMessage, userMessage]
+      : [staticSystemMessage, dynamicSystemMessage, ...this.history, userMessage];
 
     const tools = createTools(toolCtx);
     const aiTools: Record<string, any> = Object.fromEntries(
@@ -222,13 +247,6 @@ export class CrayonAgent {
                 if (r.path && r.success !== false) {
                   this.workingMemory.markEdited(r.path);
                 }
-              }
-              const resObj = result as Record<string, any>;
-              if (resObj && resObj.error === "PERMISSION_DENIED_BY_USER") {
-                messages.push({
-                  role: "system",
-                  content: "The user explicitly denied this action. Do not retry it. Ask the user for alternative directions."
-                });
               }
               this.emit({ type: "tool_result", name, result });
               return result;
@@ -256,13 +274,6 @@ export class CrayonAgent {
           try {
             const result = await this.mcpClient.callTool(t.server, t.tool.name, args);
             this.workingMemory.addToolOutput(safeName, result);
-            const resObj = result as Record<string, any>;
-            if (resObj && resObj.error === "PERMISSION_DENIED_BY_USER") {
-              messages.push({
-                role: "system",
-                content: "The user explicitly denied this action. Do not retry it. Ask the user for alternative directions."
-              });
-            }
             this.emit({ type: "tool_result", name: safeName, result });
             return result;
           } catch (e: any) {
@@ -272,19 +283,7 @@ export class CrayonAgent {
       });
     }
 
-    this.emit({ type: "thinking", content: "Preparing context and tools..." });
-    const systemPrompt = await buildSystemPrompt({
-      task,
-      plan,
-      mode,
-      workspaceRoot: this.config.workspaceRoot,
-      indexer: this.indexer,
-      workingMemory: this.workingMemory,
-      episodicMemory: this.episodicMemory,
-      intelligence,
-      currentFile: options.currentFile,
-      selection: options.selection,
-    });
+
 
     const maxEvalRetries = this.config.maxEvalRetries ?? 5;
     let evalRetries = 0;
@@ -301,6 +300,27 @@ export class CrayonAgent {
     while (evalRetries <= maxEvalRetries) {
       if (options.signal?.aborted) {
         throw new Error("Agent execution aborted");
+      }
+
+      // Update the dynamic system message with fresh workspace context
+      const dynamicMsg = messages.find(
+        (m) =>
+          m.role === "system" &&
+          (m.content === "" || m.content.startsWith("Here is the current workspace environment"))
+      );
+      if (dynamicMsg) {
+        dynamicMsg.content = await buildDynamicContext({
+          task,
+          plan,
+          mode,
+          workspaceRoot: this.config.workspaceRoot,
+          indexer: this.indexer,
+          workingMemory: this.workingMemory,
+          episodicMemory: this.episodicMemory,
+          intelligence,
+          currentFile: options.currentFile,
+          selection: options.selection,
+        });
       }
 
       // --- Context compaction before LLM call ---
@@ -323,7 +343,6 @@ export class CrayonAgent {
         async () => {
           return streamText({
             model,
-            system: systemPrompt,
             messages,
             tools: useTools ? aiTools : undefined,
             maxSteps,
@@ -524,11 +543,22 @@ export class CrayonAgent {
     }
 
     const success = evalRetries <= maxEvalRetries;
+    let rollbackMsg = "";
+    if (!success) {
+      const restored = await this.transaction.rollbackTransaction();
+      if (restored.length > 0) {
+        rollbackMsg = `\n\n[System: Max retries reached. Rolled back ${restored.length} files to preserve workspace stability.]`;
+        this.emit({ type: "text", content: rollbackMsg.trim() });
+      }
+    } else {
+      await this.transaction.commitTransaction();
+    }
+
     const finalSummary =
-      summary ||
+      summary + rollbackMsg ||
       (mode === "advisory"
         ? "I searched the codebase but couldn't generate a full answer. Try rephrasing your question."
-        : `Completed in ${totalSteps} steps. Edited: ${[...new Set(edits)].join(", ") || "none"}.`);
+        : `Completed in ${totalSteps} steps. Edited: ${[...new Set(edits)].join(", ") || "none"}.${rollbackMsg}`);
 
     if (!summary && finalSummary) {
       this.emit({ type: "text", content: finalSummary });
@@ -551,6 +581,7 @@ export class CrayonAgent {
       edits: [...new Set(edits)],
     };
     } catch (err: any) {
+      await this.transaction.rollbackTransaction();
       this.emit({ type: "error", message: err.message });
       throw err;
     }

@@ -43,9 +43,14 @@ export class McpClient {
         for (const [k, v] of Object.entries(config.env || {})) {
           env[k] = v;
         }
+        const isWin = process.platform === "win32";
+        let resolvedCommand = config.command;
+        if (isWin && (resolvedCommand === "npx" || resolvedCommand === "npm")) {
+          resolvedCommand += ".cmd";
+        }
 
         const transport = new StdioClientTransport({
-          command: config.command,
+          command: resolvedCommand,
           args: config.args || [],
           env,
           stderr: "ignore",

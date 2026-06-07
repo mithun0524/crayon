@@ -151,6 +151,10 @@ export class CodeIndexer {
     return this.graph;
   }
 
+  getImpactedFiles(filePath: string, hops = 2): string[] {
+    return this.graph.getImpactedFiles(filePath, hops);
+  }
+
   watch(onChange?: (filePath: string) => void): void {
     if (this.watcher) return;
 

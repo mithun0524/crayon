@@ -17,7 +17,11 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 marked.setOptions({
-  renderer: new TerminalRenderer() as any
+  renderer: new TerminalRenderer({
+    listitem: (text: string) => `  • ${text.trim()}\n`,
+    firstHeading: (text: string) => `\x1b[1m\x1b[36m# ${text}\x1b[0m\n\n`,
+    heading: (text: string, level: number) => `\x1b[1m\x1b[36m${"#".repeat(level)} ${text}\x1b[0m\n\n`
+  }) as any
 });
 import { loadConfig } from "../config.js";
 import { getGitInfo } from "./gitHelper.js";
@@ -189,11 +193,11 @@ const getToolCallCompletedText = (name: string, args: any, result: any, isError:
     case "overwrite_file":
       return `${icon} Overwrote ${args?.path || ""}`;
     case "grep": {
-      const matchesCount = result?.matches?.length || 0;
+      const matchesCount = result?.results?.length ?? result?.matches?.length ?? 0;
       return `${icon} Searched for "${args?.pattern || ""}" (${matchesCount} matches)`;
     }
     case "search_codebase": {
-      const matchesCount = result?.matches?.length || 0;
+      const matchesCount = result?.results?.length ?? result?.matches?.length ?? 0;
       return `${icon} Searched codebase for "${args?.query || ""}" (${matchesCount} matches)`;
     }
     case "terminal":
@@ -274,6 +278,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [sessionFiles, setSessionFiles] = useState<string[]>([]);
   const [agentMode, setAgentMode] = useState<string>(permissionMode || "ask");
   const [defaultModel, setDefaultModel] = useState<string>("");
+  const defaultModelRef = useRef<string>("");
+  useEffect(() => {
+    defaultModelRef.current = defaultModel;
+  }, [defaultModel]);
   const [currentProvider, setCurrentProvider] = useState<"anthropic" | "openai" | "google" | "openrouter" | "ollama">("anthropic");
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
@@ -612,7 +620,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       case "usage":
         setTokens((prev) => prev + event.totalTokens);
         setCost((prev) => {
-          const pricing = getModelPricing(defaultModel);
+          const pricing = getModelPricing(defaultModelRef.current);
           const inputCostPerToken = pricing.input / 1_000_000;
           const outputCostPerToken = pricing.output / 1_000_000;
           return prev + (event.promptTokens * inputCostPerToken) + (event.completionTokens * outputCostPerToken);
@@ -672,6 +680,19 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           setApprovalRequest(null);
         }
       } else if (approvalRequest.type === "edit") {
+        if (key.ctrl && input === "o") {
+          const tmpPath = path.join(os.tmpdir(), `crayon-diff-${Date.now()}.diff`);
+          try {
+            require("node:fs").writeFileSync(tmpPath, approvalRequest.diff, "utf8");
+            const editor = process.env.EDITOR || (process.platform === "win32" ? "notepad" : "less -R");
+            if (editor === "less -R") {
+                spawnSync("less", ["-R", tmpPath], { stdio: "inherit" });
+            } else {
+                spawnSync(editor, [tmpPath], { stdio: "inherit", shell: true });
+            }
+          } catch {}
+          return;
+        }
         if (k === "y" || key.return) {
           approvalRequest.resolve(true);
           setApprovalRequest(null);
@@ -1129,7 +1150,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           highlighted = highlight(code, { language: lang || "typescript", ignoreIllegals: true, theme: syntaxThemeDark });
         } catch {}
         return (
-          <Box key={index} marginY={1} paddingX={1} borderStyle="round" borderColor={theme.border} flexDirection="column">
+          <Box key={index} marginY={0} paddingLeft={2} flexDirection="column">
             {lang && <Text color={theme.subtle} italic>{lang}</Text>}
             <Text>{highlighted}</Text>
           </Box>
@@ -1175,9 +1196,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     const hasMore = allLines.length > limit;
 
     return (
-      <Box key="term-out" flexDirection="column" marginY={1} paddingX={1} borderStyle="round" borderColor={theme.border} width="100%">
+      <Box key="term-out" flexDirection="column" marginY={0} paddingLeft={2} width="100%">
         <Text color={theme.subtle} dimColor>stdout/stderr:</Text>
-        <Text>{truncated}</Text>
+        <Text color={theme.subtle}>{truncated}</Text>
         {hasMore && (
           <Text color={theme.subtle} italic dimColor>
             ... (truncated {allLines.length - limit} lines)
@@ -1241,9 +1262,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
     if (msg.sender === "user") {
       return (
-        <Box key={msg.id} marginBottom={1}>
-          <Text color={theme.subtle} bold>❯ You: </Text>
-          <Text color={theme.text}>{msg.text}</Text>
+        <Box key={msg.id} marginBottom={1} flexDirection="row" paddingLeft={1}>
+          <Box marginRight={1}>
+            <Text color={theme.subtle}>┃</Text>
+          </Box>
+          <Box flexDirection="column">
+            <Text color={theme.subtle} bold>You</Text>
+            <Text color={theme.text}>{msg.text}</Text>
+          </Box>
         </Box>
       );
     }
@@ -1268,8 +1294,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         const isRunning = tc.status === "running";
         const isError = tc.status === "error";
         
-        const icon = isRunning ? "⏳" : isError ? "✗" : "✓";
-        const iconColor = isRunning ? theme.brand : isError ? theme.warning : theme.success;
+        const icon = isRunning ? "◓" : isError ? "✗" : "└";
+        const iconColor = isRunning ? theme.brand : isError ? theme.warning : theme.subtle;
         const textColor = isRunning ? theme.subtle : isError ? theme.warning : theme.text;
         
         // Compute details to render below
@@ -1284,9 +1310,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         }
         
         return (
-          <Box key={msg.id} flexDirection="column" marginBottom={1}>
+          <Box key={msg.id} flexDirection="column" marginBottom={0}>
             <Box flexDirection="row">
-              <Text color={iconColor} bold>{icon} </Text>
+              <Text color={iconColor}>{icon} </Text>
               <Text color={textColor}>{msg.text}</Text>
             </Box>
             {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
@@ -1314,17 +1340,22 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
     // crayon sender
     return (
-      <Box key={msg.id} flexDirection="column" marginBottom={1}>
-        <Text bold>
-          {"Crayon".split("").map((char, i) => (
-            <Text key={i} color={crayonColors[i % crayonColors.length]}>{char}</Text>
-          ))}
-          <Text color={theme.brand}>: </Text>
-        </Text>
-        {msg.reasoning && <ThinkingMessage thinking={msg.reasoning} isCollapsed={true} />}
-        <Box flexDirection="column">
-          {renderMarkdown(msg.text)}
+      <Box key={msg.id} flexDirection="column" marginBottom={2} paddingLeft={1} borderStyle="single" borderRight={false} borderTop={false} borderBottom={false} borderColor={theme.brand}>
+        <Box flexDirection="row" marginBottom={1} marginLeft={1}>
+          <Text bold>
+            {"Crayon".split("").map((char, i) => (
+              <Text key={i} color={crayonColors[i % crayonColors.length]}>{char}</Text>
+            ))}
+          </Text>
         </Box>
+        {msg.reasoning && (
+          <ThinkingMessage thinking={msg.reasoning} isCollapsed={true} />
+        )}
+        {msg.text && (
+          <Box flexDirection="column" marginLeft={1}>
+            {renderMarkdown(msg.text)}
+          </Box>
+        )}
       </Box>
     );
   };
@@ -1368,25 +1399,26 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           <PlanView steps={activePlan} currentStepIndex={currentStepIndex} isExecuting={isExecuting} />
         )}
 
-        {isExecuting && activePlan.length === 0 && !approvalRequest && (
+        {isExecuting && !approvalRequest && (
           <Box flexDirection="column" width="100%">
             {streamingReasoning && !streamingText && (
               <ThinkingMessage thinking={streamingReasoning} />
             )}
             
             {streamingText && (
-              <Box flexDirection="column" marginBottom={1}>
-                <Text bold>
-                  {"Crayon".split("").map((char, i) => {
-                    const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
-                    return <Text key={i} color={crayonColors[i % crayonColors.length]}>{char}</Text>
-                  })}
-                  <Text color={theme.brand}>: </Text>
-                </Text>
+              <Box flexDirection="column" marginBottom={1} borderStyle="single" borderRight={false} borderTop={false} borderBottom={false} borderColor={theme.brand}>
+                <Box flexDirection="row" marginBottom={1} marginLeft={1}>
+                  <Text bold>
+                    {"Crayon".split("").map((char, i) => {
+                      const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
+                      return <Text key={i} color={crayonColors[i % crayonColors.length]}>{char}</Text>
+                    })}
+                  </Text>
+                </Box>
                 {streamingReasoning && (
                   <ThinkingMessage thinking={streamingReasoning} isCollapsed={true} />
                 )}
-                <Box flexDirection="column">
+                <Box flexDirection="column" marginLeft={1}>
                   {renderMarkdown(streamingText, true)}
                 </Box>
               </Box>
@@ -1432,6 +1464,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               <Box flexDirection="column">
                 <Text color={theme.warning} bold>⚠️ Approve file edits in {approvalRequest.path}?</Text>
                 <DiffRenderer diff={approvalRequest.diff} maxLines={10} />
+                <Text color={theme.subtle} italic>(Press Ctrl+O to view diff full screen)</Text>
                 <Box marginTop={1}>
                   <SearchableSelect
                     items={[

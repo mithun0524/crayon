@@ -78,11 +78,15 @@ export async function autoCompact(
   messages: CoreMessage[],
   modelConfig: ModelConfig
 ): Promise<CoreMessage[]> {
-  if (messages.length <= PRESERVE_TAIL) return messages;
+  // Extract all system messages to preserve them
+  const systemMessages = messages.filter((msg) => msg.role === "system");
+  const conversationMessages = messages.filter((msg) => msg.role !== "system");
 
-  const boundary = messages.length - PRESERVE_TAIL;
-  const olderMessages = messages.slice(0, boundary);
-  const recentMessages = messages.slice(boundary);
+  if (conversationMessages.length <= PRESERVE_TAIL) return messages;
+
+  const boundary = conversationMessages.length - PRESERVE_TAIL;
+  const olderMessages = conversationMessages.slice(0, boundary);
+  const recentMessages = conversationMessages.slice(boundary);
 
   // Build a text representation of older messages for summarization
   const conversationText = olderMessages
@@ -112,7 +116,7 @@ export async function autoCompact(
       content: `[Conversation Summary]\n${summary}`,
     };
 
-    return [summaryMessage, ...recentMessages];
+    return [...systemMessages, summaryMessage, ...recentMessages];
   } catch {
     // If summarization fails, fall back to micro-compaction
     return microCompact(messages);

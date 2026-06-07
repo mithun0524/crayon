@@ -7,7 +7,7 @@ const GREETING =
   /^(hey|hi|hello|yo|sup|thanks|thank you|ok|okay|cool|help|what can you do|who are you|good morning|good evening|how are you|bye|goodbye)[!.?\s]*$/i;
 
 const ADVISORY =
-  /^(?:how (?:do|can|should|would|to)|what (?:is|are|does|do|should)|why (?:is|are|do|does)|explain|tell me (?:about|how)|can you explain|describe|where (?:is|are|do|does))/i;
+  /^(?:how (?:do|can|should|would|to)|what (?:is|are|does|do|should)|why (?:is|are|do|does)|explain|tell me|can you explain|describe|where (?:is|are|do|does)|suggest)/i;
 
 const CODING_INTENT =
   /\b(fix|implement|refactor|debug|install|commit|edit file|write tests|run tests|add (?:a |the )?(?:file|route|api|component|test|feature|endpoint)|create (?:a |the )?(?:file|route|api|component|test|feature|endpoint)|update (?:the )?(?:file|code|component)|remove (?:the )?(?:file|code)|delete (?:the )?(?:file|code))\b/i;
