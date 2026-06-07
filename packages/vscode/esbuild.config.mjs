@@ -22,7 +22,10 @@ const nativeModules = [
   "mysql2",
   "mariadb",
   "tedious",
-  "pg-query-stream"
+  "pg-query-stream",
+  "@lancedb/lancedb",
+  "web-tree-sitter",
+  "tree-sitter-wasms"
 ];
 
 const extensionConfig = {
