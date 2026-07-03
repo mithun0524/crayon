@@ -29,6 +29,7 @@ import { PlanView } from "./PlanView.js";
 import { StatusBar } from "./StatusBar.js";
 import { DiffRenderer } from "./DiffRenderer.js";
 import { saveSession, loadSession } from "../session.js";
+import { loadCustomCommands, expandTemplate, type CustomCommand } from "../customCommands.js";
 import { theme, ACCENTS, applyAccent } from "./theme.js";
 import { syntaxThemeDark } from "./syntaxTheme.js";
 import { AgentProgress } from "./components/AgentProgress.js";
@@ -65,11 +66,11 @@ interface ChatMessage {
   };
 }
 
-/** Commands whose name prefix-matches the current "/…" input. */
-function commandMatches(input: string) {
+/** Commands whose name prefix-matches the current "/…" input (built-in + custom). */
+function commandMatches(input: string, custom: Array<{ cmd: string; desc: string }> = []) {
   if (!input.startsWith("/")) return [];
   const q = input.toLowerCase().split(" ")[0]; // ignore args after the command
-  return AVAILABLE_COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(q));
+  return [...AVAILABLE_COMMANDS, ...custom].filter((c) => c.cmd.toLowerCase().startsWith(q));
 }
 
 export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) => {
@@ -129,6 +130,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   // Bumped after applyAccent() mutates the shared theme, to force a re-render.
   const [, setThemeTick] = useState(0);
   const [availableModels, setAvailableModels] = useState<SelectOption[]>([]);
+  const [customCommands, setCustomCommands] = useState<CustomCommand[]>([]);
+  const customCommandsRef = useRef<CustomCommand[]>([]);
+  useEffect(() => { customCommandsRef.current = customCommands; }, [customCommands]);
   const [sessionId, setSessionId] = useState(() => {
     return Math.random().toString(36).substring(2, 10).toUpperCase();
   });
@@ -190,6 +194,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
       const loadedMode = permissionMode || config.permissionMode || "ask";
       setAgentMode(loadedMode);
+      loadCustomCommands(workspaceRoot, os.homedir()).then((cmds) => {
+        if (active && cmds.length > 0) setCustomCommands(cmds);
+      }).catch(() => {});
       if (config.accent && applyAccent(config.accent)) setThemeTick((t) => t + 1);
       setDefaultModel(config.defaultModel || "");
       setCurrentProvider(config.provider as any);
@@ -627,7 +634,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       {
         // Command menu (typed "/…") owns the arrows/Tab/Esc so the main input
         // stays the single input field.
-        const matches = commandMatches(currentInput);
+        const matches = commandMatches(currentInput, customCommandsRef.current);
         const inCmdMenu = currentInput.startsWith("/") && !currentInput.includes(" ") && matches.length > 0;
         if (inCmdMenu) {
           if (key.upArrow) { setCmdIndex((i) => Math.max(0, i - 1)); return; }
@@ -725,6 +732,21 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     if (trimmed.startsWith("/")) {
       const parts = trimmed.split(" ");
       const cmd = parts[0].toLowerCase();
+
+      // Custom commands (.crayon/commands/*.md): expand the template with the
+      // args and run it as a task. Built-ins take precedence via the switch.
+      const custom = customCommandsRef.current.find((c) => c.cmd === cmd);
+      const isBuiltin = AVAILABLE_COMMANDS.some((c) => c.cmd === cmd);
+      if (custom && !isBuiltin) {
+        const expanded = expandTemplate(custom.template, parts.slice(1).join(" "));
+        if (isExecuting) {
+          setQueuedTasks((prev) => [...prev, expanded]);
+        } else if (agentRef.current) {
+          runTask(agentRef.current, expanded);
+        }
+        return;
+      }
+
       switch (cmd) {
         case "/clear": {
           if (agentRef.current) agentRef.current.clearHistory();
@@ -1211,7 +1233,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   };
 
   // Inline command menu state (driven by the single main input).
-  const cmdItems = commandMatches(currentInput);
+  const cmdItems = commandMatches(currentInput, customCommands);
   const showCmdMenu =
     currentInput.startsWith("/") && !currentInput.includes(" ") &&
     cmdItems.length > 0 && !isExecuting &&
@@ -1435,7 +1457,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                     setCurrentInput(v);
                   }}
                   onSubmit={(v) => {
-                    const m = commandMatches(v);
+                    const m = commandMatches(v, customCommandsRef.current);
                     // Substitute the highlighted command only when no args typed yet.
                     if (v.startsWith("/") && !v.includes(" ") && m.length > 0) {
                       handleSubmit(m[Math.min(cmdIndex, m.length - 1)].cmd);
