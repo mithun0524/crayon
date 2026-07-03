@@ -42,6 +42,18 @@ describe("withRetry", () => {
     expect(fn).toHaveBeenCalledTimes(1); // Should not retry
   });
 
+  it("does NOT retry a hard daily-quota 429 (fails fast)", async () => {
+    const errQuota = new Error(
+      "Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day"
+    ) as any;
+    errQuota.status = 429;
+
+    const fn = vi.fn().mockRejectedValue(errQuota);
+
+    await expect(withRetry(fn, { baseDelayMs: 1 })).rejects.toThrow(/free-models-per-day/);
+    expect(fn).toHaveBeenCalledTimes(1); // no pointless retries on a daily cap
+  });
+
   it("respects retry-after header for 429", async () => {
     const err429 = new Error("Rate Limited") as any;
     err429.status = 429;

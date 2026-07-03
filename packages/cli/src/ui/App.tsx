@@ -920,7 +920,13 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
   // Literal, Claude Code-style tool label: ToolName(arg)
   const getToolDisplay = () => {
-    if (!activeToolName || activeToolName === "thinking") return "Thinking...";
+    if (activeToolName === "thinking") {
+      // Surface a meaningful status (e.g. "API error, retrying in 8s…") instead
+      // of a mute "Working" so retries/rate-limits are visible.
+      const s = activeToolArgs?.status;
+      return s && s !== "Thinking..." ? truncate(s, 80) : "Thinking...";
+    }
+    if (!activeToolName) return "Thinking...";
 
     const args = activeToolArgs || {};
     const pathBase = args.path ? path.basename(args.path) : "";
