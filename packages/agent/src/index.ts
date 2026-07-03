@@ -508,24 +508,42 @@ export class CrayonAgent {
         }
       }
 
-      // Await the full result for metadata (steps, tool results)
-      const steps = await streamResult.steps;
+      // Await the post-stream metadata, BOUNDED. When a provider aborts or
+      // returns a degraded/empty stream, the SDK's steps/usage/finishReason
+      // promises can never settle — an unbounded await here silently hangs the
+      // whole run after the stream has already closed.
+      const bounded = <T,>(p: Promise<T> | undefined, ms = 5_000): Promise<T | undefined> =>
+        p
+          ? Promise.race([
+              p.catch(() => undefined as T | undefined),
+              new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms)),
+            ])
+          : Promise.resolve(undefined);
+
+      const steps = await bounded(streamResult.steps);
       totalSteps += steps?.length ?? 1;
 
-      try {
-        const usage = await streamResult.usage;
+      const usage = await bounded(streamResult.usage);
+      if (usage) {
         this.emit({
           type: "usage",
           promptTokens: usage.promptTokens,
           completionTokens: usage.completionTokens,
           totalTokens: usage.totalTokens,
         });
-      } catch {
-        // Suppress usage resolution error if not supported
       }
 
-      let finishReason: string | undefined;
-      try { finishReason = await streamResult.finishReason; } catch { /* not supported */ }
+      const finishReason: string | undefined = await bounded(streamResult.finishReason);
+
+      // A totally empty outcome (no text, no steps, no usage, no finish reason)
+      // means the provider silently failed — typically quota/rate-limit errors
+      // the SDK swallows into an empty stream. Surface it as an error instead
+      // of reporting a bogus success.
+      if (!responseText.trim() && !steps?.length && !usage && !finishReason) {
+        throw new Error(
+          "Model returned an empty response. This usually means the API quota is exhausted or the provider is rate-limiting — check your plan/billing or switch models with /model."
+        );
+      }
       const exhausted = finishReason === "tool-calls" || finishReason === "length";
 
       // Fallback: if the stream produced no text but steps carried some, use it.
@@ -540,7 +558,7 @@ export class CrayonAgent {
       if (exhausted && !responseText.trim() && mode !== "chat") {
         this.emit({ type: "thinking", content: "Reached step limit — composing an answer from gathered context..." });
         try {
-          const respMsgs = ((await streamResult.response)?.messages ?? []) as CoreMessage[];
+          const respMsgs = ((await bounded(streamResult.response))?.messages ?? []) as CoreMessage[];
           const synth = await generateText({
             model,
             messages: [

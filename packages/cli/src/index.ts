@@ -99,8 +99,21 @@ program
   .command("run")
   .description("Run a one-shot autonomous task")
   .argument("<task>", "Task description")
-  .action(async (task: string) => {
+  .option("--json", "Headless mode: print a single JSON result object to stdout (no UI, no prompts)")
+  .option("-m, --mode <mode>", "Permission mode (ask, auto-edit, plan, auto, bypass)")
+  .action(async (task: string, options: { json?: boolean; mode?: string }) => {
     const config = await loadConfig();
+
+    if (options.json) {
+      // Headless: no update prompts, no onboarding, machine-readable output only.
+      if (!hasApiKey(config)) {
+        console.log(JSON.stringify({ success: false, error: "No API key configured. Run 'crayon config' first." }));
+        await exitCLI(2);
+      }
+      await runHeadlessJson(task, config, options.mode);
+      return;
+    }
+
     await handleUpdateOnBoot(config);
     spawnBackgroundUpdateCheck();
 
@@ -169,6 +182,85 @@ program
       await exitCLI(1);
     }
   });
+
+/**
+ * Headless JSON mode: run one task, print exactly one JSON object to stdout.
+ * All human-facing noise goes to stderr. Exit code 0 on success, 1 on failure.
+ * There is no interactivity: approvals auto-resolve by permission mode
+ * (default "auto" — reads/edits allowed, dangerous commands denied).
+ */
+async function runHeadlessJson(task: string, config: Awaited<ReturnType<typeof loadConfig>>, mode?: string) {
+  const started = Date.now();
+  const edits = new Set<string>();
+  const toolCalls: Array<{ name: string; ok: boolean }> = [];
+  const errors: string[] = [];
+  let tokens = 0;
+
+  const permissionMode = (mode as any) || "auto";
+
+  const agent = new CrayonAgent({
+    workspaceRoot: process.cwd(),
+    model: config.defaultModel,
+    provider: config.provider,
+    anthropicApiKey: config.anthropicApiKey,
+    openaiApiKey: config.openaiApiKey,
+    openrouterApiKey: config.openrouterApiKey,
+    googleApiKey: config.googleApiKey,
+    mcpServers: config.mcpServers,
+    permissionMode,
+    onEvent: (event) => {
+      if (process.env.CRAYON_DEBUG) {
+        const info = (event as any).content || (event as any).message || (event as any).name || "";
+        process.stderr.write(`[dbg +${((Date.now() - started) / 1000).toFixed(2)}s] ${event.type} ${String(info).slice(0, 80)}\n`);
+      }
+      switch (event.type) {
+        case "edit": edits.add(event.path); break;
+        case "tool_result": {
+          const r = event.result as any;
+          toolCalls.push({ name: event.name, ok: !(r && (r.success === false || r.error)) });
+          break;
+        }
+        case "usage": tokens += event.totalTokens; break;
+        case "error": errors.push(event.message); break;
+        case "thinking": case "text_delta": case "reasoning_delta":
+          break; // progress noise — omitted in JSON mode
+      }
+    },
+    // Headless cannot prompt. Anything the permission mode doesn't auto-allow is denied.
+    approveCommand: async () => false,
+    approveEdit: async () => false,
+  });
+
+  let result: { success: boolean; summary: string; steps: number; edits: string[] } | null = null;
+  let fatal: string | null = null;
+  try {
+    result = await agent.run(task, { skipHistory: true });
+  } catch (err) {
+    fatal = err instanceof Error ? err.message : String(err);
+  } finally {
+    agent.close();
+  }
+
+  const out = {
+    success: result?.success === true && !fatal,
+    task,
+    summary: result?.summary ?? "",
+    error: fatal ?? (errors.length ? errors.join("; ") : undefined),
+    edits: result ? result.edits : [...edits],
+    steps: result?.steps ?? 0,
+    toolCalls,
+    tokens,
+    durationMs: Date.now() - started,
+    model: config.defaultModel,
+    permissionMode,
+  };
+  // Write synchronously and wait for the pipe to drain before exiting —
+  // console.log + process.exit can silently drop buffered stdout on pipes.
+  await new Promise<void>((resolve) => {
+    process.stdout.write(JSON.stringify(out) + "\n", () => resolve());
+  });
+  await exitCLI(out.success ? 0 : 1);
+}
 
 async function runFallback(task: string) {
   const config = await loadConfig();
