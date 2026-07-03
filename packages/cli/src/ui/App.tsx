@@ -247,6 +247,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         permissionMode: loadedMode as any,
         mcpServers: config.mcpServers,
         verifyCommand: config.verifyCommand,
+    autoCommit: config.autoCommit,
         onEvent: (event: AgentEvent) => {
           if (!active || abortedRef.current) return;
           handleAgentEvent(event);

@@ -208,6 +208,7 @@ async function runHeadlessJson(task: string, config: Awaited<ReturnType<typeof l
     googleApiKey: config.googleApiKey,
     mcpServers: config.mcpServers,
     verifyCommand: config.verifyCommand,
+    autoCommit: config.autoCommit,
     permissionMode,
     onEvent: (event) => {
       if (process.env.CRAYON_DEBUG) {
@@ -277,6 +278,7 @@ async function runFallback(task: string) {
     googleApiKey: config.googleApiKey,
     mcpServers: config.mcpServers,
     verifyCommand: config.verifyCommand,
+    autoCommit: config.autoCommit,
     onEvent: (event) => {
       switch (event.type) {
         case "plan":

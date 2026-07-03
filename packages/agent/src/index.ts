@@ -11,6 +11,7 @@ import { createTools } from "./tools/index.js";
 import { McpClient } from "./tools/mcp.js";
 import { runEvaluation } from "./evaluator/check.js";
 import { withRetry } from "./services/withRetry.js";
+import { autoCommitEdits } from "./services/autoCommit.js";
 import { microCompact, autoCompact, getCompactionLevel } from "./context/compaction.js";
 import { FileStateCache } from "./context/fileState.js";
 import { TransactionManager } from "./context/transaction.js";
@@ -661,6 +662,13 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
       }
     } else {
       await this.transaction.commitTransaction();
+      // Opt-in git workflow: commit this task's edits with a generated message.
+      if (this.config.autoCommit && edits.length > 0) {
+        const ac = await autoCommitEdits(this.config.workspaceRoot, task, [...new Set(edits)]);
+        if (ac.committed) {
+          this.emit({ type: "text", content: `\n[git] Committed ${[...new Set(edits)].length} file(s): ${ac.message} (${ac.hash?.slice(0, 7)})` });
+        }
+      }
     }
 
     const finalSummary =

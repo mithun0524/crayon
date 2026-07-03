@@ -46,6 +46,8 @@ export interface AgentConfig {
    * test/build script).
    */
   verifyCommand?: string;
+  /** When true, commit each successful task's edited files with a generated message. */
+  autoCommit?: boolean;
 }
 
 export interface ToolDefinition<T extends z.ZodType = z.ZodType> {
