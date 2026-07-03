@@ -357,6 +357,17 @@ export class CrayonAgent {
 
 
       this.emit({ type: "thinking", content: "Thinking..." });
+
+      // Idle guard: some providers accept the request then hold the stream open
+      // without ever sending tokens (e.g. a rate-limited free endpoint), which
+      // would spin "Working" forever. We race each stream read against a timer
+      // (below) rather than trusting the provider to honor an abort signal.
+      const IDLE_TIMEOUT_MS = Number(process.env.CRAYON_STREAM_IDLE_MS) || 60_000;
+      const idleController = new AbortController();
+      const combinedSignal = options.signal
+        ? AbortSignal.any([options.signal, idleController.signal])
+        : idleController.signal;
+
       // Use streamText with retry wrapper for resilience
       const { result: streamResult } = await withRetry(
         async () => {
@@ -369,7 +380,7 @@ export class CrayonAgent {
             // backoff-retries so errors (e.g. a hard 429 quota) surface in <1s
             // instead of hanging "Working" for tens of seconds.
             maxRetries: 0,
-            abortSignal: options.signal,
+            abortSignal: combinedSignal,
             onStepFinish: (step) => {
               const { usage } = step;
               const pricing = getModelPricing(model.modelId || modelConfig.model || "");
@@ -395,7 +406,18 @@ export class CrayonAgent {
       let inThinking = false;
       let buffer = "";
 
-      for await (const chunk of streamResult.fullStream) {
+      const streamIterator = streamResult.fullStream[Symbol.asyncIterator]();
+      try {
+      while (true) {
+        let idleTimer: ReturnType<typeof setTimeout> | undefined;
+        const nextChunk = await Promise.race([
+          streamIterator.next(),
+          new Promise<never>((_, reject) => {
+            idleTimer = setTimeout(() => reject(new Error("__CRAYON_IDLE_TIMEOUT__")), IDLE_TIMEOUT_MS);
+          }),
+        ]).finally(() => { if (idleTimer) clearTimeout(idleTimer); });
+        if (nextChunk.done) break;
+        const chunk = nextChunk.value;
         if (chunk.type === "reasoning") {
           this.emit({ type: "reasoning_delta", content: chunk.textDelta });
           continue;
@@ -466,6 +488,15 @@ export class CrayonAgent {
         }
       }
       
+      } catch (streamErr: any) {
+        if (streamErr?.message === "__CRAYON_IDLE_TIMEOUT__") {
+          idleController.abort();
+          try { await streamIterator.return?.(undefined as any); } catch { /* best effort */ }
+          throw new Error(`Model did not respond within ${Math.round(IDLE_TIMEOUT_MS / 1000)}s (endpoint may be down or rate-limited). Use /model to switch models.`);
+        }
+        throw streamErr;
+      }
+
       // Flush any remaining buffer
       if (buffer) {
         if (inThinking) {
