@@ -29,7 +29,7 @@ import { PlanView } from "./PlanView.js";
 import { StatusBar } from "./StatusBar.js";
 import { DiffRenderer } from "./DiffRenderer.js";
 import { saveSession, loadSession } from "../session.js";
-import { theme } from "./theme.js";
+import { theme, ACCENTS, applyAccent } from "./theme.js";
 import { syntaxThemeDark } from "./syntaxTheme.js";
 import { useTerminalSize } from "./hooks/useTerminalSize.js";
 import { AgentProgress } from "./components/AgentProgress.js";
@@ -115,6 +115,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [currentProvider, setCurrentProvider] = useState<"anthropic" | "openai" | "google" | "openrouter" | "ollama">("anthropic");
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
+  // Bumped after applyAccent() mutates the shared theme, to force a re-render.
+  const [, setThemeTick] = useState(0);
   const [availableModels, setAvailableModels] = useState<SelectOption[]>([]);
   const [sessionId] = useState(() => {
     return Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -179,6 +182,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
       const loadedMode = permissionMode || config.permissionMode || "ask";
       setAgentMode(loadedMode);
+      if (config.accent && applyAccent(config.accent)) setThemeTick((t) => t + 1);
       setDefaultModel(config.defaultModel || "");
       setCurrentProvider(config.provider as any);
       
@@ -474,9 +478,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
-    if ((isModelSelectorOpen || isCommandPaletteOpen) && key.escape) {
+    if ((isModelSelectorOpen || isCommandPaletteOpen || isColorPickerOpen) && key.escape) {
       setIsModelSelectorOpen(false);
       setIsCommandPaletteOpen(false);
+      setIsColorPickerOpen(false);
       return;
     }
 
@@ -641,6 +646,25 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     } catch (e) {
       pushMessage({ sender: "system", text: `Warning: Failed to save config: ${e}` });
     }
+  };
+
+  const updateAccent = async (name: string) => {
+    setIsColorPickerOpen(false);
+    const accent = ACCENTS.find((a) => a.name === name);
+    if (!applyAccent(name) || !accent) {
+      pushMessage({ sender: "system", text: `Unknown color "${name}". Try: ${ACCENTS.map((a) => a.name).join(", ")}` });
+      return;
+    }
+    setThemeTick((t) => t + 1); // force re-render so the mutated theme takes effect
+    pushMessage({ sender: "system", text: `Accent changed to ${accent.label}.` });
+    try {
+      const configPath = path.join(os.homedir(), ".crayon", "config.json");
+      const configObj = existsSync(configPath)
+        ? JSON.parse(await readFile(configPath, "utf-8"))
+        : {};
+      configObj.accent = name;
+      await writeFile(configPath, JSON.stringify(configObj, null, 2));
+    } catch { /* non-fatal */ }
   };
 
   const handleSubmit = async (inputStr: string) => {
@@ -849,6 +873,13 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           break;
         case "/config":
           pushMessage({ sender: "system", text: "[!] To change your AI provider, model, or UI theme, please exit the chat (Ctrl+C) and run `crayon config` in your terminal." });
+          break;
+        case "/color":
+          if (parts.length > 1) {
+            updateAccent(parts[1].toLowerCase());
+          } else {
+            setIsColorPickerOpen(true);
+          }
           break;
         case "/easel": {
           if (!agentRef.current) {
@@ -1298,13 +1329,25 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             </Box>
           )}
 
+          {isColorPickerOpen && (
+            <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
+              <Text color={theme.brand} bold>Pick an accent color</Text>
+              <SearchableSelect
+                items={ACCENTS.map((a) => ({ label: a.label, value: a.name, description: a.brand }))}
+                placeholder="Search colors..."
+                onSelect={(val) => updateAccent(val)}
+                onCancel={() => setIsColorPickerOpen(false)}
+              />
+            </Box>
+          )}
+
           <Box marginTop={0} flexDirection="column" paddingLeft={1}>
             <Box flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1}>
               <Text bold color={isExecuting ? theme.subtle : theme.brand}>
                 crayon<Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
               </Text>
-              <TextInput 
-                focus={!isCommandPaletteOpen && !isModelSelectorOpen}
+              <TextInput
+                focus={!isCommandPaletteOpen && !isModelSelectorOpen && !isColorPickerOpen}
                 value={currentInput} 
                 onChange={(v) => { 
                   if (Date.now() - modeSwitchTimeRef.current < 50 && v.endsWith("t")) {

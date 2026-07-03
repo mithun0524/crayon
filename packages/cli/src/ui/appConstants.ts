@@ -12,6 +12,7 @@ export const AVAILABLE_COMMANDS = [
   { cmd: "/compact", desc: "Compact conversation history" },
   { cmd: "/model", desc: "Change the AI model", usage: "[model-name]" },
   { cmd: "/config", desc: "Change provider, model, or theme" },
+  { cmd: "/color", desc: "Change the accent color", usage: "[name]" },
   { cmd: "/easel", desc: "View the active agent context (files read)" },
   { cmd: "/exit", desc: "Exit Crayon" },
   { cmd: "/help", desc: "Show help information" }
