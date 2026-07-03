@@ -365,6 +365,10 @@ export class CrayonAgent {
             messages,
             tools: useTools ? aiTools : undefined,
             maxSteps,
+            // We manage retries ourselves (withRetry). Disable the SDK's internal
+            // backoff-retries so errors (e.g. a hard 429 quota) surface in <1s
+            // instead of hanging "Working" for tens of seconds.
+            maxRetries: 0,
             abortSignal: options.signal,
             onStepFinish: (step) => {
               const { usage } = step;
