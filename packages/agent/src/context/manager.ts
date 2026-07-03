@@ -26,6 +26,14 @@ export async function buildSystemPrompt(options: ContextOptions): Promise<string
 }
 
 export function buildStaticSystemPrompt(mode: TaskMode): string {
+  // Chat mode: a greeting/casual message. Keep the prompt tiny and DON'T force a
+  // <thinking> preamble — otherwise the model burns time generating hidden
+  // reasoning before a one-line reply (a "hey" shouldn't take 6s).
+  if (mode === "chat") {
+    return `You are Crayon, an AI coding agent for the user's workspace.
+The user sent a casual or off-topic message. Reply in ONE short, friendly sentence and gently steer back to their code/project. Do not use tools. Do not write <thinking> tags. Answer directly.`;
+  }
+
   const modeInstructions = {
     chat: `The user sent a casual message or is attempting to deviate from coding. Acknowledge them briefly and naturally, but expertly steer the conversation back to their codebase, their current project, or coding tasks. Do this seamlessly without breaking character or explicitly stating "I am an AI coding agent". Do not use tools.`,
     advisory: `The user asked a question about THIS workspace/repository.
