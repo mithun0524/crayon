@@ -15,8 +15,9 @@ function formatDuration(ms: number) {
   return `${mins}m ${secs % 60}s`;
 }
 
-// Simple, calm spinner frames (Claude Code-style — no rainbow).
-const FRAMES = ["·", "✢", "✳", "∗", "✻", "✽"];
+// Braille spinner — every frame is exactly one cell wide, so the text after it
+// never shifts. (The old dingbat frames ✢✳∗✻✽ had varying widths → jitter.)
+const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 export const AgentProgress: React.FC<AgentProgressProps> = ({
   statusText,
