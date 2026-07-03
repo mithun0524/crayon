@@ -369,9 +369,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       resetStream();
       setStreamingReasoning("");
 
-      // Plan-approve gate: a plan-mode coding run produced a plan (no edits) —
-      // ask whether to execute it before any file is touched.
-      if (mode === "chat" && agentModeRef.current === "plan" && result.edits.length === 0 && result.summary.trim()) {
+      // Plan-approve gate: only when the agent actually ran in plan mode and
+      // produced a plan (result.planned) — never for advisory/chat answers.
+      if (mode === "chat" && result.planned && result.summary.trim()) {
         setApprovalRequest({ type: "plan", plan: result.summary });
       }
 
@@ -607,6 +607,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         const currentIdx = modes.indexOf(agentMode);
         const nextMode = modes[(currentIdx + 1) % modes.length];
         setAgentMode(nextMode);
+        agentModeRef.current = nextMode; // sync now; the effect only runs post-render
         modeSwitchTimeRef.current = Date.now();
         if (agentRef.current) agentRef.current.setPermissionMode(nextMode as any);
         return;
@@ -843,6 +844,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           if (["ask", "auto-edit", "plan", "auto", "bypass"].includes(m)) {
             if (agentRef.current) agentRef.current.setPermissionMode(m as any);
             setAgentMode(m);
+            agentModeRef.current = m; // sync now; the effect only runs post-render
             pushMessage({ sender: "system", text: `🔒 Permission mode set to: ${m}` });
           } else {
             pushMessage({ sender: "system", text: `Invalid mode. Use: ask, auto-edit, plan, auto, bypass` });
@@ -1002,14 +1004,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   };
 
   useEffect(() => {
-    if (!isExecuting && queuedTasks.length > 0 && agentRef.current) {
+    if (!isExecuting && !approvalRequest && queuedTasks.length > 0 && agentRef.current) {
       const nextTask = queuedTasks[0];
       setQueuedTasks((prev) => prev.slice(1));
       parseMentions(nextTask).then((enrichedText) => {
         runTask(agentRef.current!, enrichedText);
       });
     }
-  }, [isExecuting, queuedTasks]);
+  }, [isExecuting, queuedTasks, approvalRequest]);
 
   const truncate = (str: string, maxLen: number = 50) => {
     if (!str) return "";

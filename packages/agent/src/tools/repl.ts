@@ -16,9 +16,24 @@ export function createReplTool(ctx: ToolContext) {
       code: z.string().describe("The code snippet to evaluate"),
     }),
     execute: async ({ language, code }: { language: "node" | "python", code: string }) => {
+      // repl runs arbitrary code — the strongest privilege the agent has.
+      // Gate it like a dangerous command: never in plan mode, always require
+      // approval unless the user has explicitly chosen bypass.
+      if (ctx.permissionMode === "plan") {
+        return { stdout: "", stderr: "PERMISSION_DENIED: repl is disabled in plan mode", success: false };
+      }
+      if (ctx.permissionMode !== "bypass") {
+        const approved = ctx.approveCommand
+          ? await ctx.approveCommand(`repl(${language}):\n${code.slice(0, 400)}`)
+          : false;
+        if (!approved) {
+          return { stdout: "", stderr: "PERMISSION_DENIED_BY_USER", success: false };
+        }
+      }
+
       const ext = language === "node" ? "js" : "py";
       const tmpFile = path.join(tmpdir(), `crayon_repl_${Date.now()}.${ext}`);
-      
+
       try {
         await writeFile(tmpFile, code, "utf-8");
         

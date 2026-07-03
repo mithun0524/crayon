@@ -24,7 +24,9 @@ export async function autoCommitEdits(
   try {
     if (!(await git.checkIsRepo())) return { committed: false, reason: "not a git repo" };
 
-    await git.add(edits);
+    // `--` end-of-options: a model-created file named like a flag (e.g. `-x`,
+    // `--author=…`) must be treated as a pathspec, never a git option.
+    await git.add(["--", ...edits]);
     const status = await git.status();
     if (status.staged.length === 0) return { committed: false, reason: "nothing staged" };
 
@@ -32,8 +34,9 @@ export async function autoCommitEdits(
     const subject = firstLine.length > 60 ? firstLine.slice(0, 57) + "..." : firstLine;
     const message = `crayon: ${subject}`;
 
-    const res = await git.commit(message, edits);
-    return { committed: true, hash: res.commit, message };
+    await git.raw(["commit", "-m", message, "--", ...edits]);
+    const hash = (await git.revparse(["HEAD"])).trim();
+    return { committed: true, hash, message };
   } catch (e: any) {
     return { committed: false, reason: e?.message ?? String(e) };
   }

@@ -107,8 +107,10 @@ program
     if (options.json) {
       // Headless: no update prompts, no onboarding, machine-readable output only.
       if (!hasApiKey(config)) {
-        console.log(JSON.stringify({ success: false, error: "No API key configured. Run 'crayon config' first." }));
-        await exitCLI(2);
+        process.stdout.write(JSON.stringify({ success: false, error: "No API key configured. Run 'crayon config' first." }) + "\n");
+        await flushTelemetry().catch(() => {});
+        process.exit(2); // NOT exitCLI — it prints the update box to stdout
+        return;
       }
       await runHeadlessJson(task, config, options.mode);
       return;
@@ -261,7 +263,10 @@ async function runHeadlessJson(task: string, config: Awaited<ReturnType<typeof l
   await new Promise<void>((resolve) => {
     process.stdout.write(JSON.stringify(out) + "\n", () => resolve());
   });
-  await exitCLI(out.success ? 0 : 1);
+  // Exit directly — exitCLI() calls showPassiveNotification() which prints an
+  // "update available" box to stdout and would corrupt the single-JSON output.
+  await flushTelemetry().catch(() => {});
+  process.exit(out.success ? 0 : 1);
 }
 
 async function runFallback(task: string) {
@@ -279,6 +284,10 @@ async function runFallback(task: string) {
     mcpServers: config.mcpServers,
     verifyCommand: config.verifyCommand,
     autoCommit: config.autoCommit,
+    // Non-TTY (CI/pipes): can't prompt, so the permission mode decides.
+    // Default "auto" allows reads/edits but denies dangerous commands; the
+    // deny-approvals below ensure nothing the mode gates gets a blanket yes.
+    permissionMode: (config.permissionMode as any) || "auto",
     onEvent: (event) => {
       switch (event.type) {
         case "plan":
@@ -307,14 +316,13 @@ async function runFallback(task: string) {
           break;
       }
     },
+    // No interactive prompt available — deny anything the permission mode
+    // doesn't already auto-allow (never blanket-approve dangerous commands).
     approveCommand: async (cmd) => {
-      console.log(chalk.yellow(`\n⚠️ Auto-approving terminal command in non-TTY: ${cmd}`));
-      return true;
+      console.error(chalk.yellow(`⚠️ Denied (no TTY to approve): ${cmd.slice(0, 80)}. Use --mode bypass to allow, or run interactively.`));
+      return false;
     },
-    approveEdit: async (filePath) => {
-      console.log(chalk.yellow(`\n⚠️ Auto-approving file edit in non-TTY: ${filePath}`));
-      return true;
-    }
+    approveEdit: async () => false,
   });
 
   try {

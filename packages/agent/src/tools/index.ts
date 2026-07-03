@@ -2,6 +2,8 @@ import { readFile, writeFile, mkdir, readdir, unlink, rename, stat } from "node:
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import net from "node:net";
+import { lookup } from "node:dns/promises";
 import { createTwoFilesPatch } from "diff";
 import { simpleGit } from "simple-git";
 import { z } from "zod";
@@ -24,11 +26,85 @@ const DANGEROUS_PATTERNS = [
   /mkfs/i,
   /:\(\)\s*\{\s*:\|:&\s*\}/,
   />\s*\/dev\/sd/,
+  // Shell chaining / redirection / command substitution — a single blocklist
+  // can never cover what these compose, so any of them requires approval.
+  /[;`]|\$\(|\$\{|\|\||&&|&(?!\d)|>>?|<|\|/,
+  // Inline env assignment (e.g. `X=curl $X ...`) hides the real command.
+  /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/,
 ];
+
+// Binaries that can execute code, exfiltrate, or destroy — flagged so `auto`
+// mode still asks. Not exhaustive (impossible for a denylist), but closes the
+// obvious gaps beyond the token list below.
+const DANGEROUS_BINARIES = new Set([
+  "cd", "rm", "del", "mv", "cp", "sh", "bash", "zsh", "dash", "ksh", "fish",
+  "cmd", "powershell", "pwsh", "node", "deno", "bun", "python", "python3",
+  "ruby", "perl", "php", "curl", "wget", "eval", "exec", "env", "dd", "chmod",
+  "chown", "ln", "ssh", "scp", "rsync", "nc", "ncat", "socat", "telnet",
+  "git", "make", "kill", "killall", "find", "xargs", "tar", "truncate",
+  "launchctl", "systemctl", "crontab", "at",
+]);
 
 function capResult(result: string, maxChars: number = 50000): string {
   if (result.length <= maxChars) return result;
   return result.slice(0, maxChars) + `\n\n... (output truncated at ${maxChars} chars. Full output is ${result.length} chars.)`;
+}
+
+/** True if an IP is loopback / private / link-local / reserved (SSRF targets). */
+function isBlockedIp(ip: string): boolean {
+  const v = net.isIP(ip);
+  if (v === 4) {
+    const p = ip.split(".").map(Number);
+    return (
+      p[0] === 10 ||                                   // 10/8
+      p[0] === 127 ||                                  // loopback
+      (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||    // 172.16/12
+      (p[0] === 192 && p[1] === 168) ||                // 192.168/16
+      (p[0] === 169 && p[1] === 254) ||                // link-local (cloud metadata)
+      p[0] === 0 || p[0] >= 224                        // 0.0.0.0/8, multicast/reserved
+    );
+  }
+  const l = ip.toLowerCase().replace(/^\[|\]$/g, "");
+  return l === "::1" || l === "::" || l.startsWith("fe80") || l.startsWith("fc") || l.startsWith("fd") || l.startsWith("::ffff:");
+}
+
+/** Validate a URL for outbound fetch: http(s) only, resolves to a public IP. Throws otherwise. */
+async function assertPublicUrl(rawUrl: string): Promise<void> {
+  let u: URL;
+  try { u = new URL(rawUrl); } catch { throw new Error(`Invalid URL: ${rawUrl}`); }
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    throw new Error(`Blocked non-http(s) URL scheme: ${u.protocol}`);
+  }
+  const host = u.hostname.replace(/^\[|\]$/g, "");
+  if (/^(localhost|.*\.local|.*\.internal)$/i.test(host)) {
+    throw new Error(`Blocked internal host: ${u.hostname}`);
+  }
+  let ips: string[];
+  if (net.isIP(host)) ips = [host];
+  else {
+    try { ips = (await lookup(host, { all: true })).map((a) => a.address); }
+    catch { throw new Error(`Could not resolve host: ${u.hostname}`); }
+  }
+  if (ips.some(isBlockedIp)) {
+    throw new Error(`Blocked request to private/loopback address (${ips.join(", ")}) — possible SSRF.`);
+  }
+}
+
+/** Fetch that revalidates the target on every redirect hop (SSRF-safe). */
+async function safeFetch(url: string, signal: AbortSignal): Promise<Response> {
+  let current = url;
+  for (let hop = 0; hop < 5; hop++) {
+    await assertPublicUrl(current);
+    const res = await fetch(current, { redirect: "manual", signal });
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location");
+      if (!loc) return res;
+      current = new URL(loc, current).toString(); // re-validated at loop top
+      continue;
+    }
+    return res;
+  }
+  throw new Error("Too many redirects");
 }
 
 export function createTools(ctx: ToolContext) {
@@ -50,6 +126,11 @@ export function createTools(ctx: ToolContext) {
       const relative = path.relative(ctx.workspaceRoot, resolved);
       if (relative.startsWith("..") || path.isAbsolute(relative)) {
         throw new Error(`Path escapes workspace: ${filePath}`);
+      }
+      // Reject option-like filenames so a path can never be misread as a CLI
+      // flag when passed to git/shell tooling (e.g. `-rf`, `--author=…`).
+      if (path.basename(resolved).startsWith("-")) {
+        throw new Error(`Refusing option-like filename: ${filePath}`);
       }
       return resolved;
     };
@@ -564,7 +645,8 @@ export function createTools(ctx: ToolContext) {
             for (const token of parsed) {
               if (typeof token === "string") {
                 const lower = token.toLowerCase();
-                if (["cd", "rm", "del", "mv", "sh", "bash", "cmd", "powershell", "pwsh", "node", "python", "ruby", "perl", "curl", "wget", "eval", "exec", "env"].includes(lower)) {
+                const base = lower.split("/").pop() || lower; // handle /usr/bin/python3
+                if (DANGEROUS_BINARIES.has(lower) || DANGEROUS_BINARIES.has(base)) {
                   isDangerous = true;
                   break;
                 }
@@ -736,9 +818,7 @@ export function createTools(ctx: ToolContext) {
         }
 
         try {
-          const response = await fetch(url, {
-            signal: AbortSignal.timeout(10000),
-          });
+          const response = await safeFetch(url, AbortSignal.timeout(10000));
           const body = await response.text();
           const maxLen = max_length ?? 50000;
           return {

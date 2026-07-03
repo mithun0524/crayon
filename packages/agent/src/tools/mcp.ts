@@ -36,10 +36,17 @@ export class McpClient {
 
     for (const config of this.serverConfigs) {
       try {
+        // Do NOT forward the whole environment — that leaks our LLM provider
+        // keys to every MCP subprocess. Pass a minimal base plus the server's
+        // own declared env, and strip anything key/secret/token-looking.
+        const SECRET_RE = /(_KEY|_TOKEN|_SECRET|PASSWORD|APIKEY|CREDENTIAL)/i;
         const env: Record<string, string> = {};
-        for (const [k, v] of Object.entries(process.env)) {
-          if (v !== undefined) env[k] = v;
+        const BASE_VARS = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM", "TMPDIR", "SystemRoot", "APPDATA", "ProgramFiles", "ProgramData"];
+        for (const k of BASE_VARS) {
+          const v = process.env[k];
+          if (v !== undefined && !SECRET_RE.test(k)) env[k] = v;
         }
+        // The server's explicitly-declared env is trusted (user-configured).
         for (const [k, v] of Object.entries(config.env || {})) {
           env[k] = v;
         }

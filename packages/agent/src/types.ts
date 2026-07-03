@@ -97,6 +97,8 @@ export interface AgentResult {
   summary: string;
   steps: number;
   edits: string[];
+  /** True when this was a plan-mode run that produced a plan (no edits made). */
+  planned?: boolean;
 }
 
 export type { CoreMessage, RepoIntelligence };

@@ -1,7 +1,12 @@
-import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { CoreMessage } from "crayon-agent";
+
+// Per-file write queue: pushMessage fires saveSession on every message
+// (unawaited), so overlapping writes to one <id>.json could interleave and
+// corrupt it. Serialize per path and write atomically (temp → rename).
+const writeChains = new Map<string, Promise<void>>();
 
 export interface SessionData {
   id: string;
@@ -47,7 +52,20 @@ export async function saveSession(
     history,
     chatLog,
   };
-  await writeFile(path.join(dir, `${id}.json`), JSON.stringify(data, null, 2), "utf-8");
+  const finalPath = path.join(dir, `${id}.json`);
+  const payload = JSON.stringify(data, null, 2);
+
+  const prev = writeChains.get(finalPath) ?? Promise.resolve();
+  const next = prev
+    .catch(() => {})
+    .then(async () => {
+      const tmp = `${finalPath}.${process.pid}.tmp`;
+      await writeFile(tmp, payload, "utf-8");
+      await rename(tmp, finalPath); // atomic swap — readers never see a partial file
+    });
+  writeChains.set(finalPath, next);
+  await next;
+  if (writeChains.get(finalPath) === next) writeChains.delete(finalPath);
 }
 
 /** Load a session by id, or the most recent one if no id is given. */
@@ -96,6 +114,6 @@ export async function listSessions(workspaceRoot: string): Promise<SessionMeta[]
       // skip corrupt file
     }
   }
-  metas.sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
+  metas.sort((a, b) => (a.timestamp === b.timestamp ? 0 : a.timestamp < b.timestamp ? 1 : -1));
   return metas;
 }

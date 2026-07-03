@@ -425,8 +425,13 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
       try {
       while (true) {
         let idleTimer: ReturnType<typeof setTimeout> | undefined;
+        const nextP = streamIterator.next();
+        // If the timeout wins the race, this promise is orphaned and later
+        // rejects (via idleController.abort()); swallow that so it can't become
+        // an unhandledRejection that the global handler turns into exit(1).
+        nextP.catch(() => {});
         const nextChunk = await Promise.race([
-          streamIterator.next(),
+          nextP,
           new Promise<never>((_, reject) => {
             idleTimer = setTimeout(() => reject(new Error("__CRAYON_IDLE_TIMEOUT__")), IDLE_TIMEOUT_MS);
           }),
@@ -696,6 +701,7 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
       summary: finalSummary,
       steps: totalSteps,
       edits: [...new Set(edits)],
+      planned: planningOnly && edits.length === 0,
     };
     } catch (err: any) {
       await this.transaction.rollbackTransaction();
