@@ -465,7 +465,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     activePlanRef.current = [];
     resetStream();
     setStreamingReasoning("");
-    pushMessage({ sender: "system", text: "Interrupted by user." });
+    // Drop any queued messages too — one esc cancels the whole batch, not just
+    // the running task (otherwise the queue keeps draining, one esc per task).
+    const dropped = queuedTasks.length;
+    setQueuedTasks([]);
+    pushMessage({
+      sender: "system",
+      text: dropped > 0 ? `Interrupted by user. (${dropped} queued message${dropped === 1 ? "" : "s"} cancelled)` : "Interrupted by user.",
+    });
     if (approvalRequest) {
       approvalRequest.resolve(false);
       setApprovalRequest(null);
