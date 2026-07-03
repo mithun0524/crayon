@@ -219,7 +219,20 @@ export class CrayonAgent {
     };
 
     this.emit({ type: "thinking", content: "Preparing context and tools..." });
-    const staticSystemPrompt = buildStaticSystemPrompt(mode);
+    let staticSystemPrompt = buildStaticSystemPrompt(mode);
+    // Plan mode + coding task: explore read-only and produce a reviewable plan
+    // instead of attempting (blocked) edits. The consumer shows the plan and
+    // asks the user to approve execution.
+    const planningOnly = this.config.permissionMode === "plan" && mode === "coding";
+    if (planningOnly) {
+      staticSystemPrompt += `
+
+## PLAN MODE (read-only)
+You are in plan mode. Do NOT edit files or run commands that modify anything — write tools are blocked and will fail.
+1. Explore the codebase with read-only tools (read_file, search_codebase, grep, list_directory) to ground the plan in reality.
+2. Then output a concrete implementation plan as a numbered markdown list: each step names the exact file(s) and the change to make.
+3. End with a one-line summary of the expected outcome. Do not ask for approval — just produce the plan.`;
+    }
 
     const staticSystemMessage: CoreMessage = {
       role: "system",

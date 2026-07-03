@@ -112,6 +112,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [approvalRequest, setApprovalRequest] = useState<any>(null);
   const [sessionFiles, setSessionFiles] = useState<string[]>([]);
   const [agentMode, setAgentMode] = useState<string>(permissionMode || "ask");
+  const agentModeRef = useRef(agentMode);
+  useEffect(() => { agentModeRef.current = agentMode; }, [agentMode]);
   const [defaultModel, setDefaultModel] = useState<string>("");
   const defaultModelRef = useRef<string>("");
   useEffect(() => {
@@ -359,6 +361,12 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       resetStream();
       setStreamingReasoning("");
 
+      // Plan-approve gate: a plan-mode coding run produced a plan (no edits) —
+      // ask whether to execute it before any file is touched.
+      if (mode === "chat" && agentModeRef.current === "plan" && result.edits.length === 0 && result.summary.trim()) {
+        setApprovalRequest({ type: "plan", plan: result.summary });
+      }
+
       if (mode === "run") {
         setTimeout(() => exit(), 1000);
       }
@@ -501,7 +509,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       text: dropped > 0 ? `Interrupted by user. (${dropped} queued message${dropped === 1 ? "" : "s"} cancelled)` : "Interrupted by user.",
     });
     if (approvalRequest) {
-      approvalRequest.resolve(false);
+      approvalRequest.resolve?.(false); // plan approvals have no resolver
       setApprovalRequest(null);
     }
   };
@@ -1260,7 +1268,34 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
         {approvalRequest && (
           <Box flexDirection="column" borderStyle="single" borderColor={theme.warning} paddingX={1} marginY={1} width="100%">
-            {approvalRequest.type === "command" ? (
+            {approvalRequest.type === "plan" ? (
+              <Box flexDirection="column">
+                <Text color={theme.brand} bold>Plan ready — execute it?</Text>
+                <Box marginTop={1}>
+                  <SearchableSelect
+                    items={[
+                      { label: "Execute plan", value: "execute", description: "Switch to auto-edit and implement the plan above" },
+                      { label: "Keep planning", value: "keep", description: "Stay in plan mode; refine with another message" },
+                      { label: "Discard", value: "discard", description: "Do nothing" }
+                    ]}
+                    onSelect={(val) => {
+                      const plan = approvalRequest.plan as string;
+                      setApprovalRequest(null);
+                      if (val === "execute" && agentRef.current) {
+                        setAgentMode("auto-edit");
+                        agentModeRef.current = "auto-edit";
+                        agentRef.current.setPermissionMode("auto-edit" as any);
+                        pushMessage({ sender: "system", text: "Plan approved — executing in auto-edit mode." });
+                        runTask(agentRef.current, `Execute this approved implementation plan, step by step. Verify when done.\n\n${plan}`);
+                      } else if (val === "keep") {
+                        pushMessage({ sender: "system", text: "Staying in plan mode — send a message to refine the plan." });
+                      }
+                    }}
+                    onCancel={() => setApprovalRequest(null)}
+                  />
+                </Box>
+              </Box>
+            ) : approvalRequest.type === "command" ? (
               <Box flexDirection="column">
                 <Text color={theme.warning} bold>⚠️ Approve terminal command?</Text>
                 <Text color={theme.text} italic>  {approvalRequest.command}</Text>
