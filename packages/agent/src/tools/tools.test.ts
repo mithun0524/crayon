@@ -65,6 +65,14 @@ describe("file tools", () => {
     expect(out).not.toContain("a-b");
   });
 
+  it("edit_file fuzzy matches a whitespace-variant substring ('a - b' vs 'a-b')", async () => {
+    await writeFile(path.join(root, "m.js"), "export function add(a,b){return a-b;}\n", "utf-8");
+    const tools = createTools(makeCtx(root));
+    const res: any = await tools.edit_file.execute({ path: "m.js", old_string: "a - b", new_string: "a + b" });
+    expect(res.success).toBe(true);
+    expect(await readFile(path.join(root, "m.js"), "utf-8")).toContain("return a + b;");
+  });
+
   it("edit_file fuzzy fallback refuses when the block is ambiguous", async () => {
     await writeFile(path.join(root, "f.ts"), "  x\n  x\n", "utf-8");
     const tools = createTools(makeCtx(root));

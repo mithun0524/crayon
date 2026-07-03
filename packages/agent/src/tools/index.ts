@@ -52,31 +52,33 @@ function capResult(result: string, maxChars: number = 50000): string {
 
 /**
  * Whitespace-tolerant fallback for edit_file: when old_string doesn't match
- * exactly (the #1 failure for weaker models — indentation / trailing spaces),
- * match line-by-line ignoring leading/trailing whitespace. Replaces only if
- * exactly one contiguous block matches. Returns null if 0 or >1 matches.
+ * exactly (the #1 failure for weaker models — different indentation or spacing,
+ * e.g. model sends "a - b" but the file has "a-b"), match ignoring ALL
+ * whitespace and map the normalized offsets back to the original text. Replaces
+ * only if the whitespace-stripped needle occurs exactly once. Returns null on 0
+ * or >1 matches (ambiguous → refuse rather than edit the wrong place).
  */
 function fuzzyReplace(content: string, oldStr: string, newStr: string): string | null {
-  const cLines = content.split("\n");
-  let oLines = oldStr.split("\n");
-  // Drop blank lines at the ends of the search block (e.g. a trailing newline).
-  while (oLines.length && oLines[0].trim() === "") oLines.shift();
-  while (oLines.length && oLines[oLines.length - 1].trim() === "") oLines.pop();
-  if (oLines.length === 0) return null;
-
-  const norm = (s: string) => s.trim();
-  const oNorm = oLines.map(norm);
-  const matches: number[] = [];
-  for (let i = 0; i + oNorm.length <= cLines.length; i++) {
-    let ok = true;
-    for (let j = 0; j < oNorm.length; j++) {
-      if (norm(cLines[i + j]) !== oNorm[j]) { ok = false; break; }
+  // Strip whitespace, keeping a map from each kept char to its original index.
+  const strip = (s: string): { out: string; map: number[] } => {
+    let out = "";
+    const map: number[] = [];
+    for (let i = 0; i < s.length; i++) {
+      if (!/\s/.test(s[i])) { out += s[i]; map.push(i); }
     }
-    if (ok) matches.push(i);
-  }
-  if (matches.length !== 1) return null;
-  const i = matches[0];
-  return [...cLines.slice(0, i), ...newStr.split("\n"), ...cLines.slice(i + oNorm.length)].join("\n");
+    return { out, map };
+  };
+  const c = strip(content);
+  const o = strip(oldStr);
+  if (o.out.length === 0) return null;
+
+  const first = c.out.indexOf(o.out);
+  if (first === -1) return null;
+  if (c.out.indexOf(o.out, first + 1) !== -1) return null; // ambiguous
+
+  const origStart = c.map[first];
+  const origEnd = c.map[first + o.out.length - 1] + 1; // one past the last matched char
+  return content.slice(0, origStart) + newStr + content.slice(origEnd);
 }
 
 /** True if an IP is loopback / private / link-local / reserved (SSRF targets). */
