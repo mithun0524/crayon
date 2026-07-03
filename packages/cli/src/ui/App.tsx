@@ -44,7 +44,8 @@ import {
 interface AppProps {
   mode: "run" | "chat";
   task?: string;
-  resume?: boolean;
+  // true = resume most recent session; string = resume that session id.
+  resume?: boolean | string;
   permissionMode?: any;
 }
 
@@ -126,9 +127,12 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   // Bumped after applyAccent() mutates the shared theme, to force a re-render.
   const [, setThemeTick] = useState(0);
   const [availableModels, setAvailableModels] = useState<SelectOption[]>([]);
-  const [sessionId] = useState(() => {
+  const [sessionId, setSessionId] = useState(() => {
     return Math.random().toString(36).substring(2, 10).toUpperCase();
   });
+  // Ref mirror so save callbacks always use the current id (incl. after resume).
+  const sessionIdRef = useRef(sessionId);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
   const sessionStartTimeRef = useRef(Date.now());
   const apiDurationRef = useRef(0);
 
@@ -149,7 +153,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     setHistory((prev) => {
       const next = [...prev, newMsg];
       if (agentRef.current) {
-        saveSession(workspaceRoot, agentRef.current.getHistory(), next).catch(() => {});
+        saveSession(workspaceRoot, sessionIdRef.current, agentRef.current.getHistory(), next).catch(() => {});
       }
       return next;
     });
@@ -271,8 +275,12 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       agentRef.current = agent;
 
       if (resume) {
-        const session = await loadSession(workspaceRoot);
+        const wantId = typeof resume === "string" ? resume : undefined;
+        const session = await loadSession(workspaceRoot, wantId);
         if (session) {
+          // Continue the resumed session — further saves append to the same id.
+          setSessionId(session.id);
+          sessionIdRef.current = session.id;
           agent.setHistory(session.history || []);
           // Restore the visible transcript too, so a resumed chat shows the
           // prior conversation (not just the agent's hidden memory).
@@ -281,9 +289,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             id: `restored-${i}`,
           }));
           if (restored.length > 0) setHistory(restored as any);
-          pushMessage({ sender: "system", text: "↺ Session resumed." });
+          pushMessage({ sender: "system", text: `↺ Resumed session ${session.id}${session.title ? ` — ${session.title}` : ""}` });
         } else {
-          pushMessage({ sender: "system", text: "⚠ No previous session found to resume." });
+          pushMessage({
+            sender: "system",
+            text: wantId
+              ? `⚠ No session found with id "${wantId}". Run 'crayon sessions' to list.`
+              : "⚠ No previous session found to resume.",
+          });
         }
       }
 
@@ -741,7 +754,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             const actualIdx = history.length - 1 - lastUserIdxUI;
             const newUIHistory = history.slice(0, actualIdx);
             setHistory(newUIHistory);
-            saveSession(workspaceRoot, agentRef.current.getHistory(), newUIHistory).catch(() => {});
+            saveSession(workspaceRoot, sessionIdRef.current, agentRef.current.getHistory(), newUIHistory).catch(() => {});
             pushMessage({ sender: "system", text: "↩️ Last turn undone. Ready for your input." });
           } else {
             pushMessage({ sender: "system", text: "📭 No messages to undo." });

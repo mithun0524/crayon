@@ -9,6 +9,7 @@ import { render } from "ink";
 import { CrayonAgent } from "crayon-agent";
 import { CodeIndexer } from "crayon-indexer";
 import { loadConfig, hasApiKey } from "./config.js";
+import { listSessions } from "./session.js";
 import { App } from "./ui/App.js";
 import { initTelemetry, trackEvent, flushTelemetry } from "./telemetry.js";
 import { runOnboardingFlow } from "./onboarding.js";
@@ -127,7 +128,7 @@ program
 program
   .command("chat")
   .description("Interactive agent session")
-  .option("-r, --resume", "Resume the last active session")
+  .option("-r, --resume [id]", "Resume the most recent session, or a specific session id")
   .option("-m, --mode <mode>", "Permission mode (ask, auto-edit, plan, auto, bypass)")
   .action(async (options) => {
     const config = await loadConfig();
@@ -156,9 +157,12 @@ program
       await waitUntilExit();
 
       // Point the user back to their session (kept in scrollback above).
-      const sessionFile = path.join(process.cwd(), ".crayon", "sessions", "latest.json");
-      if (existsSync(sessionFile)) {
-        console.log(chalk.dim(`\n↻ Resume this session:  `) + chalk.cyan(`crayon chat --resume`));
+      const sessions = await listSessions(process.cwd());
+      if (sessions.length > 0) {
+        console.log(
+          chalk.dim(`\n↻ Resume:  `) + chalk.cyan(`crayon chat --resume ${sessions[0].id}`) +
+          chalk.dim(`   ·  list all:  `) + chalk.cyan(`crayon sessions`)
+        );
       }
     } catch (err) {
       console.error(chalk.red(`TUI Error: ${err instanceof Error ? err.message : String(err)}`));
@@ -326,6 +330,26 @@ program
   .action(async () => {
     const { runMcpServer } = await import("crayon-agent");
     await runMcpServer();
+  });
+
+program
+  .command("sessions")
+  .description("List saved chat sessions for this workspace")
+  .action(async () => {
+    const sessions = await listSessions(process.cwd());
+    if (sessions.length === 0) {
+      console.log(chalk.dim("No saved sessions in this workspace."));
+      return;
+    }
+    console.log(chalk.bold("Sessions (newest first):\n"));
+    for (const s of sessions) {
+      const when = s.timestamp ? new Date(s.timestamp).toLocaleString() : "unknown";
+      console.log(
+        `  ${chalk.cyan(s.id)}  ${chalk.dim(when)}  ${chalk.dim(`(${s.messageCount} msgs)`)}\n` +
+        `      ${s.title}`
+      );
+    }
+    console.log(chalk.dim(`\nResume:  crayon chat --resume <id>`));
   });
 
 program
