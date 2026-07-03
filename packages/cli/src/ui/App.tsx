@@ -33,6 +33,7 @@ import { theme, ACCENTS, applyAccent } from "./theme.js";
 import { syntaxThemeDark } from "./syntaxTheme.js";
 import { useTerminalSize } from "./hooks/useTerminalSize.js";
 import { AgentProgress } from "./components/AgentProgress.js";
+import { CrayonLogo } from "./components/CrayonLogo.js";
 import { ThinkingMessage } from "./messages/ThinkingMessage.js";
 import {
   AVAILABLE_COMMANDS,
@@ -1102,9 +1103,11 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       const versionMatch = msg.text.match(/v([0-9.]+)/);
       const version = versionMatch ? versionMatch[1] : "0.1.0";
       return (
-        <Box key={msg.id} flexDirection="column" marginBottom={1} borderStyle="round" borderColor={theme.brand} paddingX={1}>
-          <Text color={theme.brand} bold>✻ Crayon Code v{version}</Text>
-          <Text color={theme.subtle} dimColor>/help for commands · cwd: {workspaceRoot}</Text>
+        <Box key={msg.id} flexDirection="column" marginBottom={1}>
+          <CrayonLogo version={version} />
+          <Box marginTop={1} paddingLeft={1}>
+            <Text color={theme.subtle} dimColor>/help for commands · cwd: {workspaceRoot}</Text>
+          </Box>
         </Box>
       );
     }
