@@ -139,6 +139,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const executionStartTime = useRef<number | undefined>(undefined);
 
   const modeSwitchTimeRef = useRef(0);
+  const lastCtrlCRef = useRef(0); // timestamp of the last Ctrl+C, for double-tap-to-quit
   const workspaceRoot = process.cwd();
   const workspaceName = path.basename(workspaceRoot);
 
@@ -481,8 +482,20 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
-      if (agentRef.current) agentRef.current.close();
-      exit();
+      const now = Date.now();
+      // Second Ctrl+C within 2s → actually quit.
+      if (now - lastCtrlCRef.current < 2000) {
+        if (agentRef.current) agentRef.current.close();
+        exit();
+        return;
+      }
+      lastCtrlCRef.current = now;
+      // First Ctrl+C: if the agent is running, interrupt it cleanly (aborts the
+      // task, rolls back its transaction, clears the queue); then prompt again.
+      if (isExecuting) {
+        handleAbort();
+      }
+      pushMessage({ sender: "system", text: "Press Ctrl+C again to exit." });
       return;
     }
 
