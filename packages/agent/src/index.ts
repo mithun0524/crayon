@@ -605,7 +605,10 @@ export class CrayonAgent {
         break;
       }
 
-      const evalResult = await runEvaluation(this.config.workspaceRoot);
+      const evalResult = await runEvaluation(
+        this.config.workspaceRoot,
+        this.config.verifyCommand ?? process.env.CRAYON_VERIFY_CMD
+      );
       if (!evalResult) break;
 
       this.emit({

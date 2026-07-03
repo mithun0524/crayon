@@ -15,6 +15,8 @@ export interface CrayonConfig {
   mcpServers?: any[];
   disableTelemetry?: boolean;
   accent?: string;
+  /** Post-edit verification command; "none" disables; unset auto-detects. */
+  verifyCommand?: string;
 }
 
 const CONFIG_DIR = path.join(os.homedir(), ".crayon");
@@ -63,6 +65,7 @@ export async function loadConfig(): Promise<CrayonConfig> {
         updateMode: config.updateMode ?? file.updateMode,
         disableTelemetry: config.disableTelemetry ?? file.disableTelemetry,
         accent: process.env.CRAYON_ACCENT ?? file.accent,
+        verifyCommand: process.env.CRAYON_VERIFY_CMD ?? file.verifyCommand,
       };
       merged.mcpServers = await loadMcpServers();
       return merged;

@@ -237,6 +237,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         googleApiKey: config.googleApiKey,
         permissionMode: loadedMode as any,
         mcpServers: config.mcpServers,
+        verifyCommand: config.verifyCommand,
         onEvent: (event: AgentEvent) => {
           if (!active || abortedRef.current) return;
           handleAgentEvent(event);

@@ -207,6 +207,7 @@ async function runHeadlessJson(task: string, config: Awaited<ReturnType<typeof l
     openrouterApiKey: config.openrouterApiKey,
     googleApiKey: config.googleApiKey,
     mcpServers: config.mcpServers,
+    verifyCommand: config.verifyCommand,
     permissionMode,
     onEvent: (event) => {
       if (process.env.CRAYON_DEBUG) {
@@ -275,6 +276,7 @@ async function runFallback(task: string) {
     openrouterApiKey: config.openrouterApiKey,
     googleApiKey: config.googleApiKey,
     mcpServers: config.mcpServers,
+    verifyCommand: config.verifyCommand,
     onEvent: (event) => {
       switch (event.type) {
         case "plan":

@@ -40,6 +40,12 @@ export interface AgentConfig {
   mcpServers?: McpServerConfig[];
   /** When false, disables the `spawn_agent` tool. Defaults to true. Sub-agents set this to false. */
   allowSubagents?: boolean;
+  /**
+   * Post-edit verification command. Set to run exactly this command after
+   * coding edits; "none" disables verification; unset auto-detects (tsc +
+   * test/build script).
+   */
+  verifyCommand?: string;
 }
 
 export interface ToolDefinition<T extends z.ZodType = z.ZodType> {
