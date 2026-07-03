@@ -1,3 +1,4 @@
+import pathModule from "node:path";
 import { streamText, generateText, tool, jsonSchema, type CoreMessage } from "ai";
 import { CodeIndexer } from "crayon-indexer";
 import type { AgentConfig, AgentEvent, AgentResult } from "./types.js";
@@ -621,7 +622,11 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
           if (!["edit_file", "write_file", "overwrite_file", "edit_ast"].includes(toolName)) continue;
           const editResult = tr.result as { path?: string; success?: boolean };
           if (editResult?.path && editResult?.success !== false) {
-            edits.push(editResult.path);
+            // Normalize to a workspace-relative path — models sometimes pass
+            // absolute paths, which are ugly in output and awkward for git.
+            const abs = pathModule.resolve(this.config.workspaceRoot, editResult.path);
+            const rel = pathModule.relative(this.config.workspaceRoot, abs);
+            edits.push(rel && !rel.startsWith("..") ? rel : editResult.path);
           }
         }
       }
