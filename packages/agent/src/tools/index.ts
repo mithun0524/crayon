@@ -75,7 +75,8 @@ export function createTools(ctx: ToolContext) {
     ask_user: createAskUserTool(ctx),
     glob_search: createGlobTool(ctx),
     repl: createReplTool(ctx),
-    spawn_agent: createAgentTool(ctx),
+    // Only expose sub-agent delegation when allowed (disabled inside sub-agents to prevent recursion).
+    ...(ctx.allowSubagents === false ? {} : { spawn_agent: createAgentTool(ctx) }),
     todo: createTodoTool(ctx),
 
     // concurrent: true | readonly: true | permission: none

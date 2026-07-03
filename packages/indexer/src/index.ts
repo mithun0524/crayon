@@ -4,7 +4,8 @@ import path from "node:path";
 import fg from "fast-glob";
 import type { FSWatcher } from "chokidar";
 import chokidar from "chokidar";
-import type { FileSymbols, IndexStats, RepoIntelligence, SearchResult } from "./types.js";
+import type { FileSymbols, IndexStats, RepoIntelligence, SearchResult, SymbolInfo } from "./types.js";
+import type { VectorRecord } from "./search/vector-store.js";
 import { parseFile } from "./parser/symbols.js";
 import { DependencyGraph } from "./graph/dependency.js";
 import { hybridSearch } from "./search/hybrid.js";
@@ -60,24 +61,15 @@ export class CodeIndexer {
       try {
         const symbols = await parseFile(filePath, this.workspaceRoot);
         this.files.set(relativePath, symbols);
-        
-        // Add to vector store
-        const records = symbols.symbols.map(sym => ({
-          text: `Symbol: ${sym.name}\nKind: ${sym.kind}\nFile: ${relativePath}`,
-          filePath: relativePath,
-          symbolName: sym.name,
-          kind: sym.kind,
-        }));
-        
-        // Don't await in loop to avoid blocking entirely, or we can await to ensure it finishes
-        // Since we are doing a lot, let's collect and batch? For now, await is safe but slow for large repos.
-        // We can do it inside a try/catch in case embeddings fail
-        try {
-          if (records.length > 0) {
-             await this.vectorStore.addDocuments(records);
+
+        // Add to vector store (only when semantic search is actually available).
+        if (this.vectorStore.isEnabled()) {
+          try {
+            const records = await this.buildVectorRecords(relativePath, symbols.symbols);
+            if (records.length > 0) await this.vectorStore.addDocuments(records);
+          } catch {
+            // ignore embedding errors
           }
-        } catch (e) {
-          // ignore embedding errors
         }
 
         indexed++;
@@ -94,6 +86,36 @@ export class CodeIndexer {
       symbolCount: [...this.files.values()].reduce((n, f) => n + f.symbols.length, 0),
       lastIndexed: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Build embedding records that include the symbol's actual source body (not just its
+   * name), so semantic search matches on implementation, not just identifiers. Reads the
+   * file once and slices each symbol's line range (capped to keep embeddings cheap).
+   */
+  private async buildVectorRecords(
+    relativePath: string,
+    symbols: SymbolInfo[]
+  ): Promise<Omit<VectorRecord, "vector">[]> {
+    if (symbols.length === 0) return [];
+    let lines: string[];
+    try {
+      const abs = path.join(this.workspaceRoot, relativePath);
+      lines = (await readFile(abs, "utf-8")).split("\n");
+    } catch {
+      return [];
+    }
+    return symbols.map((sym) => {
+      const start = Math.max(0, sym.line - 1);
+      const end = Math.min(lines.length, sym.endLine ?? sym.line);
+      const body = lines.slice(start, end).join("\n").slice(0, 800);
+      return {
+        text: `File: ${relativePath}\nSymbol: ${sym.name} (${sym.kind})\n\n${body}`,
+        filePath: relativePath,
+        symbolName: sym.name,
+        kind: sym.kind,
+      };
+    });
   }
 
   async detectIntelligence(): Promise<RepoIntelligence> {
@@ -168,16 +190,15 @@ export class CodeIndexer {
       const absPath = path.join(this.workspaceRoot, relativePath);
       try {
         const symbols = await parseFile(absPath, this.workspaceRoot);
-        this.files.set(relativePath.replace(/\\/g, "/"), symbols);
-        
-        // Update vector store
-        const records = symbols.symbols.map(sym => ({
-          text: `Symbol: ${sym.name}\nKind: ${sym.kind}\nFile: ${relativePath.replace(/\\/g, "/")}`,
-          filePath: relativePath.replace(/\\/g, "/"),
-          symbolName: sym.name,
-          kind: sym.kind,
-        }));
-        try { if (records.length > 0) await this.vectorStore.addDocuments(records); } catch {}
+        const relKey = relativePath.replace(/\\/g, "/");
+        this.files.set(relKey, symbols);
+
+        if (this.vectorStore.isEnabled()) {
+          try {
+            const records = await this.buildVectorRecords(relKey, symbols.symbols);
+            if (records.length > 0) await this.vectorStore.addDocuments(records);
+          } catch {}
+        }
 
         this.graph.build(this.files, this.workspaceRoot);
         await this.saveCache();
@@ -191,16 +212,15 @@ export class CodeIndexer {
       const absPath = path.join(this.workspaceRoot, relativePath);
       try {
         const symbols = await parseFile(absPath, this.workspaceRoot);
-        this.files.set(relativePath.replace(/\\/g, "/"), symbols);
+        const relKey = relativePath.replace(/\\/g, "/");
+        this.files.set(relKey, symbols);
 
-        // Update vector store
-        const records = symbols.symbols.map(sym => ({
-          text: `Symbol: ${sym.name}\nKind: ${sym.kind}\nFile: ${relativePath.replace(/\\/g, "/")}`,
-          filePath: relativePath.replace(/\\/g, "/"),
-          symbolName: sym.name,
-          kind: sym.kind,
-        }));
-        try { if (records.length > 0) await this.vectorStore.addDocuments(records); } catch {}
+        if (this.vectorStore.isEnabled()) {
+          try {
+            const records = await this.buildVectorRecords(relKey, symbols.symbols);
+            if (records.length > 0) await this.vectorStore.addDocuments(records);
+          } catch {}
+        }
 
         this.graph.build(this.files, this.workspaceRoot);
         await this.saveCache();

@@ -92,7 +92,22 @@ export class CrayonAgent {
       approveEdit: this.config.approveEdit,
       fileState: this.fileState,
       transaction: this.transaction,
+      modelConfig: this.subagentModelConfig(),
+      allowSubagents: this.config.allowSubagents,
     });
+  }
+
+  /** Config forwarded to sub-agents so they inherit model/provider/credentials. */
+  private subagentModelConfig() {
+    return {
+      model: this.config.model,
+      provider: this.config.provider,
+      anthropicApiKey: this.config.anthropicApiKey,
+      openaiApiKey: this.config.openaiApiKey,
+      openrouterApiKey: this.config.openrouterApiKey,
+      googleApiKey: this.config.googleApiKey,
+      mcpServers: this.config.mcpServers,
+    };
   }
 
   constructor(config: AgentConfig) {
@@ -199,6 +214,8 @@ export class CrayonAgent {
       fileState: this.fileState,
       transaction: this.transaction,
       signal: options.signal,
+      modelConfig: this.subagentModelConfig(),
+      allowSubagents: this.config.allowSubagents,
     };
 
     this.emit({ type: "thinking", content: "Preparing context and tools..." });

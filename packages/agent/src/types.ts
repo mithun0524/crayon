@@ -38,6 +38,8 @@ export interface AgentConfig {
   approveCommand?: (command: string) => Promise<boolean>;
   approveEdit?: (path: string, newContent: string) => Promise<boolean>;
   mcpServers?: McpServerConfig[];
+  /** When false, disables the `spawn_agent` tool. Defaults to true. Sub-agents set this to false. */
+  allowSubagents?: boolean;
 }
 
 export interface ToolDefinition<T extends z.ZodType = z.ZodType> {
@@ -57,6 +59,21 @@ export interface ToolContext {
   fileState?: FileStateCache;
   transaction?: TransactionManager;
   signal?: AbortSignal;
+  /**
+   * Model/provider/API-key config carried through so `spawn_agent` can
+   * construct a working sub-agent that inherits the parent's credentials.
+   */
+  modelConfig?: {
+    model?: string;
+    provider?: AgentConfig["provider"];
+    anthropicApiKey?: string;
+    openaiApiKey?: string;
+    openrouterApiKey?: string;
+    googleApiKey?: string;
+    mcpServers?: McpServerConfig[];
+  };
+  /** When false, the `spawn_agent` tool is disabled (prevents unbounded sub-agent recursion). */
+  allowSubagents?: boolean;
 }
 
 export interface AgentSession {
