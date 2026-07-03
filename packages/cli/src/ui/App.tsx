@@ -1340,34 +1340,38 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             </Box>
           )}
 
-          <Box marginTop={0} flexDirection="column" paddingLeft={1}>
-            <Box flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1}>
-              <Text bold color={isExecuting ? theme.subtle : theme.brand}>
-                crayon<Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
-              </Text>
-              <TextInput
-                focus={!isCommandPaletteOpen && !isModelSelectorOpen && !isColorPickerOpen}
-                value={currentInput} 
-                onChange={(v) => { 
-                  if (Date.now() - modeSwitchTimeRef.current < 50 && v.endsWith("t")) {
-                    setCurrentInput(v.slice(0, -1));
-                    return;
-                  }
-                  if (v === "/") {
-                    setIsCommandPaletteOpen(true);
-                    setCurrentInput("");
-                  } else {
-                    setCurrentInput(v); 
-                  }
-                }} 
-                onSubmit={handleSubmit} 
-              />
+          {/* Hide the main prompt while a picker owns input, so there is only
+              ever one input field on screen. */}
+          {!isCommandPaletteOpen && !isModelSelectorOpen && !isColorPickerOpen && (
+            <Box marginTop={0} flexDirection="column" paddingLeft={1}>
+              <Box flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1}>
+                <Text bold color={isExecuting ? theme.subtle : theme.brand}>
+                  crayon<Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
+                </Text>
+                <TextInput
+                  focus={!isCommandPaletteOpen && !isModelSelectorOpen && !isColorPickerOpen}
+                  value={currentInput}
+                  onChange={(v) => {
+                    if (Date.now() - modeSwitchTimeRef.current < 50 && v.endsWith("t")) {
+                      setCurrentInput(v.slice(0, -1));
+                      return;
+                    }
+                    if (v === "/") {
+                      setIsCommandPaletteOpen(true);
+                      setCurrentInput("");
+                    } else {
+                      setCurrentInput(v);
+                    }
+                  }}
+                  onSubmit={handleSubmit}
+                />
+              </Box>
+              <Box paddingLeft={1}>
+                <Text color={theme.success}>⏸ {agentMode} mode on </Text>
+                <Text color={theme.subtle}>(Ctrl+T or Shift+Tab to cycle)</Text>
+              </Box>
             </Box>
-            <Box paddingLeft={1}>
-              <Text color={theme.success}>⏸ {agentMode} mode on </Text>
-              <Text color={theme.subtle}>(Ctrl+T or Shift+Tab to cycle)</Text>
-            </Box>
-          </Box>
+          )}
         </Box>
       )}
 
