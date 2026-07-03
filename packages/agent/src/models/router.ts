@@ -54,12 +54,16 @@ function createOpenRouterClient(config: ModelConfig) {
 }
 
 export function resolveModel(config: ModelConfig): LanguageModel {
-  const modelId =
+  const rawModelId =
     config.model ??
     process.env.CRAYON_MODEL ??
     (resolveProvider(config, "") === "openrouter"
       ? DEFAULT_OPENROUTER_MODEL
       : "claude-sonnet-4-20250514");
+
+  // Trim: a stray leading/trailing space in the model id produces a malformed
+  // request URL that some providers (Gemini) hang on forever instead of erroring.
+  const modelId = rawModelId.trim();
 
   const provider = resolveProvider(config, modelId);
 
