@@ -64,6 +64,13 @@ interface ChatMessage {
   };
 }
 
+/** Commands whose name prefix-matches the current "/…" input. */
+function commandMatches(input: string) {
+  if (!input.startsWith("/")) return [];
+  const q = input.toLowerCase().split(" ")[0]; // ignore args after the command
+  return AVAILABLE_COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(q));
+}
+
 export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) => {
   const { exit } = useApp();
   const { rows } = useTerminalSize();
@@ -112,10 +119,13 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   useEffect(() => {
     defaultModelRef.current = defaultModel;
   }, [defaultModel]);
+  // Reset command-menu highlight whenever the input changes.
+  useEffect(() => { setCmdIndex(0); }, [currentInput]);
   const [currentProvider, setCurrentProvider] = useState<"anthropic" | "openai" | "google" | "openrouter" | "ollama">("anthropic");
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
-  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
+  // Highlighted row in the inline "/…" command menu.
+  const [cmdIndex, setCmdIndex] = useState(0);
   // Bumped after applyAccent() mutates the shared theme, to force a re-render.
   const [, setThemeTick] = useState(0);
   const [availableModels, setAvailableModels] = useState<SelectOption[]>([]);
@@ -478,9 +488,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
-    if ((isModelSelectorOpen || isCommandPaletteOpen || isColorPickerOpen) && key.escape) {
+    if ((isModelSelectorOpen || isColorPickerOpen) && key.escape) {
       setIsModelSelectorOpen(false);
-      setIsCommandPaletteOpen(false);
       setIsColorPickerOpen(false);
       return;
     }
@@ -540,7 +549,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
-    if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isCommandPaletteOpen) {
+    if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isColorPickerOpen) {
       if ((key.ctrl && input === "t") || input === "\u001b[Z" || (key.shift && (key.tab || input === "\t"))) {
         const modes = ["ask", "auto-edit", "plan", "auto", "bypass"];
         const currentIdx = modes.indexOf(agentMode);
@@ -571,10 +580,17 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         return;
       }
 
-      if (currentInput === "/") {
-        setIsCommandPaletteOpen(true);
-        setCurrentInput("");
-      } else {
+      {
+        // Command menu (typed "/…") owns the arrows/Tab/Esc so the main input
+        // stays the single input field.
+        const matches = commandMatches(currentInput);
+        const inCmdMenu = currentInput.startsWith("/") && !currentInput.includes(" ") && matches.length > 0;
+        if (inCmdMenu) {
+          if (key.upArrow) { setCmdIndex((i) => Math.max(0, i - 1)); return; }
+          if (key.downArrow) { setCmdIndex((i) => Math.min(matches.length - 1, i + 1)); return; }
+          if (key.tab) { setCurrentInput(matches[Math.min(cmdIndex, matches.length - 1)].cmd + " "); return; }
+          if (key.escape) { setCurrentInput(""); return; }
+        }
         // Full-screen viewport owns the scroll: PgUp/PgDn (and Shift+Arrows)
         // page through history; plain arrows recall previous prompts.
         if (key.pageUp) {
@@ -1175,6 +1191,13 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const olderCount = startIdx;
   const atBottom = scrollOffset === 0;
 
+  // Inline command menu state (driven by the single main input).
+  const cmdItems = commandMatches(currentInput);
+  const showCmdMenu =
+    currentInput.startsWith("/") && !currentInput.includes(" ") &&
+    cmdItems.length > 0 && !isExecuting &&
+    !isModelSelectorOpen && !isColorPickerOpen && !approvalRequest;
+
   return (
     // height={rows} + overflow hidden makes this Box exactly the viewport, so
     // Ink never exceeds the terminal height (no clearTerminal flicker fallback).
@@ -1298,21 +1321,30 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
       {!approvalRequest && mode === "chat" && (
         <Box flexDirection="column" flexShrink={0}>
-          {isCommandPaletteOpen && (
-            <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
-              <SearchableSelect
-                items={AVAILABLE_COMMANDS.map(c => ({
-                  label: c.cmd,
-                  value: c.cmd,
-                  description: c.desc + (c.usage ? `  ${c.usage}` : "")
-                }))}
-                placeholder="command…"
-                onSelect={(val) => {
-                  setIsCommandPaletteOpen(false);
-                  handleSubmit(val);
-                }}
-                onCancel={() => setIsCommandPaletteOpen(false)}
-              />
+          {/* Inline command menu — filters as you type "/…", sits above the
+              single main input (Claude Code-style). */}
+          {showCmdMenu && (
+            <Box flexDirection="column" paddingLeft={2} marginBottom={1}>
+              {cmdItems.slice(0, 6).map((c, i) => {
+                const sel = i === Math.min(cmdIndex, cmdItems.length - 1);
+                return (
+                  <Box key={c.cmd} flexDirection="row">
+                    <Box width={2}><Text color={theme.brand}>{sel ? "❯" : " "}</Text></Box>
+                    <Box minWidth={11} marginRight={2}>
+                      <Text color={sel ? theme.brand : theme.text} bold={sel}>{c.cmd}</Text>
+                    </Box>
+                    <Box>
+                      <Text color={theme.subtle} dimColor={!sel}>
+                        {c.desc}{("usage" in c && c.usage) ? `  ${c.usage}` : ""}
+                      </Text>
+                    </Box>
+                  </Box>
+                );
+              })}
+              {cmdItems.length > 6 && (
+                <Text color={theme.subtle} dimColor>  ↓ {cmdItems.length - 6} more</Text>
+              )}
+              <Text color={theme.subtle} dimColor>  ↑↓ select · ⏎ run · tab complete · esc clear</Text>
             </Box>
           )}
 
@@ -1340,30 +1372,33 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             </Box>
           )}
 
-          {/* Hide the main prompt while a picker owns input, so there is only
-              ever one input field on screen. */}
-          {!isCommandPaletteOpen && !isModelSelectorOpen && !isColorPickerOpen && (
+          {/* Hide the main prompt only while an overlay picker owns input, so
+              there is only ever one input field on screen. */}
+          {!isModelSelectorOpen && !isColorPickerOpen && (
             <Box marginTop={0} flexDirection="column" paddingLeft={1}>
               <Box flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1}>
                 <Text bold color={isExecuting ? theme.subtle : theme.brand}>
                   crayon<Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
                 </Text>
                 <TextInput
-                  focus={!isCommandPaletteOpen && !isModelSelectorOpen && !isColorPickerOpen}
+                  focus={!isModelSelectorOpen && !isColorPickerOpen}
                   value={currentInput}
                   onChange={(v) => {
                     if (Date.now() - modeSwitchTimeRef.current < 50 && v.endsWith("t")) {
                       setCurrentInput(v.slice(0, -1));
                       return;
                     }
-                    if (v === "/") {
-                      setIsCommandPaletteOpen(true);
-                      setCurrentInput("");
+                    setCurrentInput(v);
+                  }}
+                  onSubmit={(v) => {
+                    const m = commandMatches(v);
+                    // Substitute the highlighted command only when no args typed yet.
+                    if (v.startsWith("/") && !v.includes(" ") && m.length > 0) {
+                      handleSubmit(m[Math.min(cmdIndex, m.length - 1)].cmd);
                     } else {
-                      setCurrentInput(v);
+                      handleSubmit(v);
                     }
                   }}
-                  onSubmit={handleSubmit}
                 />
               </Box>
               <Box paddingLeft={1}>
