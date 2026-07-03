@@ -1330,9 +1330,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               single main input (Claude Code-style). */}
           {showCmdMenu && (
             <Box flexDirection="column" paddingLeft={2} marginBottom={1}>
-              {cmdStart > 0 && (
-                <Text color={theme.subtle} dimColor>  ↑ {cmdStart} more</Text>
-              )}
               {cmdVisible.map((c, i) => {
                 const actualIdx = cmdStart + i;
                 const sel = actualIdx === cmdSel;
@@ -1350,10 +1347,12 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                   </Box>
                 );
               })}
-              {cmdStart + CMD_MAX < cmdItems.length && (
-                <Text color={theme.subtle} dimColor>  ↓ {cmdItems.length - (cmdStart + CMD_MAX)} more</Text>
-              )}
-              <Text color={theme.subtle} dimColor>  ↑↓ select · ⏎ run · tab complete · esc clear</Text>
+              <Text color={theme.subtle} dimColor>
+                {"  "}
+                {cmdStart > 0 ? `↑${cmdStart} ` : ""}
+                {cmdStart + CMD_MAX < cmdItems.length ? `↓${cmdItems.length - (cmdStart + CMD_MAX)} · ` : ""}
+                ↑↓ select · ⏎ run · tab complete · esc clear
+              </Text>
             </Box>
           )}
 
