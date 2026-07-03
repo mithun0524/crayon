@@ -10,7 +10,11 @@ const nativeModules = [
   "@vscode/ripgrep",
   "web-tree-sitter",
   "tree-sitter-wasms",
-  "fsevents"
+  "fsevents",
+  // Bundling @ai-sdk/google makes Gemini calls hang/retry for tens of seconds
+  // (anthropic/openai bundle fine — google does not). Keep it external so it
+  // runs from node_modules, where it responds in ~1s.
+  "@ai-sdk/google"
 ];
 
 // ink imports react-devtools-core only when DEV=true. It is not a runtime
