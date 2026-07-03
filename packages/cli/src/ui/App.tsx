@@ -455,6 +455,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
   };
 
+  // Wipe the terminal (screen + scrollback) on the way out, so quitting leaves
+  // a clean prompt — mirrors the clear-on-start.
+  const cleanExit = () => {
+    if (agentRef.current) agentRef.current.close();
+    process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+    exit();
+  };
+
   const handleAbort = () => {
     abortedRef.current = true;
     abortControllerRef.current?.abort();
@@ -485,8 +493,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       const now = Date.now();
       // Second Ctrl+C within 2s → actually quit.
       if (now - lastCtrlCRef.current < 2000) {
-        if (agentRef.current) agentRef.current.close();
-        exit();
+        cleanExit();
         return;
       }
       lastCtrlCRef.current = now;
@@ -780,7 +787,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         }
         case "/exit":
         case "/quit":
-          exit();
+          cleanExit();
           break;
         case "/mode":
           const m = parts[1];
