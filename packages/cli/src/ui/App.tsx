@@ -1197,6 +1197,11 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     currentInput.startsWith("/") && !currentInput.includes(" ") &&
     cmdItems.length > 0 && !isExecuting &&
     !isModelSelectorOpen && !isColorPickerOpen && !approvalRequest;
+  // Sliding window so the highlight stays visible when arrowing past the fold.
+  const CMD_MAX = 3;
+  const cmdSel = Math.min(cmdIndex, Math.max(0, cmdItems.length - 1));
+  const cmdStart = cmdSel >= CMD_MAX ? cmdSel - CMD_MAX + 1 : 0;
+  const cmdVisible = cmdItems.slice(cmdStart, cmdStart + CMD_MAX);
 
   return (
     // height={rows} + overflow hidden makes this Box exactly the viewport, so
@@ -1325,8 +1330,12 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               single main input (Claude Code-style). */}
           {showCmdMenu && (
             <Box flexDirection="column" paddingLeft={2} marginBottom={1}>
-              {cmdItems.slice(0, 6).map((c, i) => {
-                const sel = i === Math.min(cmdIndex, cmdItems.length - 1);
+              {cmdStart > 0 && (
+                <Text color={theme.subtle} dimColor>  ↑ {cmdStart} more</Text>
+              )}
+              {cmdVisible.map((c, i) => {
+                const actualIdx = cmdStart + i;
+                const sel = actualIdx === cmdSel;
                 return (
                   <Box key={c.cmd} flexDirection="row">
                     <Box width={2}><Text color={theme.brand}>{sel ? "❯" : " "}</Text></Box>
@@ -1341,8 +1350,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                   </Box>
                 );
               })}
-              {cmdItems.length > 6 && (
-                <Text color={theme.subtle} dimColor>  ↓ {cmdItems.length - 6} more</Text>
+              {cmdStart + CMD_MAX < cmdItems.length && (
+                <Text color={theme.subtle} dimColor>  ↓ {cmdItems.length - (cmdStart + CMD_MAX)} more</Text>
               )}
               <Text color={theme.subtle} dimColor>  ↑↓ select · ⏎ run · tab complete · esc clear</Text>
             </Box>
