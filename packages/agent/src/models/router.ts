@@ -1,5 +1,6 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import type { LanguageModel } from "ai";
 
 export type ModelProvider = "openrouter" | "anthropic" | "openai" | "google" | "ollama";
@@ -74,13 +75,7 @@ export function resolveModel(config: ModelConfig): LanguageModel {
     case "google": {
       const apiKey = config.googleApiKey ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? process.env.GOOGLE_GENERATIVE_AI_API_KEY;
       if (!apiKey) throw new Error("GEMINI_API_KEY, GOOGLE_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY is required for Gemini models");
-      try {
-        // @ts-ignore — @ai-sdk/google is an optional peer dependency
-        const { createGoogleGenerativeAI } = require("@ai-sdk/google");
-        return createGoogleGenerativeAI({ apiKey })(modelId);
-      } catch {
-        throw new Error("@ai-sdk/google is not installed. Run: pnpm add @ai-sdk/google");
-      }
+      return createGoogleGenerativeAI({ apiKey })(modelId);
     }
     case "openrouter": {
       const openrouter = createOpenRouterClient(config);
