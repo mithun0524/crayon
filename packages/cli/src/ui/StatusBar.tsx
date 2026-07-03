@@ -10,8 +10,6 @@ interface StatusBarProps {
   cost: number;
   isExecuting: boolean;
   modelName?: string;
-  scrollOffset: number;
-  historyLength: number;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -21,55 +19,26 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   cost,
   isExecuting,
   modelName,
-  scrollOffset,
-  historyLength,
 }) => {
-  const dirtyStr = gitDirtyCount > 0 ? ` (+${gitDirtyCount})` : "";
-  const costStr = cost.toFixed(4);
-
-  // Determine max context window
-  let maxContext = "200k"; // Default
-  if (modelName?.includes("gpt-4")) maxContext = "128k";
-  else if (modelName?.includes("gpt-3.5")) maxContext = "16k";
-  else if (modelName?.includes("gemini")) maxContext = "1m"; // gemini 1.5 pro/flash
-  else if (modelName?.includes("claude-3")) maxContext = "200k";
-
-  const kTokens = tokens > 1000 ? `${(tokens / 1000).toFixed(1)}k` : tokens;
+  const dirtyStr = gitDirtyCount > 0 ? `*` : "";
+  const kTokens = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
+  const sep = <Text color={theme.subtle} dimColor>  ·  </Text>;
 
   return (
-    <Box marginTop={1} paddingLeft={1} flexDirection="row" alignItems="center" flexShrink={0}>
-      <Text color={theme.brand} bold>⑆ </Text>
-      <Text color={theme.brand}>{gitBranch || "none"}</Text>
+    <Box paddingLeft={1} flexDirection="row" flexShrink={0}>
+      <Text color={theme.subtle} dimColor>{modelName || "default"}</Text>
+      {sep}
+      <Text color={theme.subtle} dimColor>⎇ {gitBranch || "none"}</Text>
       <Text color={theme.warning}>{dirtyStr}</Text>
-
-      <Text color={theme.subtle} dimColor>  •  </Text>
-      <Text color={theme.subtle} dimColor>∿ </Text>
-      <Text color={theme.warning}>{kTokens}/{maxContext}</Text>
-      <Text color={theme.success}> (${costStr})</Text>
-
-      {!isExecuting && (
-        <>
-          <Text color={theme.subtle} dimColor>  •  </Text>
-          <Text color={theme.subtle} dimColor>[ctrl+c] Exit</Text>
-        </>
-      )}
-
-      {isExecuting && (
-        <>
-          <Text color={theme.subtle} dimColor>  •  </Text>
-          <Text color={theme.error} bold>[esc] Stop Agent</Text>
-        </>
-      )}
-
-      {historyLength > 0 && (
-        <>
-          <Text color={theme.subtle} dimColor>  •  </Text>
-          {scrollOffset > 0 ? (
-            <Text color={theme.warning} bold>⇳ Scrolled: {scrollOffset} [PgDn]/[Shift+↓] to bottom</Text>
-          ) : (
-            <Text color={theme.subtle} dimColor>⇳ [PgUp]/[Shift+↑] to scroll</Text>
-          )}
-        </>
+      {sep}
+      <Text color={theme.subtle} dimColor>{kTokens} tokens</Text>
+      {sep}
+      <Text color={theme.subtle} dimColor>${cost.toFixed(4)}</Text>
+      {sep}
+      {isExecuting ? (
+        <Text color={theme.error}>esc to stop</Text>
+      ) : (
+        <Text color={theme.subtle} dimColor>ctrl+c to exit</Text>
       )}
     </Box>
   );

@@ -11,8 +11,8 @@ export type AgentEvent =
   | { type: "reasoning_delta"; content: string }
   | { type: "text"; content: string }
   | { type: "text_delta"; content: string }
-  | { type: "tool_call"; name: string; args: unknown }
-  | { type: "tool_result"; name: string; result: unknown }
+  | { type: "tool_call"; name: string; args: unknown; id?: string }
+  | { type: "tool_result"; name: string; result: unknown; id?: string }
   | { type: "plan"; steps: string[] }
   | { type: "edit"; path: string; diff: string }
   | { type: "eval"; passed: boolean; output: string }

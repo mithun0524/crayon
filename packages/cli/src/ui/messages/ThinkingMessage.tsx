@@ -11,33 +11,26 @@ export const ThinkingMessage: React.FC<ThinkingMessageProps> = ({ thinking, isCo
   const [collapsed] = useState(initialCollapsed);
 
   if (!thinking) return null;
-
   const cleanThinking = thinking.trim();
   if (cleanThinking.length === 0) return null;
 
   if (collapsed) {
     const firstLine = cleanThinking.split("\n")[0] || "";
-    const truncated = firstLine.length > 60 ? firstLine.slice(0, 57) + "..." : firstLine;
+    const truncated = firstLine.length > 72 ? firstLine.slice(0, 69) + "…" : firstLine;
     return (
-      <Box flexDirection="row" marginTop={0} marginBottom={1}>
-        <Text color={theme.subtle} dimColor>
-          ▸ Thought: {truncated}
+      <Box flexDirection="row" marginBottom={1}>
+        <Text color={theme.subtle} dimColor italic>
+          ✻ {truncated}
         </Text>
       </Box>
     );
   }
 
   return (
-    <Box flexDirection="column" marginTop={1} marginBottom={1} width="100%">
-      <Box flexDirection="row">
-        <Text color={theme.subtle} italic dimColor>
-          ∴ Thinking...
-        </Text>
-      </Box>
-      <Box paddingLeft={2} marginTop={0}>
-        <Text color={theme.subtle} italic dimColor>
-          {cleanThinking}
-        </Text>
+    <Box flexDirection="column" marginBottom={1} width="100%">
+      <Text color={theme.subtle} italic dimColor>✻ Thinking…</Text>
+      <Box paddingLeft={2}>
+        <Text color={theme.subtle} italic dimColor>{cleanThinking}</Text>
       </Box>
     </Box>
   );

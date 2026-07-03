@@ -34,12 +34,12 @@ export const darkTheme: Theme = {
   error: '#EF4444',          // Minimal red
   warning: '#F59E0B',        // Minimal amber
 
-  diffAdded: '#4DD0E1',      // Crayon Cyan
-  diffRemoved: '#F472B6',    // Soft Pink
-  diffAddedBg: 'transparent',    
-  diffRemovedBg: 'transparent',  
-  diffAddedWord: '#4DD0E1',  
-  diffRemovedWord: '#F472B6',
+  diffAdded: '#22C55E',      // Green (Claude-style additions)
+  diffRemoved: '#EF4444',    // Red (Claude-style removals)
+  diffAddedBg: 'transparent',
+  diffRemovedBg: 'transparent',
+  diffAddedWord: '#22C55E',
+  diffRemovedWord: '#EF4444',
 
   selectionBg: '#27272A',    // Dark selection
   panelBg: '#18181B',        // Very dark grey panel

@@ -10,52 +10,44 @@ interface DiffRendererProps {
 export const DiffRenderer: React.FC<DiffRendererProps> = ({ diff, maxLines = 15 }) => {
   if (!diff) return null;
 
-  const lines = diff.split("\n");
+  // Skip the unified-diff file headers (Index:/===/---/+++) — they add noise.
+  const lines = diff
+    .split("\n")
+    .filter(
+      (l) =>
+        !l.startsWith("Index:") &&
+        !l.startsWith("===") &&
+        !l.startsWith("--- ") &&
+        !l.startsWith("+++ ")
+    );
+
   const visibleLines = lines.slice(0, maxLines);
   const hasMore = lines.length > maxLines;
 
   return (
     <Box flexDirection="column" paddingLeft={2} marginY={0}>
-      <Box paddingX={0}>
-        <Text color={theme.brand} bold> ▤ Sketchpad </Text>
-      </Box>
       {visibleLines.map((line, i) => {
-        let fgColor = theme.subtle;
-        let bgColor: string | undefined = undefined;
-        let isDim = false;
+        let color = theme.subtle;
+        let dim = false;
 
-        if (line.startsWith("+") && !line.startsWith("+++")) {
-          fgColor = theme.diffAddedWord;
-          bgColor = theme.diffAddedBg;
-        } else if (line.startsWith("-") && !line.startsWith("---")) {
-          fgColor = theme.diffRemovedWord;
-          bgColor = theme.diffRemovedBg;
-        } else if (line.startsWith("@@")) {
-          fgColor = theme.brand;
-        } else if (line.startsWith("Index:") || line.startsWith("===") || line.startsWith("---") || line.startsWith("+++")) {
-          fgColor = theme.subtle;
-        } else {
-          fgColor = theme.text;
-          isDim = true;
+        if (line.startsWith("+")) color = theme.diffAddedWord;
+        else if (line.startsWith("-")) color = theme.diffRemovedWord;
+        else if (line.startsWith("@@")) color = theme.brand;
+        else {
+          color = theme.text;
+          dim = true;
         }
 
-        const boxProps: any = { key: i, width: "100%", paddingX: 0 };
-        if (bgColor) boxProps.backgroundColor = bgColor;
-
         return (
-          <Box {...boxProps}>
-            <Text color={fgColor} dimColor={isDim}>
-              {line}
-            </Text>
-          </Box>
+          <Text key={i} color={color} dimColor={dim}>
+            {line || " "}
+          </Text>
         );
       })}
       {hasMore && (
-        <Box width="100%" paddingX={1}>
-          <Text color={theme.warning}>
-            ... and {lines.length - maxLines} more lines of changes
-          </Text>
-        </Box>
+        <Text color={theme.subtle} dimColor>
+          … +{lines.length - maxLines} more lines
+        </Text>
       )}
     </Box>
   );

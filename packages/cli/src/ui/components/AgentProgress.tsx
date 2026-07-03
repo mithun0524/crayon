@@ -9,65 +9,40 @@ interface AgentProgressProps {
 }
 
 function formatDuration(ms: number) {
-  if (ms < 1000) return `${(ms / 1000).toFixed(1)}s`;
   const secs = Math.floor(ms / 1000);
   if (secs < 60) return `${secs}s`;
   const mins = Math.floor(secs / 60);
-  const remSecs = secs % 60;
-  return `${mins}m ${remSecs}s`;
+  return `${mins}m ${secs % 60}s`;
 }
+
+// Simple, calm spinner frames (Claude Code-style — no rainbow).
+const FRAMES = ["·", "✢", "✳", "∗", "✻", "✽"];
 
 export const AgentProgress: React.FC<AgentProgressProps> = ({
   statusText,
   tokens = 0,
   startTime = Date.now(),
 }) => {
-  const [tick, setTick] = useState(0);
+  const [frame, setFrame] = useState(0);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setTick(prev => prev + 1);
-    }, 150);
+    const timer = setInterval(() => setFrame((f) => (f + 1) % FRAMES.length), 120);
     return () => clearInterval(timer);
   }, []);
 
   const elapsedMs = Date.now() - startTime;
-  const isStalled = elapsedMs > 10000;
+  const isStalled = elapsedMs > 30000;
   const spinnerColor = isStalled ? theme.warning : theme.brand;
-  
-  // Combine tick and tokens for a smooth, continuous pulse
-  const pulseFactor = Math.floor(tick / 2) + Math.floor(tokens / 50);
-  const isPulseHigh = pulseFactor % 2 === 0;
-  const asteriskColor = isPulseHigh ? spinnerColor : theme.border;
 
-  const kTokens = (tokens / 1000).toFixed(1);
-
-  // If statusText is just "Thinking...", replace it with Crayon-themed words
-  const isThinking = statusText === "Thinking...";
-  const crayonWords = ["Sketching", "Coloring", "Drawing", "Drafting", "Painting", "Outlining"];
-  const [wordIndex] = useState(() => Math.floor(Math.random() * crayonWords.length));
-  const displayWord = isThinking ? crayonWords[wordIndex] : statusText;
-
-  const CRAYON_COLORS = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
+  const kTokens = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
+  const label = statusText === "Thinking..." ? "Working" : statusText;
 
   return (
-    <Box flexDirection="row" marginTop={0} paddingLeft={2}>
-      <Text color={asteriskColor}>✶ </Text>
-      
-      {isThinking && !isStalled ? (
-        <Box flexDirection="row">
-          {displayWord.split("").map((char, i) => {
-            const colorIndex = (i + tick) % CRAYON_COLORS.length;
-            return <Text key={i} color={CRAYON_COLORS[colorIndex]} bold>{char}</Text>;
-          })}
-          <Text color={CRAYON_COLORS[tick % CRAYON_COLORS.length]} bold>... </Text>
-        </Box>
-      ) : (
-        <Text color={spinnerColor}>{displayWord}... </Text>
-      )}
-
+    <Box flexDirection="row" marginTop={0}>
+      <Text color={spinnerColor} bold>{FRAMES[frame]} </Text>
+      <Text color={theme.text}>{label} </Text>
       <Text color={theme.subtle} dimColor>
-        ({formatDuration(elapsedMs)} · ∿ {kTokens}k strokes · esc to interrupt)
+        ({formatDuration(elapsedMs)} · {kTokens} tokens · esc to interrupt)
       </Text>
     </Box>
   );

@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useInsertionEffect } from "react";
-import { Box, Text, useInput, useApp } from "ink";
+import React, { useState, useEffect, useRef } from "react";
+import { Box, Text, Static, useInput, useApp } from "ink";
 import TextInput from "ink-text-input";
 import { SearchableSelect, SelectOption } from "./components/SearchableSelect.js";
 import path from "node:path";
@@ -31,14 +31,12 @@ import { DiffRenderer } from "./DiffRenderer.js";
 import { saveSession, loadSession } from "../session.js";
 import { theme } from "./theme.js";
 import { syntaxThemeDark } from "./syntaxTheme.js";
-import { useTerminalSize } from "./hooks/useTerminalSize.js";
 import { AgentProgress } from "./components/AgentProgress.js";
 import { ThinkingMessage } from "./messages/ThinkingMessage.js";
 import {
   AVAILABLE_COMMANDS,
   buildAsciiTree,
   POPULAR_MODELS,
-  getToolCallInitialText,
   getToolCallCompletedText,
 } from "./appConstants.js";
 
@@ -67,20 +65,11 @@ interface ChatMessage {
 
 export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) => {
   const { exit } = useApp();
-  const { rows } = useTerminalSize();
 
-  // Enter alternate screen buffer so Ink constrains rendering to the viewport.
-  // useInsertionEffect fires BEFORE Ink's first onRender, so the alt-screen
-  // escape reaches the terminal before any content does (same pattern as
-  // claude-code's AlternateScreen.tsx).
-  useInsertionEffect(() => {
-    const ENTER = '\x1b[?1049h';
-    const EXIT  = '\x1b[?1049l';
-    process.stdout.write(ENTER + '\x1b[2J\x1b[H'); // enter + clear + home cursor
-    return () => {
-      process.stdout.write(EXIT);
-    };
-  }, []);
+  // No alternate screen: finalized messages commit to the terminal's normal
+  // scrollback via <Static> (same model as Claude Code), so native scroll,
+  // copy/paste, and unlimited history all work. Only the live region below
+  // <Static> re-renders.
 
   const [gitBranch, setGitBranch] = useState("main");
   const [gitDirtyCount, setGitDirtyCount] = useState(0);
@@ -95,19 +84,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   // We keep the state for triggering re-renders (used by getToolDisplay)
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
   const [activeToolArgs, setActiveToolArgs] = useState<any>(null);
-  const activeToolNameRef = useRef<string | null>(null);
-  const activeToolArgsRef = useRef<any>(null);
-  const activeToolMessageIdRef = useRef<string | null>(null);
+  // Tools in flight, keyed by tool-call id — supports parallel (read-only) tools
+  // without one clobbering another's pending UI state.
+  const activeToolsRef = useRef<Record<string, { name: string; args: any }>>({});
+  // Streaming-delta batching: accumulate raw text and flush to state on a timer
+  // so we re-render at most ~every 40ms instead of once per token.
+  const streamBufRef = useRef("");
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const updateMessage = (id: string, updates: Partial<Omit<ChatMessage, "id">>) => {
-    setHistory((prev) => {
-      const next = prev.map((msg) => (msg.id === id ? { ...msg, ...updates } : msg));
-      if (agentRef.current) {
-        saveSession(workspaceRoot, agentRef.current.getHistory(), next).catch(() => {});
-      }
-      return next;
-    });
-  };
   const [tokens, setTokens] = useState(0);
   const [cost, setCost] = useState(0);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -131,9 +115,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   });
   const sessionStartTimeRef = useRef(Date.now());
   const apiDurationRef = useRef(0);
-  // How many messages scrolled up from the bottom (0 = at bottom / live view)
-  const [scrollOffset, setScrollOffset] = useState(0);
-  const scrollOffsetRef = useRef(0);
 
   const agentRef = useRef<CrayonAgent | null>(null);
   const abortedRef = useRef(false);
@@ -155,9 +136,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       }
       return next;
     });
-    // Auto-snap to bottom whenever a new message arrives
-    scrollOffsetRef.current = 0;
-    setScrollOffset(0);
   };
 
   useEffect(() => {
@@ -301,12 +279,29 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     };
   }, []);
 
+  // Coalesce streamed text: buffer deltas and flush at most ~every 40ms.
+  const flushStream = () => {
+    flushTimerRef.current = null;
+    const buf = streamBufRef.current;
+    if (buf) setStreamingText(buf);
+  };
+  const scheduleFlush = () => {
+    if (flushTimerRef.current) return;
+    flushTimerRef.current = setTimeout(flushStream, 40);
+  };
+  const resetStream = () => {
+    if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+    streamBufRef.current = "";
+    setStreamingText("");
+  };
+
   const runTask = async (agent: CrayonAgent, taskText: string) => {
     setIsExecuting(true);
-    setStreamingText("");
+    resetStream();
     setStreamingReasoning("");
     setActivePlan([]);
     activePlanRef.current = [];
+    activeToolsRef.current = {};
     setCurrentStepIndex(0);
     abortedRef.current = false;
     abortControllerRef.current = new AbortController();
@@ -324,7 +319,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
       const summaryMsg = result.summary || "Task completed successfully.";
       pushMessage({ sender: "crayon", text: summaryMsg, reasoning: streamingReasoning });
-      setStreamingText("");
+      resetStream();
       setStreamingReasoning("");
 
       if (mode === "run") {
@@ -360,87 +355,62 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       case "reasoning_delta":
         setStreamingReasoning((prev) => prev + event.content);
         break;
-      case "tool_call":
-        activeToolNameRef.current = event.name;
-        activeToolArgsRef.current = event.args;
+      case "tool_call": {
+        if (event.name === "thinking") {
+          setActiveToolName("thinking");
+          setActiveToolArgs({ status: "Thinking..." });
+          break;
+        }
+        const id = event.id || `${event.name}:${Date.now()}`;
+        activeToolsRef.current[id] = { name: event.name, args: event.args };
+        // Show the just-started tool in the live progress line.
         setActiveToolName(event.name);
         setActiveToolArgs(event.args);
-        setStreamingText("");
-        if (event.name !== "thinking") {
-          setCurrentStepIndex((prev) => Math.min(prev + 1, Math.max(0, activePlanRef.current.length - 1)));
-          // Push initial running message into history
-          historyCountRef.current += 1;
-          const msgId = String(historyCountRef.current);
-          activeToolMessageIdRef.current = msgId;
-          const initialText = getToolCallInitialText(event.name, event.args);
-          setHistory((prev) => {
-            const next = [...prev, {
-              id: msgId,
-              sender: "system" as const,
-              text: initialText,
-              toolCall: {
-                name: event.name,
-                args: event.args,
-                status: "running" as const
-              }
-            }];
-            if (agentRef.current) {
-              saveSession(workspaceRoot, agentRef.current.getHistory(), next).catch(() => {});
-            }
-            return next;
-          });
-          scrollOffsetRef.current = 0;
-          setScrollOffset(0);
-        } else {
-          activeToolArgsRef.current = { status: "Thinking..." };
-          setActiveToolArgs({ status: "Thinking..." });
-        }
+        setCurrentStepIndex((prev) => Math.min(prev + 1, Math.max(0, activePlanRef.current.length - 1)));
         break;
+      }
       case "tool_result": {
-        // Read from refs to avoid stale closure — state may not have updated yet
-        const toolName = activeToolNameRef.current;
-        const toolArgs = activeToolArgsRef.current || {};
         const toolResult = event.result as any;
-        const isError = toolResult && (toolResult.success === false || toolResult.error);
-        const errorText = toolResult?.error || "";
+        const id = event.id || "";
+        // Match this result to its originating call (parallel-safe).
+        const call = (id && activeToolsRef.current[id]) || undefined;
+        const toolName = call?.name || event.name;
+        const toolArgs = call?.args || {};
+        if (id) delete activeToolsRef.current[id];
 
         if (toolName && toolName !== "thinking") {
+          const isError = toolResult && (toolResult.success === false || toolResult.error);
           const completedText = getToolCallCompletedText(toolName, toolArgs, toolResult, !!isError);
-          
-          if (activeToolMessageIdRef.current) {
-            updateMessage(activeToolMessageIdRef.current, {
-              text: completedText,
-              toolCall: {
-                name: toolName,
-                args: toolArgs,
-                result: toolResult,
-                status: isError ? "error" : "success",
-                error: errorText
-              }
-            });
-          } else {
-            pushMessage({
-              sender: "system",
-              text: completedText,
-              toolCall: {
-                name: toolName,
-                args: toolArgs,
-                result: toolResult,
-                status: isError ? "error" : "success",
-                error: errorText
-              }
-            });
-          }
+          // Commit the FINAL tool line to scrollback (Static). Edit tools carry
+          // their diff in the result, so attach it here.
+          pushMessage({
+            sender: "system",
+            text: completedText,
+            diff: toolResult?.diff,
+            toolCall: {
+              name: toolName,
+              args: toolArgs,
+              result: toolResult,
+              status: isError ? "error" : "success",
+              error: toolResult?.error || "",
+            },
+          });
         }
-        activeToolNameRef.current = null;
-        activeToolArgsRef.current = null;
-        activeToolMessageIdRef.current = null;
-        setActiveToolName(null);
-        setActiveToolArgs(null);
+
+        // Reflect any still-running tool in the progress line, else clear.
+        const remaining = Object.values(activeToolsRef.current);
+        if (remaining.length > 0) {
+          setActiveToolName(remaining[remaining.length - 1].name);
+          setActiveToolArgs(remaining[remaining.length - 1].args);
+        } else {
+          setActiveToolName(null);
+          setActiveToolArgs(null);
+        }
         break;
       }
       case "text_delta":
-        setStreamingText((prev) => prev + event.content);
+        streamBufRef.current += event.content;
+        scheduleFlush();
         break;
       case "text":
         break;
@@ -451,11 +421,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           setGitBranch(git.branch);
           setGitDirtyCount(git.dirtyCount);
         }, 0);
-        if (activeToolMessageIdRef.current) {
-          updateMessage(activeToolMessageIdRef.current, { diff: event.diff });
-        } else {
-          pushMessage({ sender: "system", text: `Diff showing changes in ${event.path}:`, diff: event.diff });
-        }
         break;
       case "usage":
         setTokens((prev) => prev + event.totalTokens);
@@ -476,15 +441,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     abortedRef.current = true;
     abortControllerRef.current?.abort();
     setIsExecuting(false);
-    activeToolNameRef.current = null;
-    activeToolArgsRef.current = null;
+    activeToolsRef.current = {};
     setActiveToolName(null);
     setActiveToolArgs(null);
     setActivePlan([]);
     activePlanRef.current = [];
-    setStreamingText("");
+    resetStream();
     setStreamingReasoning("");
-    pushMessage({ sender: "system", text: "🚫 Agent execution interrupted by user." });
+    pushMessage({ sender: "system", text: "Interrupted by user." });
     if (approvalRequest) {
       approvalRequest.resolve(false);
       setApprovalRequest(null);
@@ -594,32 +558,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         setIsCommandPaletteOpen(true);
         setCurrentInput("");
       } else {
-        // PageUp / PageDown or Shift+Arrows scroll through history
-        if (key.pageUp) {
-          const next = Math.max(0, Math.min(scrollOffsetRef.current + 5, history.length - 1));
-          scrollOffsetRef.current = next;
-          setScrollOffset(next);
-          return;
-        }
-        if (key.pageDown) {
-          const next = Math.max(0, scrollOffsetRef.current - 5);
-          scrollOffsetRef.current = next;
-          setScrollOffset(next);
-          return;
-        }
-        if ((key.shift && key.upArrow) || input === "\u001b[1;2A") {
-          const next = Math.max(0, Math.min(scrollOffsetRef.current + 1, history.length - 1));
-          scrollOffsetRef.current = next;
-          setScrollOffset(next);
-          return;
-        }
-        if ((key.shift && key.downArrow) || input === "\u001b[1;2B") {
-          const next = Math.max(0, scrollOffsetRef.current - 1);
-          scrollOffsetRef.current = next;
-          setScrollOffset(next);
-          return;
-        }
-
+        // History lives in the terminal native scrollback (Static). Arrows recall prompts.
         if (key.upArrow) {
           if (inputHistory.length > 0) {
             const newIndex = inputHistoryIndex < inputHistory.length - 1 ? inputHistoryIndex + 1 : inputHistoryIndex;
@@ -950,32 +889,35 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     return str.length > maxLen ? str.slice(0, maxLen - 3) + "..." : str;
   };
 
+  // Literal, Claude Code-style tool label: ToolName(arg)
   const getToolDisplay = () => {
     if (!activeToolName || activeToolName === "thinking") return "Thinking...";
-    
+
     const args = activeToolArgs || {};
     const pathBase = args.path ? path.basename(args.path) : "";
-    const argStr = args.command || args.pattern || args.query || args.Query || args.CommandLine || pathBase || "";
-    const suffix = argStr ? ` · ${truncate(argStr)}` : "";
+    const argStr = args.command || args.pattern || args.query || pathBase || args.url || "";
+    const inner = argStr ? `(${truncate(argStr)})` : "";
 
-    if (activeToolName === "read_file" || activeToolName === "view_file" || activeToolName === "list_directory" || activeToolName === "list_dir") {
-      return `▤ Inspecting canvas${suffix}`;
-    } else if (activeToolName === "terminal" || activeToolName === "run_command") {
-      return `◧ Mixing colors${suffix}`;
-    } else if (activeToolName === "search_web" || activeToolName === "grep" || activeToolName === "grep_search" || activeToolName === "search_codebase") {
-      return `⌕ Looking for inspiration${suffix}`;
-    } else if (
-      activeToolName === "write_file" ||
-      activeToolName === "write_to_file" ||
-      activeToolName === "edit_file" ||
-      activeToolName === "replace_file_content" ||
-      activeToolName === "multi_replace_file_content" ||
-      activeToolName === "edit_ast" ||
-      activeToolName === "overwrite_file"
-    ) {
-      return `✎ Sketching details${suffix}`;
-    }
-    return `▶ Running ${activeToolName}${suffix}`;
+    const NAMES: Record<string, string> = {
+      read_file: "Read",
+      list_directory: "List",
+      terminal: "Bash",
+      grep: "Search",
+      search_codebase: "Search",
+      find_usages: "Search",
+      write_file: "Write",
+      overwrite_file: "Write",
+      edit_file: "Edit",
+      edit_ast: "Edit",
+      delete_file: "Delete",
+      rename_file: "Move",
+      web_fetch: "Fetch",
+      git_status: "Git",
+      git_diff: "Git",
+      git_commit: "Commit",
+    };
+    const label = NAMES[activeToolName] || activeToolName;
+    return `${label}${inner}`;
   };
 
   const renderMarkdown = (text: string, isStreaming: boolean = false) => {
@@ -1071,92 +1013,56 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   };
 
   const renderMsg = (msg: ChatMessage) => {
-    const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
-
+    // Boot / cleared banner
     if (msg.text.startsWith("⬡ Crayon v")) {
       const hasUserMessages = history.some((m) => m.sender === "user");
       if (hasUserMessages) return null;
-
       const versionMatch = msg.text.match(/v([0-9.]+)/);
       const version = versionMatch ? versionMatch[1] : "0.1.0";
-      const tips = [
-        "Tip: Hit Ctrl+E to open your editor for multi-line prompts.",
-        "Tip: Hit Ctrl+T to quickly cycle permission modes.",
-        "Tip: Type / to open the Command Palette.",
-        "Tip: Crayon works best with a detailed system prompt."
-      ];
-      const randomTip = tips[parseInt(msg.id) % tips.length] || tips[0];
       return (
         <Box key={msg.id} flexDirection="column" marginBottom={1} borderStyle="round" borderColor={theme.brand} paddingX={1}>
-          <Text color={theme.brand} bold>✶ Welcome to Crayon Code v{version}!</Text>
-          <Box marginTop={1} flexDirection="column">
-            <Text color={theme.subtle} italic>/help for help, /config for settings</Text>
-            <Text color={theme.text}>cwd: {workspaceRoot}</Text>
-          </Box>
-          <Box marginTop={1}>
-            <Text color={theme.subtle}>※ {randomTip}</Text>
-          </Box>
+          <Text color={theme.brand} bold>✻ Crayon Code v{version}</Text>
+          <Text color={theme.subtle} dimColor>/help for commands · cwd: {workspaceRoot}</Text>
         </Box>
       );
     }
 
     if (msg.sender === "user") {
       return (
-        <Box key={msg.id} marginBottom={1} flexDirection="row" paddingLeft={1}>
-          <Box marginRight={1}>
-            <Text color={theme.subtle}>┃</Text>
-          </Box>
-          <Box flexDirection="column">
-            <Text color={theme.subtle} bold>You</Text>
-            <Text color={theme.text}>{msg.text}</Text>
-          </Box>
+        <Box key={msg.id} marginBottom={1} flexDirection="row">
+          <Text color={theme.subtle}>{"> "}</Text>
+          <Text color={theme.text}>{msg.text}</Text>
         </Box>
       );
     }
 
     if (msg.sender === "system") {
-      if (msg.text.startsWith("⬡ Crayon v")) {
-        const [crayonPart, restPart] = msg.text.split(" · Workspace: ");
-        const version = crayonPart.split(" v")[1];
-        return (
-          <Box key={msg.id} flexDirection="row" marginBottom={1}>
-            <Text color={theme.subtle}>⬡ </Text>
-            {"Crayon".split("").map((char, i) => (
-              <Text key={i} color={crayonColors[i % crayonColors.length]} bold>{char}</Text>
-            ))}
-            <Text color={theme.subtle}> v{version} · Workspace: {restPart}</Text>
-          </Box>
-        );
-      }
-
       if (msg.toolCall) {
         const tc = msg.toolCall;
-        const isRunning = tc.status === "running";
         const isError = tc.status === "error";
-        
-        const icon = isRunning ? "◓" : isError ? "✗" : "└";
-        const iconColor = isRunning ? theme.brand : isError ? theme.warning : theme.subtle;
-        const textColor = isRunning ? theme.subtle : isError ? theme.warning : theme.text;
-        
-        // Compute details to render below
-        let detailsComponent: React.ReactNode = null;
-        if (!isRunning && tc.result) {
-          const res = tc.result;
-          if (tc.name === "terminal") {
-            detailsComponent = renderTerminalOutput(res.stdout, res.stderr);
-          } else if (tc.name === "grep" || tc.name === "search_codebase") {
-            detailsComponent = renderMatches(res.matches);
-          }
+        const bulletColor = isError ? theme.error : theme.success;
+        // getToolCallCompletedText prefixes ✓/✗ — strip it; the bullet carries state.
+        const label = msg.text.replace(/^[✓✗]\s*/, "");
+
+        let details: React.ReactNode = null;
+        if (tc.result) {
+          if (tc.name === "terminal") details = renderTerminalOutput(tc.result.stdout, tc.result.stderr);
+          else if (tc.name === "grep" || tc.name === "search_codebase") details = renderMatches(tc.result.matches);
         }
-        
+
         return (
-          <Box key={msg.id} flexDirection="column" marginBottom={0}>
+          <Box key={msg.id} flexDirection="column">
             <Box flexDirection="row">
-              <Text color={iconColor}>{icon} </Text>
-              <Text color={textColor}>{msg.text}</Text>
+              <Text color={bulletColor}>⏺ </Text>
+              <Text color={isError ? theme.error : theme.text}>{label}</Text>
             </Box>
-            {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
-            {detailsComponent}
+            {msg.diff && (
+              <Box flexDirection="row">
+                <Text color={theme.subtle}>  ⎿ </Text>
+                <DiffRenderer diff={msg.diff} maxLines={15} />
+              </Box>
+            )}
+            {details}
           </Box>
         );
       }
@@ -1178,61 +1084,29 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       );
     }
 
-    // crayon sender
+    // assistant (crayon) — ⏺ bullet + finalized markdown, no box
     return (
-      <Box key={msg.id} flexDirection="column" marginBottom={2} paddingLeft={1} borderStyle="single" borderRight={false} borderTop={false} borderBottom={false} borderColor={theme.brand}>
-        <Box flexDirection="row" marginBottom={1} marginLeft={1}>
-          <Text bold>
-            {"Crayon".split("").map((char, i) => (
-              <Text key={i} color={crayonColors[i % crayonColors.length]}>{char}</Text>
-            ))}
-          </Text>
-        </Box>
-        {msg.reasoning && (
-          <ThinkingMessage thinking={msg.reasoning} isCollapsed={true} />
-        )}
-        {msg.text && (
-          <Box flexDirection="column" marginLeft={1}>
-            {renderMarkdown(msg.text)}
+      <Box key={msg.id} flexDirection="column" marginBottom={1}>
+        {msg.reasoning && <ThinkingMessage thinking={msg.reasoning} isCollapsed={true} />}
+        <Box flexDirection="row">
+          <Text color={theme.brand}>⏺ </Text>
+          <Box flexDirection="column" flexGrow={1}>
+            {msg.text ? renderMarkdown(msg.text) : null}
           </Box>
-        )}
+        </Box>
       </Box>
     );
   };
 
-  // Sliding window: when scrolled up, show older messages.
-  // scrollOffset=0 means live bottom view; scrollOffset=N means scrolled N messages up.
-  const WINDOW = 80; // max messages rendered at once
-  const totalMessages = history.length;
-  const endIdx   = scrollOffset > 0 ? totalMessages - scrollOffset : totalMessages;
-  const startIdx = Math.max(0, endIdx - WINDOW);
-  const visibleHistory = history.slice(startIdx, endIdx);
-  const olderCount = startIdx; // messages above the window
-  const atBottom = scrollOffset === 0;
-
   return (
-    // height={rows} + overflow="hidden" tells Ink's yoga layout that this Box
-    // is exactly the viewport. Ink will never produce outputHeight >= rows,
-    // so the clearTerminal fallback in ink.js never fires.
-    // flexDirection="column" makes the footer (StatusBar) stick to the bottom.
-    <Box flexDirection="column" height={rows || 24} width="100%" overflow="hidden">
+    // No fixed viewport: finalized messages commit to native scrollback via
+    // <Static>; only the live region + input below it re-render.
+    <Box flexDirection="column" width="100%">
 
-      {/* Scrollable history region — flexGrow takes all available space */}
-      <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingLeft={1} justifyContent="flex-end">
-        {/* "More above" indicator when scrolled into history */}
-        {olderCount > 0 && (
-          <Box paddingLeft={1}>
-            <Text color={theme.subtle} italic>↑ {olderCount} older message{olderCount !== 1 ? 's' : ''} — PgUp to scroll</Text>
-          </Box>
-        )}
-        {visibleHistory.map(renderMsg)}
-        {/* "At bottom" indicator when scrolled up */}
-        {!atBottom && (
-          <Box paddingLeft={1}>
-            <Text color={theme.subtle} italic>↓ {scrollOffset} newer message{scrollOffset !== 1 ? 's' : ''} — PgDn to scroll down</Text>
-          </Box>
-        )}
-      </Box>
+      {/* Committed history — rendered once each, lives in terminal scrollback */}
+      <Static items={history}>
+        {(msg) => renderMsg(msg)}
+      </Static>
 
       <Box flexShrink={0} flexDirection="column" paddingLeft={1}>
         {activePlan.length > 0 && currentStepIndex < activePlan.length && (
@@ -1244,29 +1118,20 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             {streamingReasoning && !streamingText && (
               <ThinkingMessage thinking={streamingReasoning} />
             )}
-            
+
+            {/* Live assistant text: render RAW while streaming (cheap, no
+                per-token markdown re-parse). It is re-rendered as finalized
+                markdown once committed to <Static> on completion. */}
             {streamingText && (
-              <Box flexDirection="column" marginBottom={1} borderStyle="single" borderRight={false} borderTop={false} borderBottom={false} borderColor={theme.brand}>
-                <Box flexDirection="row" marginBottom={1} marginLeft={1}>
-                  <Text bold>
-                    {"Crayon".split("").map((char, i) => {
-                      const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
-                      return <Text key={i} color={crayonColors[i % crayonColors.length]}>{char}</Text>
-                    })}
-                  </Text>
-                </Box>
-                {streamingReasoning && (
-                  <ThinkingMessage thinking={streamingReasoning} isCollapsed={true} />
-                )}
-                <Box flexDirection="column" marginLeft={1}>
-                  {renderMarkdown(streamingText, true)}
+              <Box flexDirection="row" marginBottom={1}>
+                <Text color={theme.brand}>⏺ </Text>
+                <Box flexGrow={1}>
+                  <Text color={theme.text}>{streamingText}</Text>
                 </Box>
               </Box>
             )}
 
-            {/* Only show the animated progress when there's no streaming text yet —
-                prevents the "two sketching" bug where both the response text and
-                the progress animation render simultaneously */}
+            {/* Progress spinner only when no text is streaming yet */}
             {!streamingText && (
               <AgentProgress
                 statusText={getToolDisplay()}
@@ -1424,8 +1289,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         cost={cost}
         isExecuting={isExecuting}
         modelName={defaultModel}
-        scrollOffset={scrollOffset}
-        historyLength={history.length}
       />
     </Box>
   );

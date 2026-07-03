@@ -255,8 +255,9 @@ export class CrayonAgent {
           tool({
             description: toolDef.description,
             parameters: toolDef.parameters,
-            execute: async (args) => {
-              this.emit({ type: "tool_call", name, args });
+            execute: async (args, opts) => {
+              const id = opts?.toolCallId;
+              this.emit({ type: "tool_call", name, args, id });
               const result = await toolDef.execute(args);
               this.workingMemory.addToolOutput(name, result);
               if (name === "edit_file" || name === "write_file" || name === "overwrite_file") {
@@ -265,7 +266,7 @@ export class CrayonAgent {
                   this.workingMemory.markEdited(r.path);
                 }
               }
-              this.emit({ type: "tool_result", name, result });
+              this.emit({ type: "tool_result", name, result, id });
               return result;
             },
           }),
@@ -286,12 +287,13 @@ export class CrayonAgent {
       aiTools[safeName] = tool({
         description: `[MCP Server: ${t.server}] ${t.tool.description || t.tool.name}`,
         parameters: jsonSchema(t.tool.inputSchema as any),
-        execute: async (args: any) => {
-          this.emit({ type: "tool_call", name: safeName, args });
+        execute: async (args: any, opts: any) => {
+          const id = opts?.toolCallId;
+          this.emit({ type: "tool_call", name: safeName, args, id });
           try {
             const result = await this.mcpClient.callTool(t.server, t.tool.name, args);
             this.workingMemory.addToolOutput(safeName, result);
-            this.emit({ type: "tool_result", name: safeName, result });
+            this.emit({ type: "tool_result", name: safeName, result, id });
             return result;
           } catch (e: any) {
             return { error: e.message };
