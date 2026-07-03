@@ -1,4 +1,4 @@
-import { streamText, tool, jsonSchema, type CoreMessage } from "ai";
+import { streamText, generateText, tool, jsonSchema, type CoreMessage } from "ai";
 import { CodeIndexer } from "crayon-indexer";
 import type { AgentConfig, AgentEvent, AgentResult } from "./types.js";
 import { WorkingMemory } from "./memory/working.js";
@@ -311,7 +311,7 @@ export class CrayonAgent {
     let totalSteps = 0;
 
     const useTools = mode !== "chat";
-    const maxSteps = mode === "chat" ? 1 : mode === "advisory" ? 8 : (this.config.maxSteps ?? 25);
+    const maxSteps = mode === "chat" ? 1 : mode === "advisory" ? 12 : (this.config.maxSteps ?? 25);
 
     let totalSessionCost = 0;
     const MAX_SESSION_COST = 2.00; // Hard limit to prevent runaway usage
@@ -488,23 +488,43 @@ export class CrayonAgent {
         // Suppress usage resolution error if not supported
       }
 
-      // Check if the agent hit the maximum step limit
-      try {
-        const finishReason = await streamResult.finishReason;
-        if (finishReason === "tool-calls" || finishReason === "length") {
-          const warnMsg = "\n\n⚠️ [System: The agent reached the maximum number of steps allowed for this task without completing it. You may need to break the task down or increase the limit.]";
-          responseText += warnMsg;
-          this.emit({ type: "text_delta", content: warnMsg });
-        }
-      } catch {
-        // Suppress
-      }
+      let finishReason: string | undefined;
+      try { finishReason = await streamResult.finishReason; } catch { /* not supported */ }
+      const exhausted = finishReason === "tool-calls" || finishReason === "length";
 
-      // Fallback: if textStream was empty but steps had text
+      // Fallback: if the stream produced no text but steps carried some, use it.
       if (!responseText && steps?.length) {
         for (const step of steps) {
           if (step.text?.trim()) responseText += step.text.trim();
         }
+      }
+
+      // If the model ran out of steps mid tool-loop and never wrote an answer,
+      // force one final tool-free synthesis pass so the user still gets a reply.
+      if (exhausted && !responseText.trim() && mode !== "chat") {
+        this.emit({ type: "thinking", content: "Reached step limit — composing an answer from gathered context..." });
+        try {
+          const respMsgs = ((await streamResult.response)?.messages ?? []) as CoreMessage[];
+          const synth = await generateText({
+            model,
+            messages: [
+              ...messages,
+              ...respMsgs,
+              { role: "user", content: "Stop calling tools. Using everything you have gathered so far, answer my previous request directly and concisely now." },
+            ],
+          });
+          if (synth.text?.trim()) {
+            responseText = synth.text.trim();
+            this.emit({ type: "text_delta", content: responseText });
+          }
+        } catch { /* fall through to warning */ }
+      }
+
+      // Only warn if we still have nothing to show.
+      if (exhausted && !responseText.trim()) {
+        const warnMsg = "⚠️ [System: Reached the maximum number of steps without completing. Try breaking the task down or raising the limit.]";
+        responseText += warnMsg;
+        this.emit({ type: "text_delta", content: warnMsg });
       }
 
       if (responseText) {
