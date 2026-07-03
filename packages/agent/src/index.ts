@@ -376,10 +376,11 @@ export class CrayonAgent {
             messages,
             tools: useTools ? aiTools : undefined,
             maxSteps,
-            // We manage retries ourselves (withRetry). Disable the SDK's internal
-            // backoff-retries so errors (e.g. a hard 429 quota) surface in <1s
-            // instead of hanging "Working" for tens of seconds.
-            maxRetries: 0,
+            // Retry transient provider errors (503 "high demand", 500/502, 429
+            // throttles) with backoff — these usually clear on the next try.
+            // The stream idle-timeout below still bounds any single attempt so a
+            // truly stuck request can't hang forever.
+            maxRetries: 3,
             abortSignal: combinedSignal,
             onStepFinish: (step) => {
               const { usage } = step;
