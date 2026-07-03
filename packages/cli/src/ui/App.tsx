@@ -1287,10 +1287,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         )}
       </Box>
 
-      <Box marginTop={1} paddingLeft={1} flexShrink={0}>
-        <Text color={theme.border}>{"─".repeat(40)}</Text>
-      </Box>
-
       {!approvalRequest && mode === "chat" && (
         <Box flexDirection="column" flexShrink={0}>
           {/* Inline command menu — filters as you type "/…", sits above the
