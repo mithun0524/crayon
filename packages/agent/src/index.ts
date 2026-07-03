@@ -320,6 +320,7 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
 
     const maxEvalRetries = this.config.maxEvalRetries ?? 5;
     let evalRetries = 0;
+    let nudgedNoEdit = false; // one-shot corrective when a coding task makes no edits
     let summary = "";
     const edits: string[] = [];
     let totalSteps = 0;
@@ -600,6 +601,13 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
         this.emit({ type: "text_delta", content: warnMsg });
       }
 
+      // Weaker models sometimes emit a tool call as plain text (e.g.
+      // {"name":"edit_file","parameters":{...}}) instead of a real tool call.
+      // Strip those blobs so raw JSON never becomes the user-facing answer.
+      responseText = responseText
+        .replace(/\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"(?:parameters|arguments|args)"\s*:\s*\{[\s\S]*?\}\s*\}/g, "")
+        .trim();
+
       if (responseText) {
         // Emit full text event for consumers that prefer complete messages
         this.emit({ type: "text", content: responseText });
@@ -619,6 +627,19 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
       }
 
       // History push moved outside the while loop to avoid duplicates on eval retries
+
+      // Coding task ended with no file changes — weaker models often "answer"
+      // with a code block or a text tool-call instead of editing. Nudge once to
+      // actually apply the change via tools, then retry.
+      if (mode === "coding" && !this.workingMemory.hasEdits() && !nudgedNoEdit) {
+        nudgedNoEdit = true;
+        messages.push({ role: "assistant", content: responseText || "(no changes were made)" });
+        messages.push({
+          role: "user",
+          content: "You did NOT modify any files — describing the change or printing code does not count. Apply it now with a real tool call: read_file the target, then edit_file (copy old_string exactly) or write_file. Do not reply with code.",
+        });
+        continue;
+      }
 
       if (mode !== "coding" || !this.workingMemory.hasEdits()) {
         break;

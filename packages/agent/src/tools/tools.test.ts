@@ -50,6 +50,28 @@ describe("file tools", () => {
     expect(await readFile(path.join(root, "f.ts"), "utf-8")).toContain("const a = 42;");
   });
 
+  it("edit_file falls back to a whitespace-tolerant match (weak-model indentation)", async () => {
+    await writeFile(path.join(root, "f.ts"), "function x() {\n      return a-b;\n}\n", "utf-8");
+    const tools = createTools(makeCtx(root));
+    // Model supplies the line with different indentation than the file.
+    const res: any = await tools.edit_file.execute({
+      path: "f.ts",
+      old_string: "return a-b;",
+      new_string: "  return a+b;",
+    });
+    expect(res.success).toBe(true);
+    const out = await readFile(path.join(root, "f.ts"), "utf-8");
+    expect(out).toContain("return a+b;");
+    expect(out).not.toContain("a-b");
+  });
+
+  it("edit_file fuzzy fallback refuses when the block is ambiguous", async () => {
+    await writeFile(path.join(root, "f.ts"), "  x\n  x\n", "utf-8");
+    const tools = createTools(makeCtx(root));
+    const res: any = await tools.edit_file.execute({ path: "f.ts", old_string: "x", new_string: "y" });
+    expect(res.success).toBe(false); // 2 exact matches → ambiguous, not fuzzy-applied
+  });
+
   it("edit_file fails when old_string is not found", async () => {
     await writeFile(path.join(root, "f.ts"), "hello", "utf-8");
     const tools = createTools(makeCtx(root));

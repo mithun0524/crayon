@@ -50,6 +50,35 @@ function capResult(result: string, maxChars: number = 50000): string {
   return result.slice(0, maxChars) + `\n\n... (output truncated at ${maxChars} chars. Full output is ${result.length} chars.)`;
 }
 
+/**
+ * Whitespace-tolerant fallback for edit_file: when old_string doesn't match
+ * exactly (the #1 failure for weaker models — indentation / trailing spaces),
+ * match line-by-line ignoring leading/trailing whitespace. Replaces only if
+ * exactly one contiguous block matches. Returns null if 0 or >1 matches.
+ */
+function fuzzyReplace(content: string, oldStr: string, newStr: string): string | null {
+  const cLines = content.split("\n");
+  let oLines = oldStr.split("\n");
+  // Drop blank lines at the ends of the search block (e.g. a trailing newline).
+  while (oLines.length && oLines[0].trim() === "") oLines.shift();
+  while (oLines.length && oLines[oLines.length - 1].trim() === "") oLines.pop();
+  if (oLines.length === 0) return null;
+
+  const norm = (s: string) => s.trim();
+  const oNorm = oLines.map(norm);
+  const matches: number[] = [];
+  for (let i = 0; i + oNorm.length <= cLines.length; i++) {
+    let ok = true;
+    for (let j = 0; j < oNorm.length; j++) {
+      if (norm(cLines[i + j]) !== oNorm[j]) { ok = false; break; }
+    }
+    if (ok) matches.push(i);
+  }
+  if (matches.length !== 1) return null;
+  const i = matches[0];
+  return [...cLines.slice(0, i), ...newStr.split("\n"), ...cLines.slice(i + oNorm.length)].join("\n");
+}
+
 /** True if an IP is loopback / private / link-local / reserved (SSRF targets). */
 function isBlockedIp(ip: string): boolean {
   const v = net.isIP(ip);
@@ -108,8 +137,13 @@ async function safeFetch(url: string, signal: AbortSignal): Promise<Response> {
 }
 
 export function createTools(ctx: ToolContext) {
+    // Canonicalize the workspace root once. process.cwd() can be a symlink
+    // (e.g. macOS /var -> /private/var); without this, an absolute path from
+    // the model realpaths to /private/var and fails the containment check.
+    const rootReal = (() => { try { return realpathSync(ctx.workspaceRoot); } catch { return ctx.workspaceRoot; } })();
+
     const resolvePath = (filePath: string) => {
-      let resolved = path.resolve(ctx.workspaceRoot, filePath);
+      let resolved = path.resolve(rootReal, filePath);
       try {
         if (existsSync(resolved)) {
           resolved = realpathSync(resolved);
@@ -123,7 +157,7 @@ export function createTools(ctx: ToolContext) {
         // Fallback to unresolved if realpath fails
       }
 
-      const relative = path.relative(ctx.workspaceRoot, resolved);
+      const relative = path.relative(rootReal, resolved);
       if (relative.startsWith("..") || path.isAbsolute(relative)) {
         throw new Error(`Path escapes workspace: ${filePath}`);
       }
@@ -242,15 +276,20 @@ export function createTools(ctx: ToolContext) {
         const content = await readFile(absPath, "utf-8");
         const occurrences = content.split(old_string).length - 1;
 
-        if (occurrences === 0) {
-          return { success: false, error: notReadWarning + "old_string not found in file" };
-        }
-        if (occurrences > 1) {
+        let newContent: string;
+        if (occurrences === 1) {
+          newContent = content.replace(old_string, new_string);
+        } else if (occurrences > 1) {
           return { success: false, error: notReadWarning + `old_string found ${occurrences} times. Provide more context to make it unique.` };
+        } else {
+          // Exact match failed — try a whitespace-tolerant line match before giving up.
+          const fuzzy = fuzzyReplace(content, old_string, new_string);
+          if (fuzzy === null) {
+            return { success: false, error: notReadWarning + "old_string not found in file (also tried a whitespace-insensitive match). Read the file and copy the exact text to replace." };
+          }
+          newContent = fuzzy;
         }
 
-        const newContent = content.replace(old_string, new_string);
-        
         const approved = await checkEditPermission(filePath, newContent);
         if (!approved) {
           return { success: false, error: "PERMISSION_DENIED_BY_USER" };
