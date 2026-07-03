@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useInsertionEffect } from "react";
-import { Box, Text, useInput, useApp } from "ink";
+import { Box, Text, Static, useInput, useApp } from "ink";
 import TextInput from "ink-text-input";
 import { SearchableSelect, SelectOption } from "./components/SearchableSelect.js";
 import path from "node:path";
@@ -31,7 +31,6 @@ import { DiffRenderer } from "./DiffRenderer.js";
 import { saveSession, loadSession } from "../session.js";
 import { theme, ACCENTS, applyAccent } from "./theme.js";
 import { syntaxThemeDark } from "./syntaxTheme.js";
-import { useTerminalSize } from "./hooks/useTerminalSize.js";
 import { AgentProgress } from "./components/AgentProgress.js";
 import { CrayonLogo } from "./components/CrayonLogo.js";
 import { ThinkingMessage } from "./messages/ThinkingMessage.js";
@@ -74,15 +73,12 @@ function commandMatches(input: string) {
 
 export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) => {
   const { exit } = useApp();
-  const { rows } = useTerminalSize();
 
-  // Full-screen: enter the alternate screen buffer so the app owns the whole
-  // terminal (input pinned to the bottom, prior shell output hidden and
-  // restored on exit). useInsertionEffect fires before Ink's first render so
-  // the escape reaches the terminal before any content.
+  // Clear the terminal (screen + scrollback) once on start, then render inline
+  // in the NORMAL buffer via <Static> — so native trackpad scroll, copy/paste,
+  // and unlimited history all work, but the prior shell output is wiped away.
   useInsertionEffect(() => {
-    process.stdout.write('\x1b[?1049h\x1b[2J\x1b[H'); // enter alt-screen + clear + home
-    return () => { process.stdout.write('\x1b[?1049l'); };
+    process.stdout.write('\x1b[2J\x1b[3J\x1b[H'); // clear screen + scrollback + home
   }, []);
 
   const [gitBranch, setGitBranch] = useState("main");
@@ -135,9 +131,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   });
   const sessionStartTimeRef = useRef(Date.now());
   const apiDurationRef = useRef(0);
-  // How many messages scrolled up from the bottom (0 = live/at-bottom).
-  const [scrollOffset, setScrollOffset] = useState(0);
-  const scrollOffsetRef = useRef(0);
 
   const agentRef = useRef<CrayonAgent | null>(null);
   const abortedRef = useRef(false);
@@ -159,9 +152,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       }
       return next;
     });
-    // Snap to the bottom whenever a new message arrives.
-    scrollOffsetRef.current = 0;
-    setScrollOffset(0);
   };
 
   useEffect(() => {
@@ -592,24 +582,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           if (key.tab) { setCurrentInput(matches[Math.min(cmdIndex, matches.length - 1)].cmd + " "); return; }
           if (key.escape) { setCurrentInput(""); return; }
         }
-        // Full-screen viewport owns the scroll: PgUp/PgDn (and Shift+Arrows)
-        // page through history; plain arrows recall previous prompts.
-        if (key.pageUp) {
-          const next = Math.min(scrollOffsetRef.current + 5, Math.max(0, history.length - 1));
-          scrollOffsetRef.current = next; setScrollOffset(next); return;
-        }
-        if (key.pageDown) {
-          const next = Math.max(0, scrollOffsetRef.current - 5);
-          scrollOffsetRef.current = next; setScrollOffset(next); return;
-        }
-        if (key.shift && key.upArrow) {
-          const next = Math.min(scrollOffsetRef.current + 1, Math.max(0, history.length - 1));
-          scrollOffsetRef.current = next; setScrollOffset(next); return;
-        }
-        if (key.shift && key.downArrow) {
-          const next = Math.max(0, scrollOffsetRef.current - 1);
-          scrollOffsetRef.current = next; setScrollOffset(next); return;
-        }
+        // History lives in the terminal's native scrollback — scroll with the
+        // mouse/trackpad. Plain arrows recall previous prompts.
         if (key.upArrow) {
           if (inputHistory.length > 0) {
             const newIndex = inputHistoryIndex < inputHistory.length - 1 ? inputHistoryIndex + 1 : inputHistoryIndex;
@@ -1183,17 +1157,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     );
   };
 
-  // Windowed tail of history that fits the fixed viewport. scrollOffset lets
-  // PgUp/PgDn page upward; justifyContent flex-end pins content to the bottom
-  // so the input bar sits at the bottom of the screen.
-  const WINDOW = 200;
-  const total = history.length;
-  const endIdx = scrollOffset > 0 ? total - scrollOffset : total;
-  const startIdx = Math.max(0, endIdx - WINDOW);
-  const visibleHistory = history.slice(startIdx, endIdx);
-  const olderCount = startIdx;
-  const atBottom = scrollOffset === 0;
-
   // Inline command menu state (driven by the single main input).
   const cmdItems = commandMatches(currentInput);
   const showCmdMenu =
@@ -1207,20 +1170,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const cmdVisible = cmdItems.slice(cmdStart, cmdStart + CMD_MAX);
 
   return (
-    // height={rows} + overflow hidden makes this Box exactly the viewport, so
-    // Ink never exceeds the terminal height (no clearTerminal flicker fallback).
-    <Box flexDirection="column" height={rows || 24} width="100%" overflow="hidden">
+    // No fixed viewport: finalized messages commit to native scrollback via
+    // <Static>; only the live region + input below re-render.
+    <Box flexDirection="column" width="100%">
 
-      {/* History region — grows to fill, newest pinned to the bottom */}
-      <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingLeft={1} justifyContent="flex-end">
-        {olderCount > 0 && (
-          <Text color={theme.subtle} dimColor>↑ {olderCount} older — PgUp to scroll</Text>
-        )}
-        {visibleHistory.map(renderMsg)}
-        {!atBottom && (
-          <Text color={theme.subtle} dimColor>↓ {scrollOffset} newer — PgDn to scroll</Text>
-        )}
-      </Box>
+      {/* Committed history — rendered once each, lives in terminal scrollback */}
+      <Static items={history}>
+        {(msg) => renderMsg(msg)}
+      </Static>
 
       <Box flexShrink={0} flexDirection="column" paddingLeft={1}>
         {activePlan.length > 0 && currentStepIndex < activePlan.length && (
