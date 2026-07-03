@@ -1300,14 +1300,13 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         <Box flexDirection="column" flexShrink={0}>
           {isCommandPaletteOpen && (
             <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
-              <Text color={theme.success} bold>Command Palette</Text>
               <SearchableSelect
                 items={AVAILABLE_COMMANDS.map(c => ({
                   label: c.cmd,
                   value: c.cmd,
                   description: c.desc + (c.usage ? `  ${c.usage}` : "")
                 }))}
-                placeholder="Search commands..."
+                placeholder="command…"
                 onSelect={(val) => {
                   setIsCommandPaletteOpen(false);
                   handleSubmit(val);
@@ -1316,13 +1315,13 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               />
             </Box>
           )}
-          
+
           {isModelSelectorOpen && (
             <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
-              <Text color={theme.success} bold>Select a model for {currentProvider}</Text>
+              <Text color={theme.subtle} dimColor>select model · {currentProvider}</Text>
               <SearchableSelect
                 items={availableModels}
-                placeholder="Search models..."
+                placeholder="model…"
                 onSelect={(val) => updateModel(val)}
                 onCancel={() => setIsModelSelectorOpen(false)}
               />
@@ -1331,10 +1330,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
           {isColorPickerOpen && (
             <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
-              <Text color={theme.brand} bold>Pick an accent color</Text>
+              <Text color={theme.subtle} dimColor>accent color</Text>
               <SearchableSelect
                 items={ACCENTS.map((a) => ({ label: a.label, value: a.name, description: a.brand }))}
-                placeholder="Search colors..."
+                placeholder="color…"
                 onSelect={(val) => updateAccent(val)}
                 onCancel={() => setIsColorPickerOpen(false)}
               />
