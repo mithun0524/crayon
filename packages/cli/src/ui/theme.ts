@@ -24,15 +24,15 @@ export interface Theme {
 }
 
 export const darkTheme: Theme = {
-  brand: '#A8A29E',          // Warm gray / minimal
-  brandShimmer: '#E7E5E4',   // Lighter gray for shimmer
-  border: '#3F3F46',         // Dark gray border
-  text: '#F4F4F5',           // Off-white text
-  subtle: '#71717A',         // Muted gray
+  brand: '#D97757',          // Claude clay/terracotta accent — the signal color
+  brandShimmer: '#E9A07F',   // Lighter clay
+  border: '#52525B',         // Border (lifted for visibility)
+  text: '#FAFAFA',           // Bright near-white body text
+  subtle: '#A1A1AA',         // Muted gray — still readable on black
   background: '#09090B',     // Near black
-  success: '#22C55E',        // Minimal green
-  error: '#EF4444',          // Minimal red
-  warning: '#F59E0B',        // Minimal amber
+  success: '#4ADE80',        // Green
+  error: '#F87171',          // Red
+  warning: '#FBBF24',        // Amber
 
   diffAdded: '#22C55E',      // Green (Claude-style additions)
   diffRemoved: '#EF4444',    // Red (Claude-style removals)

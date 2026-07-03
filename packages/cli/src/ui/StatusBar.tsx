@@ -26,19 +26,19 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
   return (
     <Box paddingLeft={1} flexDirection="row" flexShrink={0}>
-      <Text color={theme.subtle} dimColor>{modelName || "default"}</Text>
+      <Text color={theme.brand}>{modelName || "default"}</Text>
       {sep}
-      <Text color={theme.subtle} dimColor>⎇ {gitBranch || "none"}</Text>
+      <Text color={theme.subtle}>⎇ {gitBranch || "none"}</Text>
       <Text color={theme.warning}>{dirtyStr}</Text>
       {sep}
-      <Text color={theme.subtle} dimColor>{kTokens} tokens</Text>
+      <Text color={theme.subtle}>{kTokens} tokens</Text>
       {sep}
-      <Text color={theme.subtle} dimColor>${cost.toFixed(4)}</Text>
+      <Text color={theme.success}>${cost.toFixed(4)}</Text>
       {sep}
       {isExecuting ? (
-        <Text color={theme.error}>esc to stop</Text>
+        <Text color={theme.error} bold>esc to stop</Text>
       ) : (
-        <Text color={theme.subtle} dimColor>ctrl+c to exit</Text>
+        <Text color={theme.subtle}>ctrl+c to exit</Text>
       )}
     </Box>
   );
