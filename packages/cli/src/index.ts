@@ -148,12 +148,18 @@ program
 
 
     try {
-      const { waitUntilExit } = render(React.createElement(App, { 
-        mode: "chat", 
+      const { waitUntilExit } = render(React.createElement(App, {
+        mode: "chat",
         resume: options.resume,
         permissionMode: options.mode as any
       }));
       await waitUntilExit();
+
+      // Point the user back to their session (kept in scrollback above).
+      const sessionFile = path.join(process.cwd(), ".crayon", "sessions", "latest.json");
+      if (existsSync(sessionFile)) {
+        console.log(chalk.dim(`\n↻ Resume this session:  `) + chalk.cyan(`crayon chat --resume`));
+      }
     } catch (err) {
       console.error(chalk.red(`TUI Error: ${err instanceof Error ? err.message : String(err)}`));
       await exitCLI(1);

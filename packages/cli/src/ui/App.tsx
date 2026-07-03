@@ -274,9 +274,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         const session = await loadSession(workspaceRoot);
         if (session) {
           agent.setHistory(session.history || []);
-          // Note: we don't restore UI chatLog to avoid screen clutter on boot,
-          // just the agent's internal memory
-          pushMessage({ sender: "system", text: "↺ Session resumed from disk." });
+          // Restore the visible transcript too, so a resumed chat shows the
+          // prior conversation (not just the agent's hidden memory).
+          const restored = (session.chatLog || []).map((m: any, i: number) => ({
+            ...m,
+            id: `restored-${i}`,
+          }));
+          if (restored.length > 0) setHistory(restored as any);
+          pushMessage({ sender: "system", text: "↺ Session resumed." });
         } else {
           pushMessage({ sender: "system", text: "⚠ No previous session found to resume." });
         }
@@ -455,11 +460,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
   };
 
-  // Wipe the terminal (screen + scrollback) on the way out, so quitting leaves
-  // a clean prompt — mirrors the clear-on-start.
+  // Leave the transcript in scrollback on quit (don't wipe) so it can be
+  // scrolled/copied afterward; index.ts prints a resume hint after exit.
   const cleanExit = () => {
     if (agentRef.current) agentRef.current.close();
-    process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
     exit();
   };
 
