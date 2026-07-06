@@ -1,0 +1,28 @@
+name: Setup workspace
+description: pnpm + Node with store cache + frozen-lockfile install
+
+inputs:
+  node-version:
+    description: Node.js version
+    default: "22"
+  registry-url:
+    description: npm registry (set for publish jobs)
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+      # version is read from "packageManager" in package.json
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        registry-url: ${{ inputs.registry-url }}
+        cache: pnpm
+
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile --prefer-offline
