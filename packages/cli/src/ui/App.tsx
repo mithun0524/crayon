@@ -1209,13 +1209,16 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       );
     }
 
-    // assistant (crayon) — ⏺ bullet + finalized markdown, no box
+    // assistant (crayon) — ⏺ bullet + finalized markdown. The body gets an
+    // explicit width so wrapped lines stay indented under the bullet instead of
+    // collapsing to column 0 (an Ink flexGrow-in-a-row wrapping quirk).
+    const bodyWidth = Math.max(20, (columns || 80) - 2);
     return (
       <Box key={msg.id} flexDirection="column" marginBottom={1}>
         {msg.reasoning && <ThinkingMessage thinking={msg.reasoning} isCollapsed={true} />}
         <Box flexDirection="row">
           <Text color={theme.brand}>⏺ </Text>
-          <Box flexDirection="column" flexGrow={1}>
+          <Box flexDirection="column" width={bodyWidth}>
             {msg.text ? renderMarkdown(msg.text) : null}
           </Box>
         </Box>

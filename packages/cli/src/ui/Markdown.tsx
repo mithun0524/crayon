@@ -60,22 +60,28 @@ export const Markdown: React.FC<{ text: string }> = ({ text }) => {
   return (
     <Box flexDirection="column">
       {blocks.map((b, i) => {
+        const prev = blocks[i - 1];
+        // Breathing room between blocks: paragraphs and headings always get a
+        // gap; a list only gets a gap above its first item (items stay tight).
+        const gap = i === 0 ? 0
+          : b.type === "li" ? (prev?.type === "li" ? 0 : 1)
+          : 1;
         if (b.type === "h")
-          return <Box key={i} marginTop={i ? 1 : 0}><Text bold color={theme.brand}>{inline(b.text, `h${i}`)}</Text></Box>;
+          return <Box key={i} marginTop={gap}><Text bold color={theme.brand}>{inline(b.text, `h${i}`)}</Text></Box>;
         if (b.type === "quote")
           return (
-            <Box key={i} flexDirection="row">
+            <Box key={i} marginTop={gap} flexDirection="row">
               <Text color={theme.border}>│ </Text><Text color={theme.subtle} italic>{inline(b.text, `q${i}`)}</Text>
             </Box>
           );
         if (b.type === "li")
           return (
-            <Box key={i} flexDirection="row" paddingLeft={(b.level || 0) * 2}>
+            <Box key={i} marginTop={gap} flexDirection="row" paddingLeft={(b.level || 0) * 2}>
               <Text color={theme.brand}>{b.marker} </Text>
               <Box flexGrow={1}><Text color={theme.text}>{inline(b.text, `li${i}`)}</Text></Box>
             </Box>
           );
-        return <Box key={i}><Text color={theme.text}>{inline(b.text, `p${i}`)}</Text></Box>;
+        return <Box key={i} marginTop={gap}><Text color={theme.text}>{inline(b.text, `p${i}`)}</Text></Box>;
       })}
     </Box>
   );
