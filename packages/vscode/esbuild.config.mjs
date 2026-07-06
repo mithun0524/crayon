@@ -3,41 +3,51 @@ import { mkdirSync } from "node:fs";
 
 const isWatch = process.argv.includes("--watch");
 
-const nativeModules = [
+// Everything pure-JS (ai, ts-morph, simple-git, crayon-agent/indexer, …) is
+// bundled INTO dist/extension.js so the VSIX is self-contained. Only these
+// stay external and must therefore exist in node_modules at runtime — they
+// are shipped inside the VSIX by scripts/package.cjs:
+const runtimeExternals = [
   "vscode",
-  "ai",
-  "@ai-sdk/anthropic",
-  "@ai-sdk/openai",
-  "@modelcontextprotocol/sdk",
-  "diff",
-  "fast-glob",
-  "simple-git",
-  "ts-morph",
-  "zod",
-  "@vscode/ripgrep",
-  "chokidar",
-  "sql.js", 
+  "@vscode/ripgrep", // native binary
+  "@lancedb/lancedb", // native .node addon
+  "web-tree-sitter", // loads its own .wasm
+  "tree-sitter-wasms", // .wasm grammars resolved via require.resolve
+  // Bundling @ai-sdk/google makes Gemini calls hang/retry for tens of seconds
+  // (same issue documented in packages/cli/esbuild.config.mjs) — keep external.
+  "@ai-sdk/google",
+];
+
+// Optional drivers referenced behind feature checks by transitive deps. They
+// are not installed anywhere in the workspace, so the requires never execute;
+// marking them external just stops esbuild from failing resolution.
+const phantomExternals = [
+  "sql.js",
   "better-sqlite3",
   "pg",
   "mysql2",
   "mariadb",
   "tedious",
   "pg-query-stream",
-  "@lancedb/lancedb",
-  "web-tree-sitter",
-  "tree-sitter-wasms"
+  "fsevents",
 ];
 
 const extensionConfig = {
   entryPoints: ["src/extension.ts"],
   bundle: true,
   outfile: "dist/extension.js",
-  external: nativeModules,
+  external: [...runtimeExternals, ...phantomExternals],
   format: "cjs",
   platform: "node",
   target: "node20",
   sourcemap: true,
   minify: false,
+  // crayon-indexer does createRequire(import.meta.url) to resolve .wasm files;
+  // import.meta is empty in a CJS bundle, so substitute the real file URL.
+  define: { "import.meta.url": "__cjs_import_meta_url" },
+  banner: {
+    js: 'const __cjs_import_meta_url = require("node:url").pathToFileURL(__filename).href;',
+  },
 };
 
 const webviewConfig = {

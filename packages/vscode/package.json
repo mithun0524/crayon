@@ -3,7 +3,13 @@
   "displayName": "Crayon",
   "description": "Autonomous AI coding agent",
   "version": "0.2.0",
+  "private": true,
   "publisher": "crayon",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mithun0524/crayon.git",
+    "directory": "packages/vscode"
+  },
   "icon": "media/icon.png",
   "galleryBanner": {
     "color": "#AF87FF",
@@ -15,11 +21,14 @@
   "categories": [
     "Machine Learning",
     "Programming Languages",
-    "Snippets",
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onView:crayon.chatView",
+    "onCommand:crayon.chat",
+    "onCommand:crayon.runTask",
+    "onCommand:crayon.indexWorkspace",
+    "onCommand:crayon.setApiKey"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -36,6 +45,10 @@
       {
         "command": "crayon.indexWorkspace",
         "title": "Crayon: Index Workspace"
+      },
+      {
+        "command": "crayon.setApiKey",
+        "title": "Crayon: Set API Key (stored securely)"
       }
     ],
     "viewsContainers": {
@@ -52,8 +65,7 @@
         {
           "type": "webview",
           "id": "crayon.chatView",
-          "name": "Chat",
-          "retainContextWhenHidden": true
+          "name": "Chat"
         }
       ]
     },
@@ -63,17 +75,22 @@
         "crayon.anthropicApiKey": {
           "type": "string",
           "default": "",
-          "description": "Anthropic API key for Claude models"
+          "markdownDescription": "Anthropic API key for Claude models. **Prefer `Crayon: Set API Key` (secure storage)** — this setting is kept as a fallback and syncs in plain text."
         },
         "crayon.openaiApiKey": {
           "type": "string",
           "default": "",
-          "description": "OpenAI API key"
+          "markdownDescription": "OpenAI API key. **Prefer `Crayon: Set API Key` (secure storage).**"
         },
         "crayon.openrouterApiKey": {
           "type": "string",
           "default": "",
-          "description": "OpenRouter API key"
+          "markdownDescription": "OpenRouter API key. **Prefer `Crayon: Set API Key` (secure storage).**"
+        },
+        "crayon.googleApiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Google AI (Gemini) API key. **Prefer `Crayon: Set API Key` (secure storage).**"
         },
         "crayon.provider": {
           "type": "string",
@@ -95,11 +112,6 @@
           "type": "boolean",
           "default": true,
           "description": "When true, file edits are applied immediately without a diff preview prompt. Set to false to review each change before it lands."
-        },
-        "crayon.googleApiKey": {
-          "type": "string",
-          "default": "",
-          "description": "Google AI (Gemini) API key. Used when provider is 'google' or model name starts with 'gemini'."
         }
       }
     }
@@ -108,32 +120,25 @@
     "build": "node esbuild.config.mjs",
     "watch": "node esbuild.config.mjs --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "package": "vsce package --no-dependencies"
+    "package": "node scripts/package.cjs"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.81",
-    "@ai-sdk/openai": "^3.0.67",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@ai-sdk/google": "^1.2.22",
+    "@lancedb/lancedb": "^0.30.0",
     "@vscode/ripgrep": "^1.18.0",
-    "ai": "^6.0.193",
-    "chokidar": "^5.0.0",
-    "crayon-agent": "workspace:*",
-    "crayon-indexer": "workspace:*",
-    "diff": "^9.0.0",
-    "fast-glob": "^3.3.3",
-    "highlight.js": "^11.11.1",
-    "marked": "^18.0.4",
-    "simple-git": "^3.36.0",
-    "ts-morph": "^28.0.0",
-    "zod": "^4.4.3"
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "^0.22.6"
   },
   "devDependencies": {
-    "@types/highlight.js": "^10.1.0",
-    "@types/marked": "^6.0.0",
     "@types/node": "^22.13.10",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.3.0",
+    "crayon-agent": "workspace:*",
+    "crayon-indexer": "workspace:*",
+    "dompurify": "^3.2.4",
     "esbuild": "^0.25.1",
+    "highlight.js": "^11.11.1",
+    "marked": "^18.0.4",
     "typescript": "^5.8.2"
   }
 }

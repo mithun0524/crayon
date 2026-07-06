@@ -1,6 +1,10 @@
 {
   "name": "crayon-cli",
   "version": "0.3.0",
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "description": "An AI-powered terminal coding assistant that can search your codebase, create plans, and automatically execute them.",
   "author": "mithun0524",
   "license": "MIT",
