@@ -98,10 +98,11 @@
             "openrouter",
             "anthropic",
             "openai",
-            "google"
+            "google",
+            "ollama"
           ],
           "default": "openrouter",
-          "description": "LLM provider"
+          "description": "LLM provider. \"ollama\" talks to a local Ollama server (OLLAMA_BASE_URL or http://localhost:11434) and needs no API key."
         },
         "crayon.defaultModel": {
           "type": "string",

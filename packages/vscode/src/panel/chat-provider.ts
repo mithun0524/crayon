@@ -187,7 +187,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     const config = vscode.workspace.getConfiguration("crayon");
     const keys = await this.getApiKeys();
     const defaultModel = config.get<string>("defaultModel") || "nvidia/nemotron-3-super-120b-a12b:free";
-    const provider = config.get<"openrouter" | "anthropic" | "openai" | "google">("provider") || "openrouter";
+    const provider = config.get<"openrouter" | "anthropic" | "openai" | "google" | "ollama">("provider") || "openrouter";
     const autoApplyEdits = config.get<boolean>("autoApplyEdits") ?? true;
 
     this.agent = new CrayonAgent({
@@ -232,13 +232,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
 
-    const keys = await this.getApiKeys();
-    if (!Object.values(keys).some(Boolean)) {
-      this.postEvent({
-        type: "error",
-        message: "No API key found. Run “Crayon: Set API Key” from the command palette.",
-      } as AgentEvent);
-      return;
+    // Ollama runs locally and needs no API key.
+    const config = vscode.workspace.getConfiguration("crayon");
+    const usesOllama =
+      config.get<string>("provider") === "ollama" ||
+      (config.get<string>("defaultModel") ?? "").startsWith("ollama/");
+    if (!usesOllama) {
+      const keys = await this.getApiKeys();
+      if (!Object.values(keys).some(Boolean)) {
+        this.postEvent({
+          type: "error",
+          message: "No API key found. Run “Crayon: Set API Key” from the command palette.",
+        } as AgentEvent);
+        return;
+      }
     }
 
     this.pushTranscript({ kind: "user", task });
