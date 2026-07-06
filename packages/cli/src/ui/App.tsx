@@ -26,6 +26,7 @@ import { syntaxThemeDark } from "./syntaxTheme.js";
 import { AgentProgress } from "./components/AgentProgress.js";
 import { CrayonLogo } from "./components/CrayonLogo.js";
 import { Markdown } from "./Markdown.js";
+import { useTerminalSize } from "./hooks/useTerminalSize.js";
 import { ThinkingMessage } from "./messages/ThinkingMessage.js";
 import {
   AVAILABLE_COMMANDS,
@@ -67,6 +68,7 @@ function commandMatches(input: string, custom: Array<{ cmd: string; desc: string
 
 export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) => {
   const { exit } = useApp();
+  const { columns } = useTerminalSize();
 
   // Clear the terminal (screen + scrollback) once on start, then render inline
   // in the NORMAL buffer via <Static> — so native trackpad scroll, copy/paste,
@@ -1143,15 +1145,16 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
 
     if (msg.sender === "user") {
-      // A new user turn opens a conversation block: a faint full-width rule to
-      // separate turns, then a teal gutter bar anchoring the prompt.
+      // A new user turn — a subtle full-width band with a teal ❯ (Claude-style).
+      // Ink only supports backgroundColor on <Text>, so pad the line to the
+      // terminal width to make the band span full width.
+      const prefixLen = 3; // " ❯ "
+      const pad = Math.max(0, (columns || 80) - prefixLen - [...msg.text].length);
       return (
-        <Box key={msg.id} flexDirection="column" marginTop={1} marginBottom={1}>
-          <Box borderStyle="single" borderColor={theme.border} borderTop={true} borderBottom={false} borderLeft={false} borderRight={false} />
-          <Box flexDirection="row" marginTop={1}>
-            <Text color={theme.brand} bold>▌ </Text>
-            <Box flexGrow={1}><Text color={theme.text} bold>{msg.text}</Text></Box>
-          </Box>
+        <Box key={msg.id} marginTop={1} marginBottom={1}>
+          <Text backgroundColor={theme.panelBg} color={theme.text}>
+            {" "}<Text color={theme.brand}>❯</Text>{" "}{msg.text}{" ".repeat(pad)}
+          </Text>
         </Box>
       );
     }
