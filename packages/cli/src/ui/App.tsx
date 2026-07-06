@@ -10,19 +10,10 @@ import { spawnSync } from "node:child_process";
 import { createTwoFilesPatch } from "diff";
 import { CrayonAgent, type AgentEvent, autoCompact, getModelPricing } from "crayon-agent";
 import { highlight } from "cli-highlight";
-import { marked } from "marked";
-import TerminalRenderer from "marked-terminal";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-marked.setOptions({
-  renderer: new TerminalRenderer({
-    listitem: (text: string) => `  • ${text.trim()}\n`,
-    firstHeading: (text: string) => `\x1b[1m\x1b[36m# ${text}\x1b[0m\n\n`,
-    heading: (text: string, level: number) => `\x1b[1m\x1b[36m${"#".repeat(level)} ${text}\x1b[0m\n\n`
-  } as any) as any
-});
 import { loadConfig } from "../config.js";
 import { getGitInfo } from "./gitHelper.js";
 import { PlanView } from "./PlanView.js";
@@ -34,6 +25,7 @@ import { theme, ACCENTS, applyAccent } from "./theme.js";
 import { syntaxThemeDark } from "./syntaxTheme.js";
 import { AgentProgress } from "./components/AgentProgress.js";
 import { CrayonLogo } from "./components/CrayonLogo.js";
+import { Markdown } from "./Markdown.js";
 import { ThinkingMessage } from "./messages/ThinkingMessage.js";
 import {
   AVAILABLE_COMMANDS,
@@ -1055,7 +1047,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     return `${label}${inner}`;
   };
 
-  const renderMarkdown = (text: string, isStreaming: boolean = false) => {
+  const renderMarkdown = (text: string) => {
     const parts = text.split(/(```[\s\S]*?```)/g);
     return parts.map((part, index) => {
       if (part.startsWith("```") && part.endsWith("```")) {
@@ -1074,21 +1066,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         );
       }
       if (part.trim() === "") return null;
-      let rawText = part;
-      if (isStreaming && index === parts.length - 1) {
-        // Wet ink effect: color the last word
-        const match = rawText.match(/([^\s`*_*~]+)(\s*)$/);
-        if (match) {
-           const brandColor = "\x1b[38;2;77;150;255m"; // theme.brand
-           const resetCode = "\x1b[0m";
-           rawText = rawText.slice(0, match.index) + `${brandColor}${match[1]}${resetCode}` + match[2];
-        }
-      }
-      let mdText = rawText;
-      try {
-        mdText = (marked.parse(rawText) as string).trim();
-      } catch {}
-      return <Text key={index}>{mdText}</Text>;
+      return <Markdown key={index} text={part} />;
     });
   };
 
@@ -1165,10 +1143,15 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
 
     if (msg.sender === "user") {
+      // A new user turn opens a conversation block: a faint full-width rule to
+      // separate turns, then a teal gutter bar anchoring the prompt.
       return (
-        <Box key={msg.id} marginBottom={1} flexDirection="row">
-          <Text color={theme.subtle}>{"> "}</Text>
-          <Text color={theme.text}>{msg.text}</Text>
+        <Box key={msg.id} flexDirection="column" marginTop={1} marginBottom={1}>
+          <Box borderStyle="single" borderColor={theme.border} borderTop={true} borderBottom={false} borderLeft={false} borderRight={false} />
+          <Box flexDirection="row" marginTop={1}>
+            <Text color={theme.brand} bold>▌ </Text>
+            <Box flexGrow={1}><Text color={theme.text} bold>{msg.text}</Text></Box>
+          </Box>
         </Box>
       );
     }
@@ -1191,15 +1174,17 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           <Box key={msg.id} flexDirection="column">
             <Box flexDirection="row">
               <Text color={bulletColor}>⏺ </Text>
-              <Text color={isError ? theme.error : theme.text}>{label}</Text>
+              <Box flexGrow={1}><Text color={isError ? theme.error : theme.text}>{label}</Text></Box>
             </Box>
-            {msg.diff && (
+            {(msg.diff || details) && (
               <Box flexDirection="row">
-                <Text color={theme.subtle}>  ⎿ </Text>
-                <DiffRenderer diff={msg.diff} maxLines={15} />
+                <Text color={theme.border}>  ⎿ </Text>
+                <Box flexDirection="column" flexGrow={1}>
+                  {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
+                  {details}
+                </Box>
               </Box>
             )}
-            {details}
           </Box>
         );
       }
