@@ -664,13 +664,14 @@ export function createTools(ctx: ToolContext) {
 
     // concurrent: false | readonly: false | permission: ask
     terminal: {
-      description: "Run a shell command in the workspace directory. Dangerous commands require approval.",
+      description: "Run a shell command in the workspace directory. Dangerous commands require approval. Set background:true for long-running processes like dev servers (returns immediately with the pid; the process keeps running).",
       parameters: z.object({
         command: z.string().describe("Shell command to execute"),
-        timeout_ms: z.number().default(30000).describe("Timeout in milliseconds (max 120000)"),
+        timeout_ms: z.number().default(30000).describe("Timeout in milliseconds (max 120000). Ignored when background is true."),
         cwd: z.string().optional().describe("Working directory (relative to workspace root). Defaults to workspace root."),
+        background: z.boolean().optional().describe("Run detached and return immediately — use for dev servers / watchers that don't exit. stdout/stderr go to .crayon/logs/."),
       }),
-      execute: async ({ command, timeout_ms, cwd: cwdPath }: { command: string; timeout_ms?: number; cwd?: string }) => {
+      execute: async ({ command, timeout_ms, cwd: cwdPath, background }: { command: string; timeout_ms?: number; cwd?: string; background?: boolean }) => {
         if (ctx.signal?.aborted) return { success: false, error: "Aborted", command };
         let isDangerous = false;
         for (const pattern of DANGEROUS_PATTERNS) {
@@ -725,8 +726,14 @@ export function createTools(ctx: ToolContext) {
           return { success: false, error: "PERMISSION_DENIED_BY_USER", command };
         }
 
-        const timeout = Math.min(timeout_ms ?? 30000, 120000);
         const workDir = cwdPath ? resolvePath(cwdPath) : ctx.workspaceRoot;
+
+        if (background) {
+          const info = await runBackground(command, workDir);
+          return { success: true, background: true, pid: info.pid, logFile: info.logFile, message: `Started in background (pid ${info.pid}). Logs: ${info.logFile}` };
+        }
+
+        const timeout = Math.min(timeout_ms ?? 30000, 120000);
         const result = await runCommand(command, workDir, timeout, ctx.signal);
         return {
           ...result,
@@ -910,6 +917,29 @@ async function listDirRecursive(
   }
 
   return result;
+}
+
+/** Spawn a detached long-running process (dev server, watcher). Returns the
+ *  pid immediately; stdout/stderr are redirected to a log file so the agent can
+ *  read them later. The process outlives this tool call. */
+async function runBackground(command: string, cwd: string): Promise<{ pid: number; logFile: string }> {
+  const { open } = await import("node:fs/promises");
+  const logDir = path.join(cwd, ".crayon", "logs");
+  await mkdir(logDir, { recursive: true });
+  const logFile = path.join(logDir, `bg-${Date.now()}.log`);
+  const fh = await open(logFile, "a");
+  const isWin = process.platform === "win32";
+  const shell = isWin ? "powershell.exe" : "/bin/sh";
+  const shellFlag = isWin ? "-Command" : "-c";
+  const child = spawn(shell, [shellFlag, command], {
+    cwd,
+    env: process.env,
+    detached: true,
+    stdio: ["ignore", fh.fd, fh.fd],
+  });
+  child.unref();
+  await fh.close();
+  return { pid: child.pid ?? -1, logFile: path.relative(cwd, logFile) };
 }
 
 function runCommand(command: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {
