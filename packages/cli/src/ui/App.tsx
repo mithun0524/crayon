@@ -1265,8 +1265,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             {streamingText && (
               <Box flexDirection="row" marginBottom={1}>
                 <Text color={theme.brand}>⏺ </Text>
-                <Box flexGrow={1}>
-                  <Text color={theme.text}>{streamingText}</Text>
+                {/* Render through the SAME markdown+width path as the committed
+                    message, so finalizing causes no reflow / layout jump. */}
+                <Box flexDirection="column" width={Math.max(20, (columns || 80) - 2)}>
+                  {renderMarkdown(streamingText)}
                 </Box>
               </Box>
             )}
