@@ -116,6 +116,51 @@ export const getToolCallInitialText = (name: string, args: any) => {
   }
 };
 
+/**
+ * Structured tool line: a Claude-style `Verb(target)` header + a one-line result
+ * summary shown under the ⎿ connector. Keeps the verb/target/detail separate so
+ * the UI can style each (bold verb, dim target, dim detail).
+ */
+export function formatToolResult(name: string, args: any, result: any, isError: boolean): { verb: string; target: string; detail: string } {
+  const a = args || {};
+  const clip = (s: string, n = 52) => (!s ? "" : s.length > n ? s.slice(0, n - 1) + "…" : s);
+  const r: any = result || {};
+  const VERBS: Record<string, string> = {
+    read_file: "Read", list_directory: "List", terminal: "Bash", grep: "Search",
+    search_codebase: "Search", find_usages: "Usages", write_file: "Write",
+    overwrite_file: "Write", edit_file: "Update", edit_ast: "Update", delete_file: "Delete",
+    rename_file: "Move", web_fetch: "Fetch", git_status: "Git", git_diff: "Git",
+    git_commit: "Commit", spawn_agent: "Agent", todo: "Todo", glob_search: "Glob",
+  };
+  const verb = VERBS[name] || name;
+  let target = clip(a.command || a.pattern || a.query || a.path || a.file_path || a.url || (a.old_path && a.new_path ? `${a.old_path} → ${a.new_path}` : "") || a.task || "");
+
+  let detail = "";
+  if (isError) {
+    detail = clip(String(r.error || "failed"), 70);
+  } else {
+    switch (name) {
+      case "read_file": detail = r.totalLines != null ? `${r.totalLines} lines` : "read"; break;
+      case "list_directory": detail = r.entries ? `${r.entries.length} entries` : ""; break;
+      case "grep": case "search_codebase": case "find_usages": {
+        const n = (r.matches?.length ?? r.results?.length ?? r.usages?.length ?? 0);
+        detail = `${n} ${n === 1 ? "match" : "matches"}`; break;
+      }
+      case "terminal": detail = r.exitCode && r.exitCode !== 0 ? `exited ${r.exitCode}` : (r.background ? `pid ${r.pid}` : "done"); break;
+      case "write_file": detail = "created"; break;
+      case "overwrite_file": detail = "rewritten"; break;
+      case "edit_file": case "edit_ast": detail = ""; break; // diff shown below
+      case "delete_file": detail = "deleted"; break;
+      case "rename_file": detail = "moved"; break;
+      case "web_fetch": detail = r.status ? `HTTP ${r.status}` : "fetched"; break;
+      case "git_commit": detail = clip(r.hash ? `committed ${String(r.hash).slice(0, 7)}` : "committed"); break;
+      case "spawn_agent": detail = r.status === "completed" ? `done · ${r.steps ?? "?"} steps` : String(r.status || ""); break;
+      default: detail = ""; break;
+    }
+  }
+  return { verb, target, detail };
+}
+
 export const getToolCallCompletedText = (name: string, args: any, result: any, isError: boolean) => {
   const icon = isError ? "✗" : "✓";
   if (isError) {

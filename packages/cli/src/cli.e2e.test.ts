@@ -40,6 +40,11 @@ class CliSession {
     }
     throw new Error(`Timed out waiting for ${JSON.stringify(sub)}.\n--- got ---\n${this.text.slice(-1500)}`);
   }
+  /** Wait for the prompt, then let the input settle (focus/raw-mode) before typing. */
+  async ready(): Promise<void> {
+    await this.waitFor("crayon ❯", 12000);
+    await new Promise((r) => setTimeout(r, 500));
+  }
   async waitExit(ms = 5000): Promise<number> {
     const start = Date.now();
     while (Date.now() - start < ms) {
@@ -79,7 +84,7 @@ describe("CLI e2e (real binary in a PTY)", () => {
 
   it("/help lists commands", async () => {
     sess = new CliSession(await freshRepo());
-    await sess.waitFor("crayon ❯", 10000);
+    await sess.ready();
     await sess.submit("/help");
     await sess.waitFor("Available Commands");
     await sess.waitFor("Clear conversation history");
@@ -88,7 +93,7 @@ describe("CLI e2e (real binary in a PTY)", () => {
 
   it("typing '/' opens the inline command menu that filters", async () => {
     sess = new CliSession(await freshRepo());
-    await sess.waitFor("crayon ❯", 10000);
+    await sess.ready();
     sess.write("/co");
     // "/co" matches /cost /compact /config /color; the 3-row window shows the
     // first three, so assert visible ones + the footer.
@@ -98,15 +103,17 @@ describe("CLI e2e (real binary in a PTY)", () => {
   }, 20000);
 
   it("Ctrl+T cycles the permission mode", async () => {
-    sess = new CliSession(await freshRepo());
-    await sess.waitFor("ask mode on", 10000);
-    sess.write("\x14"); // Ctrl+T
+    // Force a known starting mode — otherwise it inherits the user's config.
+    sess = new CliSession(await freshRepo(), ["chat", "--mode", "ask"]);
+    await sess.ready();
+    await sess.waitFor("ask mode on");
+    sess.write("\x14"); // Ctrl+T → ask → auto-edit
     await sess.waitFor("auto-edit mode on");
   }, 20000);
 
   it("double Ctrl+C exits cleanly (interrupt-first, then quit)", async () => {
     sess = new CliSession(await freshRepo());
-    await sess.waitFor("crayon ❯", 10000);
+    await sess.ready();
     sess.write("\x03");
     await sess.waitFor("Press Ctrl+C again to exit");
     sess.write("\x03");

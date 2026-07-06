@@ -33,6 +33,7 @@ import {
   buildAsciiTree,
   POPULAR_MODELS,
   getToolCallCompletedText,
+  formatToolResult,
 } from "./appConstants.js";
 
 interface AppProps {
@@ -1093,13 +1094,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     const hasMore = allLines.length > limit;
 
     return (
-      <Box key="term-out" flexDirection="column" marginY={0} paddingLeft={2} width="100%">
-        <Text color={theme.subtle} dimColor>stdout/stderr:</Text>
-        <Text color={theme.subtle}>{truncated}</Text>
+      <Box key="term-out" flexDirection="column">
+        <Text color={theme.subtle} dimColor>{truncated}</Text>
         {hasMore && (
-          <Text color={theme.subtle} italic dimColor>
-            ... (truncated {allLines.length - limit} lines)
-          </Text>
+          <Text color={theme.subtle} italic dimColor>… {allLines.length - limit} more lines</Text>
         )}
       </Box>
     );
@@ -1112,16 +1110,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     const hasMore = matches.length > limit;
 
     return (
-      <Box key="matches-out" flexDirection="column" marginY={1} paddingLeft={1} width="100%">
+      <Box key="matches-out" flexDirection="column">
         {displayed.map((m: any, i: number) => (
-          <Text key={i} color={theme.text}>
-            <Text color={theme.brand}>{m.path}:{m.line}</Text> <Text color={theme.subtle}>{m.snippet?.trim()}</Text>
+          <Text key={i}>
+            <Text color={theme.brand}>{m.path}:{m.line}</Text> <Text color={theme.subtle} dimColor>{m.snippet?.trim()}</Text>
           </Text>
         ))}
         {hasMore && (
-          <Text color={theme.subtle} italic>
-            ... and {matches.length - limit} more matches
-          </Text>
+          <Text color={theme.subtle} dimColor>… {matches.length - limit} more matches</Text>
         )}
       </Box>
     );
@@ -1164,25 +1160,29 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         const tc = msg.toolCall;
         const isError = tc.status === "error";
         const bulletColor = isError ? theme.error : theme.success;
-        // getToolCallCompletedText prefixes ✓/✗ — strip it; the bullet carries state.
-        const label = msg.text.replace(/^[✓✗]\s*/, "");
+        const { verb, target, detail } = formatToolResult(tc.name, tc.args, tc.result, isError);
 
         let details: React.ReactNode = null;
-        if (tc.result) {
+        if (tc.result && !isError) {
           if (tc.name === "terminal") details = renderTerminalOutput(tc.result.stdout, tc.result.stderr);
           else if (tc.name === "grep" || tc.name === "search_codebase") details = renderMatches(tc.result.matches);
         }
+        const hasBranch = !!(msg.diff || details || detail);
 
         return (
           <Box key={msg.id} flexDirection="column">
             <Box flexDirection="row">
               <Text color={bulletColor}>⏺ </Text>
-              <Box flexGrow={1}><Text color={isError ? theme.error : theme.text}>{label}</Text></Box>
+              <Box flexGrow={1}>
+                <Text color={isError ? theme.error : theme.text} bold>{verb}</Text>
+                {target ? <Text color={theme.subtle}>({target})</Text> : null}
+              </Box>
             </Box>
-            {(msg.diff || details) && (
+            {hasBranch && (
               <Box flexDirection="row">
                 <Text color={theme.border}>  ⎿ </Text>
                 <Box flexDirection="column" flexGrow={1}>
+                  {detail ? <Text color={isError ? theme.error : theme.subtle} dimColor={!isError}>{detail}</Text> : null}
                   {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
                   {details}
                 </Box>
