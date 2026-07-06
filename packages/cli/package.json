@@ -45,6 +45,7 @@
   },
   "devDependencies": {
     "@inquirer/prompts": "^8.5.2",
+    "@lydell/node-pty": "1.2.0-beta.12",
     "@types/ink-select-input": "^3.0.5",
     "@types/ink-testing-library": "^1.0.4",
     "@types/ink-text-input": "^2.0.5",

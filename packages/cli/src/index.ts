@@ -132,7 +132,7 @@ program
     }
 
     try {
-      const { waitUntilExit } = render(React.createElement(App, { mode: "run", task }));
+      const { waitUntilExit } = render(React.createElement(App, { mode: "run", task }), { exitOnCtrlC: false });
       await waitUntilExit();
     } catch (err) {
       console.error(chalk.red(`TUI Error: ${err instanceof Error ? err.message : String(err)}`));
@@ -168,7 +168,7 @@ program
         mode: "chat",
         resume: options.resume,
         permissionMode: options.mode as any
-      }));
+      }), { exitOnCtrlC: false }); // our own double-tap Ctrl+C handler owns this
       await waitUntilExit();
 
       // Point the user back to their session (kept in scrollback above).
