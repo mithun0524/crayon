@@ -22,6 +22,7 @@
   <p>
     <b><a href="#-quick-start">Get Started</a></b> •
     <b><a href="#-features">Features</a></b> •
+    <b><a href="#-vs-code-extension">VS Code</a></b> •
     <b><a href="#-architecture">Architecture</a></b> •
     <b><a href="#-contributing">Contribute</a></b>
   </p>
@@ -32,12 +33,15 @@
 ## ⚡ Features
 
 - **🧠 Autonomous ReAct Loop**: Crayon thinks, plans, and executes. If a test fails or a build breaks, it intercepts the error and fixes it autonomously.
-- **🛡️ Secure by Design**: Fine-grained permission modes (`Ask`, `Auto-Edit`, `Auto (God Mode)`). Built-in safety guards against path traversal, oversized file reads, and destructive bash commands.
+- **🛡️ Secure by Design**: Fine-grained permission modes (`Ask`, `Auto-Edit`, `Auto (God Mode)`). Built-in safety guards against path traversal, oversized file reads, destructive bash commands, and SSRF on outbound fetches.
 - **✨ Beautiful CLI Interface**: Built with React for the Terminal (`ink`). Features predictive autocomplete for slash commands, an interactive onboarding setup wizard, and dynamic native markdown rendering.
-- **🎨 Interactive Model Swapping**: Hot-swap between Anthropic, OpenAI, Google, and OpenRouter directly in chat via an inline dropdown menu—without ever leaving your terminal flow.
+- **🧩 First-Class VS Code Extension**: A transparency-first chat panel with live reasoning, a "Read N files" progress accordion, tool cards with status + timing, inline `path:line` citations that jump to source, code blocks with Copy / Insert-at-cursor, slash commands, context pills, and follow-up suggestion chips.
+- **🎨 Interactive Model Swapping**: Hot-swap between Anthropic, OpenAI, Google, OpenRouter, and local **Ollama** models directly in chat—without ever leaving your flow.
+- **🔒 Local & Private**: Point Crayon at a local Ollama server for fully offline, zero-cost runs with no API key required.
 - **🚀 Advanced Local Indexer**: Rapid semantic codebase search and dependency graph resolution via a blazing-fast local SQLite and Tree-sitter backbone.
+- **🗺️ Codebase-Aware Q&A**: The `explain_codebase` tool gives the agent an instant structured overview—stack, README, layout, scripts, and dependency hub files—so broad questions get grounded answers instead of guesses.
 - **💾 Auto-Context Compaction**: Keep token burn low with intelligent conversation history compaction (`/compact`) and real-time session cost tracking (`/cost`).
-- **🧩 Extensible Architecture**: Integrates universally via Model Context Protocol (MCP) servers and exposes a highly modular TypeScript SDK.
+- **🔌 Extensible Architecture**: Integrates universally via Model Context Protocol (MCP) servers and exposes a highly modular TypeScript SDK.
 
 ## 📦 Quick Start
 
@@ -89,6 +93,30 @@ Once inside the interactive `chat` interface, use the `/` prefix to access predi
 
 ---
 
+## 🧩 VS Code Extension
+
+Crayon ships as a first-class VS Code extension that embeds the same agent engine in a **transparency-first chat panel** — you always see what the agent is thinking, reading, and doing.
+
+**Install:** grab the latest `.vsix` from [Releases](https://github.com/mithun0524/crayon/releases) and run:
+
+```bash
+code --install-extension crayon-vscode-<version>.vsix
+```
+
+Open the Crayon panel from the Activity Bar (or `Crayon: Chat` in the command palette), then run **`Crayon: Set API Key`** to store credentials securely (VS Code SecretStorage — never synced in plain text). No key is needed when using a local Ollama model.
+
+**Panel highlights:**
+- **Agent transparency** — a live "✻ Thinking" block streams reasoning and auto-collapses; consecutive file reads fold into a `Read N files` accordion with clickable links; tool calls render as cards with a spinner → ✓/✗ and timing.
+- **Inline citations** — `path/to/file.ts:42` references in answers become badges that jump straight to that line.
+- **Code actions** — every code block has a language label plus **Copy** and **Insert at Cursor**.
+- **Slash commands & context** — `/explain`, `/fix`, `/test`, `/doc`, `/refactor`, `/clear`; dismissible context pills show the active file/selection sent with each prompt.
+- **Follow-up chips** — one-click suggested next steps after each response.
+- **Diff-first edits** — file edits show `+N −M` stats and an optional review-before-apply diff (toggle `crayon.autoApplyEdits`).
+
+Configure the provider and model via the `crayon.*` settings (`crayon.provider`, `crayon.defaultModel`); the conversation persists across window reloads.
+
+---
+
 ## 🏗️ Architecture
 
 Crayon is designed as a highly scalable, modular monorepo managed via `pnpm`:
@@ -99,7 +127,11 @@ packages/
 ├── 🔍 indexer/  # AST extraction (Tree-sitter), dependency graphs, and SQLite semantic search
 ├── 💻 cli/      # The beautiful Ink-based Terminal UI, session state, and onboarding wizard
 └── 🔌 vscode/   # First-class VS Code IDE Extension integrating the core agent engine
+apps/
+└── 🌐 web/      # Marketing site & live demo (Next.js)
 ```
+
+CI/CD runs on GitHub Actions: change-aware parallel per-package build/typecheck/test on every PR, and a tag-driven release pipeline that publishes to npm (with provenance), builds cross-platform CLI bundles, and packages a self-contained VSIX.
 
 ---
 
@@ -107,10 +139,10 @@ packages/
 
 - [x] Core ReAct Agent Loop
 - [x] Local AST Codebase Indexer
-- [x] Multi-provider Model Support
+- [x] Multi-provider Model Support (incl. local Ollama)
 - [x] Advanced CLI UI (Ink)
-- [x] VS Code Extension (Alpha)
-- [ ] Model Context Protocol (MCP) Integration Layer
+- [x] VS Code Extension with agent-transparency UX
+- [x] Model Context Protocol (MCP) Integration Layer
 - [ ] Browser Automation Tools (Playwright/Puppeteer)
 - [ ] Multi-agent Swarm Architecture
 
@@ -131,9 +163,9 @@ We welcome contributions to make Crayon the absolute best open-source AI agent!
 
 ## 🔐 Configuration & Security
 
-Configurations are strictly stored in `~/.crayon/config.json` preventing accidental commits of API keys. 
-You can dynamically override keys via standard environment variables:
-`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`.
+**CLI:** configuration is stored in `~/.crayon/config.json`, preventing accidental commits of API keys. Override keys via standard environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`. Point at a local Ollama server with `OLLAMA_BASE_URL` (defaults to `http://localhost:11434`).
+
+**VS Code:** run `Crayon: Set API Key` to store credentials in the editor's encrypted SecretStorage (never synced in plain text); `crayon.*` settings and environment variables act as fallbacks.
 
 ---
 
