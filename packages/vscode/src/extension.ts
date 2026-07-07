@@ -78,6 +78,12 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand("crayon.clearChat", () => {
+      chatProvider.clearChat();
+    })
+  );
+
   // Single agent path: the palette command routes into the chat panel, so it
   // reuses the same session, history, and streaming UI.
   context.subscriptions.push(

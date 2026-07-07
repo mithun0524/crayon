@@ -49,6 +49,11 @@
       {
         "command": "crayon.setApiKey",
         "title": "Crayon: Set API Key (stored securely)"
+      },
+      {
+        "command": "crayon.clearChat",
+        "title": "Crayon: Clear Conversation",
+        "icon": "$(clear-all)"
       }
     ],
     "viewsContainers": {
@@ -75,7 +80,7 @@
         "crayon.anthropicApiKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Anthropic API key for Claude models. **Prefer `Crayon: Set API Key` (secure storage)** — this setting is kept as a fallback and syncs in plain text."
+          "markdownDescription": "Anthropic API key for Claude models. **Prefer `Crayon: Set API Key` (secure storage)** \u2014 this setting is kept as a fallback and syncs in plain text."
         },
         "crayon.openaiApiKey": {
           "type": "string",
@@ -115,6 +120,15 @@
           "description": "When true, file edits are applied immediately without a diff preview prompt. Set to false to review each change before it lands."
         }
       }
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "crayon.clearChat",
+          "when": "view == crayon.chatView",
+          "group": "navigation"
+        }
+      ]
     }
   },
   "scripts": {

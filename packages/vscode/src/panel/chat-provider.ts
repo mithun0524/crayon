@@ -64,30 +64,52 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     webviewView.webview.html = this.getHtml();
 
     webviewView.webview.onDidReceiveMessage(async (message: unknown) => {
-      const msg = message as { type?: unknown; task?: unknown; path?: unknown };
+      const msg = message as {
+        type?: unknown; task?: unknown; path?: unknown; code?: unknown;
+        includeFile?: unknown; includeSelection?: unknown;
+      };
       switch (msg.type) {
         case "ready":
+          this.postConfig();
+          this.postEditorContext();
           this.replayTranscript();
           break;
         case "run":
           if (typeof msg.task === "string" && msg.task.trim()) {
-            await this.handleRun(msg.task);
+            await this.handleRun(msg.task, {
+              includeFile: msg.includeFile !== false,
+              includeSelection: msg.includeSelection !== false,
+            });
           }
           break;
         case "stop":
           this.stopCurrentRun();
           break;
         case "clear":
-          this.agent?.clearHistory();
-          this.transcript = [];
-          void this.persistTranscript();
-          this.view?.webview.postMessage({ type: "cleared" });
+          this.clearChat();
           break;
         case "open_file":
-          if (typeof msg.path === "string") this.openWorkspaceFile(msg.path);
+          if (typeof msg.path === "string") {
+            const line = (msg as { line?: unknown }).line;
+            this.openWorkspaceFile(msg.path, typeof line === "number" ? line : undefined);
+          }
+          break;
+        case "insert_code":
+          if (typeof msg.code === "string") this.insertAtCursor(msg.code);
+          break;
+        case "copy":
+          if (typeof msg.code === "string") await vscode.env.clipboard.writeText(msg.code);
           break;
       }
     });
+
+    // Context pills: tell the webview which file/selection rides along with
+    // the next prompt, live as the user moves around the editor.
+    const ctxSubs = [
+      vscode.window.onDidChangeActiveTextEditor(() => this.postEditorContext()),
+      vscode.window.onDidChangeTextEditorSelection(() => this.postEditorContext()),
+    ];
+    webviewView.onDidDispose(() => ctxSubs.forEach((d) => d.dispose()));
 
     // The webview (and this view handle) go away when the view is destroyed —
     // e.g. the user drags the container elsewhere. Keep the agent alive; the
@@ -103,18 +125,56 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     await this.handleRun(task);
   }
 
+  /** Clear conversation — invoked from the webview or the view-title button. */
+  clearChat(): void {
+    this.agent?.clearHistory();
+    this.transcript = [];
+    void this.persistTranscript();
+    this.postToWebview({ type: "cleared" });
+  }
+
   /** Drop the cached agent so new settings/keys apply on the next run. */
   invalidateAgent(): void {
+    this.postConfig();
     if (this.running) return; // don't yank it mid-run; next run rebuilds
     this.agent?.close();
     this.agent = undefined;
     this.agentWorkspaceRoot = undefined;
   }
 
+  private postEditorContext(): void {
+    const ed = vscode.window.activeTextEditor;
+    const isFile = ed && ed.document.uri.scheme === "file";
+    this.postToWebview({
+      type: "context",
+      file: isFile ? vscode.workspace.asRelativePath(ed!.document.uri) : null,
+      selectionLines:
+        isFile && !ed!.selection.isEmpty ? ed!.selection.end.line - ed!.selection.start.line + 1 : 0,
+    });
+  }
+
+  private insertAtCursor(code: string): void {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      vscode.window.showWarningMessage("Crayon: open a file to insert into.");
+      return;
+    }
+    editor.edit((b) => b.insert(editor.selection.active, code));
+  }
+
+  private postConfig(): void {
+    const config = vscode.workspace.getConfiguration("crayon");
+    this.postToWebview({
+      type: "config",
+      provider: config.get<string>("provider") || "openrouter",
+      model: config.get<string>("defaultModel") || "nvidia/nemotron-3-super-120b-a12b:free",
+    });
+  }
+
   private postEvent(event: AgentEvent): void {
-    // text_delta is streaming sugar — the final "text" event carries the full
-    // content, so deltas are not recorded for replay.
-    if (event.type !== "text_delta") {
+    // Deltas are streaming sugar — the final "text"/"reasoning" events carry
+    // the full content, so deltas are not recorded for replay.
+    if (event.type !== "text_delta" && event.type !== "reasoning_delta") {
       this.pushTranscript({ kind: "event", event });
     }
     this.postToWebview({ type: "event", event });
@@ -150,14 +210,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     this.postEvent({ type: "error", message: "Run cancelled." } as AgentEvent);
   }
 
-  private openWorkspaceFile(relPath: string): void {
+  private openWorkspaceFile(relPath: string, line?: number): void {
     const root = this.agentWorkspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!root) return;
     // Reject traversal outside the workspace
     const abs = path.resolve(root, relPath);
     if (abs !== root && !abs.startsWith(root + path.sep)) return;
     vscode.workspace.openTextDocument(vscode.Uri.file(abs)).then((doc) => {
-      vscode.window.showTextDocument(doc, { preview: false });
+      const options: vscode.TextDocumentShowOptions = { preview: false };
+      if (line && line > 0) {
+        const pos = new vscode.Position(Math.min(line - 1, doc.lineCount - 1), 0);
+        options.selection = new vscode.Range(pos, pos);
+      }
+      vscode.window.showTextDocument(doc, options);
     });
   }
 
@@ -220,7 +285,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     return this.agent;
   }
 
-  private async handleRun(task: string): Promise<void> {
+  private async handleRun(
+    task: string,
+    ctxOpts: { includeFile?: boolean; includeSelection?: boolean } = {}
+  ): Promise<void> {
     if (this.running) {
       this.postToWebview({ type: "event", event: { type: "error", message: "A run is already in progress — stop it first." } });
       return;
@@ -250,7 +318,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
     this.pushTranscript({ kind: "user", task });
 
-    const { currentFile, selection } = getEditorContext();
+    let { currentFile, selection } = getEditorContext();
+    if (ctxOpts.includeFile === false) currentFile = undefined;
+    if (ctxOpts.includeSelection === false) selection = undefined;
     const agent = await this.getOrCreateAgent(folder);
 
     this.running = true;
@@ -258,8 +328,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     this.hooks.onBusyChange?.(true);
     this.postToWebview({ type: "run_state", running: true });
 
+    let succeeded = false;
     try {
       await agent.run(task, { currentFile, selection, signal: this.runAbort.signal });
+      succeeded = !this.runAbort.signal.aborted;
     } catch (err) {
       if (!this.runAbort.signal.aborted) {
         this.postEvent({
@@ -273,6 +345,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.hooks.onBusyChange?.(false);
       this.postToWebview({ type: "run_state", running: false });
       void this.persistTranscript();
+    }
+
+    // Follow-up chips: fire-and-forget, never blocks the run lifecycle.
+    if (succeeded) {
+      void agent
+        .suggestFollowUps(3)
+        .then((items) => {
+          if (items.length && !this.running) {
+            this.postToWebview({ type: "suggestions", items });
+          }
+        })
+        .catch(() => {});
     }
   }
 
@@ -293,9 +377,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    :root {
+      --gap: 10px;
+      --radius: 8px;
+      --accent: var(--vscode-textLink-foreground);
+      --dim: var(--vscode-descriptionForeground);
+      --border: var(--vscode-panel-border, rgba(128,128,128,0.25));
+      --code-bg: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+    }
+
     body {
       font-family: var(--vscode-font-family);
-      font-size: var(--vscode-font-size);
+      font-size: 13px;
       color: var(--vscode-foreground);
       background: var(--vscode-sideBar-background);
       height: 100vh;
@@ -304,220 +397,479 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       overflow: hidden;
     }
 
-    .header {
-      padding: 10px 12px;
-      font-weight: 600;
-      border-bottom: 1px solid var(--vscode-panel-border);
-      font-size: 13px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-shrink: 0;
-    }
-
-    .header-actions {
-      display: flex;
-      gap: 6px;
-    }
-
-    .icon-btn {
-      background: none;
-      border: none;
-      color: var(--vscode-descriptionForeground);
-      cursor: pointer;
-      padding: 2px 5px;
-      border-radius: 3px;
-      font-size: 11px;
-      opacity: 0.7;
-    }
-    .icon-btn:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
-
+    /* ── Conversation ─────────────────────────────────────────── */
     #messages {
       flex: 1;
       overflow-y: auto;
-      padding: 10px 12px;
+      padding: 12px 14px 4px;
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: var(--gap);
+      scroll-behavior: smooth;
     }
 
-    .msg {
-      padding: 8px 12px;
-      border-radius: 6px;
-      max-width: 97%;
-      word-wrap: break-word;
-      font-size: 12.5px;
-      line-height: 1.5;
+    /* Welcome screen */
+    #welcome {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: var(--dim);
+      padding: 24px;
+      text-align: center;
     }
-
-    .msg pre {
-      background: var(--vscode-editor-background);
-      padding: 8px;
-      border-radius: 4px;
-      overflow-x: auto;
-      margin: 8px 0;
+    #welcome .logo {
+      font-size: 28px;
+      color: var(--accent);
+      line-height: 1;
     }
-
-    .msg code {
+    #welcome .title { font-size: 15px; font-weight: 600; color: var(--vscode-foreground); }
+    #welcome .hint { font-size: 12px; max-width: 320px; line-height: 1.5; }
+    #welcome kbd {
       font-family: var(--vscode-editor-font-family);
-      font-size: var(--vscode-editor-font-size);
+      font-size: 10px;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 5px;
     }
 
-    .msg p { margin-bottom: 8px; }
-    .msg p:last-child { margin-bottom: 0; }
+    .msg { max-width: 100%; word-wrap: break-word; line-height: 1.55; }
 
+    /* User turn — right-aligned bubble */
     .msg.user {
+      align-self: flex-end;
+      max-width: 88%;
       background: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
-      align-self: flex-end;
-      border-radius: 12px 12px 2px 12px;
+      padding: 7px 12px;
+      border-radius: 12px 12px 3px 12px;
       white-space: pre-wrap;
+      font-size: 12.5px;
     }
 
+    /* Agent turn — full-width prose, no bubble (Claude-style) */
     .msg.agent {
-      background: var(--vscode-editor-inactiveSelectionBackground);
-      align-self: flex-start;
-      border-radius: 2px 12px 12px 12px;
+      align-self: stretch;
+      font-size: 13px;
+      padding: 2px 0;
     }
-
-    .msg.agent.streaming::after {
-      content: '▋';
-      animation: blink 0.8s step-end infinite;
-      color: var(--vscode-textLink-foreground);
-      margin-left: 2px;
+    .msg.agent.streaming > :last-child::after {
+      content: '▍';
+      color: var(--accent);
+      animation: blink 1s step-end infinite;
+      margin-left: 1px;
     }
     @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
-    .msg.system {
-      background: transparent;
-      color: var(--vscode-descriptionForeground);
-      font-size: 11px;
-      align-self: center;
-      text-align: center;
+    .msg.agent pre, .diff-body pre, .row-details pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin: 8px 0;
+      font-size: 11.5px;
+      line-height: 1.45;
     }
-
-    .msg.error {
-      background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
-      color: var(--vscode-errorForeground, #f48771);
-      border-left: 3px solid var(--vscode-errorForeground, #f48771);
-    }
-
-    .msg.plan {
-      background: var(--vscode-textBlockQuote-background);
-      border-left: 3px solid var(--vscode-textLink-foreground);
-      font-size: 12px;
-    }
-    .msg.plan ol { margin: 4px 0 0 16px; }
-    .msg.plan li { margin: 2px 0; }
-
-    .msg.tool {
-      background: transparent;
-      color: var(--vscode-descriptionForeground);
-      font-size: 11px;
+    .msg code {
       font-family: var(--vscode-editor-font-family);
-      align-self: flex-start;
-      padding: 2px 12px;
+      font-size: 0.92em;
     }
+    .msg.agent :not(pre) > code {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 0 4px;
+    }
+    .msg.agent p { margin: 0 0 8px; }
+    .msg.agent p:last-child { margin-bottom: 0; }
+    .msg.agent ul, .msg.agent ol { margin: 4px 0 8px 18px; }
+    .msg.agent h1, .msg.agent h2, .msg.agent h3 { font-size: 13.5px; margin: 10px 0 6px; }
+    .msg.agent blockquote {
+      border-left: 3px solid var(--border);
+      padding-left: 10px;
+      color: var(--dim);
+      margin: 6px 0;
+    }
+    .msg.agent a { color: var(--accent); text-decoration: none; }
+    .msg.agent a:hover { text-decoration: underline; }
+    .msg.agent table { border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+    .msg.agent th, .msg.agent td { border: 1px solid var(--border); padding: 3px 8px; }
 
-    .tool-call summary {
+    /* Activity rows: tools, edits, evals — compact single lines */
+    .row {
+      align-self: stretch;
+      font-family: var(--vscode-editor-font-family);
+      font-size: 11.5px;
+      color: var(--dim);
+      border-left: 2px solid var(--border);
+      padding: 1px 0 1px 10px;
+      margin-left: 2px;
+    }
+    .row summary {
       cursor: pointer;
-      color: var(--vscode-textLink-foreground);
       user-select: none;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .row summary::-webkit-details-marker { display: none; }
+    .row summary .chev { transition: transform 0.12s; font-size: 9px; flex-shrink: 0; }
+    .row[open] summary .chev { transform: rotate(90deg); }
+    .row .tool-name { color: var(--vscode-foreground); font-weight: 600; }
+    .row .arg-preview { opacity: 0.75; overflow: hidden; text-overflow: ellipsis; }
+    .row .badge {
+      font-size: 9px;
+      border-radius: 8px;
+      padding: 0 6px;
+      flex-shrink: 0;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+    }
+    .row.ok { border-left-color: var(--vscode-testing-iconPassed, #73c991); }
+    .row.fail { border-left-color: var(--vscode-testing-iconFailed, #f48771); }
+
+    .row .tool-icon { color: var(--accent); flex-shrink: 0; width: 12px; text-align: center; }
+    .row .state { margin-left: auto; flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding-left: 8px; }
+    .row .check { color: var(--vscode-testing-iconPassed, #73c991); font-weight: 700; }
+    .row .cross { color: var(--vscode-testing-iconFailed, #f48771); font-weight: 700; }
+    .row .dur { font-size: 9.5px; opacity: 0.7; }
+    .row.running summary .tool-name { color: var(--accent); }
+    .spinner.mini {
+      width: 8px; height: 8px;
+      border-width: 1.5px;
+      border: 1.5px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
     }
 
-    .tool-call pre {
-      margin-top: 4px;
-      font-size: 10px;
-      background: var(--vscode-editor-background);
-      max-height: 200px;
-      overflow-y: auto;
+    .diffstat { margin-left: auto; padding-left: 8px; flex-shrink: 0; font-size: 10.5px; }
+    .diffstat .plus { color: var(--vscode-gitDecoration-addedResourceForeground, #81b88b); }
+    .diffstat .minus { color: var(--vscode-gitDecoration-deletedResourceForeground, #c74e39); }
+
+    .row.reasoning .thinking-label { color: var(--accent); font-style: italic; }
+    .row.reasoning.live {
+      border-left-color: var(--accent);
+    }
+    .row.reasoning.live .thinking-label { animation: pulse 1.6s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+    .row.reasoning.live .body {
+      max-height: 120px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column-reverse; /* keep the newest thought visible */
     }
 
-    .msg.edit {
+    /* Follow-up suggestion chips */
+    #suggestions {
+      align-self: stretch;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 2px 0;
+    }
+    .chip {
+      border: 1px solid var(--border);
       background: transparent;
-      font-size: 11px;
-      align-self: flex-start;
-      padding: 2px 12px;
+      color: var(--accent);
+      border-radius: 14px;
+      padding: 3px 11px;
+      font-size: 11.5px;
+      font-family: inherit;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.1s, border-color 0.1s;
+    }
+    .chip:hover {
+      background: var(--vscode-toolbar-hoverBackground);
+      border-color: var(--accent);
     }
 
-    .file-link {
+    /* Progress accordion — grouped file reads */
+    .row.read-group .rg-label { color: var(--vscode-foreground); font-weight: 600; }
+    .rg-list { padding: 3px 0 2px 18px; display: flex; flex-direction: column; gap: 2px; }
+    .rg-item a.file-link {
+      color: var(--dim);
+      text-decoration: none;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .rg-item a.file-link:hover { color: var(--accent); text-decoration: underline; }
+    .rg-item::before { content: "· "; color: var(--dim); }
+
+    /* Inline citation badges in answers */
+    a.cite {
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.88em;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0 4px;
+      color: var(--accent) !important;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    a.cite:hover { border-color: var(--accent); text-decoration: none !important; }
+
+    .row.edit-row a.file-link {
       color: var(--vscode-gitDecoration-modifiedResourceForeground, #73c991);
       text-decoration: none;
       cursor: pointer;
+      font-weight: 600;
     }
-    .file-link:hover { text-decoration: underline; }
+    .row.edit-row a.file-link:hover { text-decoration: underline; }
 
-    .msg.eval-pass {
-      color: var(--vscode-testing-iconPassed, #73c991);
-      background: transparent;
-      font-size: 11px;
+    /* Plan */
+    .msg.plan {
+      align-self: stretch;
+      background: var(--vscode-textBlockQuote-background);
+      border-left: 3px solid var(--accent);
+      border-radius: 0 6px 6px 0;
+      padding: 8px 12px;
+      font-size: 12px;
+    }
+    .msg.plan .plan-title {
+      font-weight: 600;
+      font-size: 10.5px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+    .msg.plan ol { margin: 0 0 0 16px; }
+    .msg.plan li { margin: 2px 0; }
+
+    /* Reasoning (collapsed by default) */
+    .row.reasoning .body { color: var(--dim); font-style: italic; white-space: pre-wrap; padding: 4px 0; font-family: var(--vscode-font-family); }
+
+    /* Errors */
+    .msg.error {
+      align-self: stretch;
+      background: var(--vscode-inputValidation-errorBackground, rgba(90,29,29,0.5));
+      color: var(--vscode-errorForeground, #f48771);
+      border-left: 3px solid var(--vscode-errorForeground, #f48771);
+      border-radius: 0 6px 6px 0;
+      padding: 7px 10px;
+      font-size: 12px;
+    }
+
+    .msg.notice {
       align-self: center;
-    }
-
-    .msg.eval-fail {
-      color: var(--vscode-testing-iconFailed, #f48771);
-      background: transparent;
+      color: var(--dim);
       font-size: 11px;
-      align-self: center;
     }
 
-    #input-area {
-      padding: 8px;
-      border-top: 1px solid var(--vscode-panel-border);
-      display: flex;
-      gap: 6px;
+    /* Live status line — lives INSIDE the transcript, under the last message */
+    #status {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 2px 0;
+      color: var(--dim);
+      font-size: 11.5px;
       flex-shrink: 0;
     }
+    #status.active { display: flex; }
+    .spinner {
+      width: 10px; height: 10px;
+      border: 1.5px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #status .status-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-style: italic;
+    }
 
+    /* Code blocks with Copilot-style action header */
+    .codeblock {
+      margin: 8px 0;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .codeblock pre { margin: 0 !important; border: none !important; border-radius: 0 !important; }
+    .cb-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--code-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 3px 8px;
+      font-family: var(--vscode-editor-font-family);
+      font-size: 10px;
+      color: var(--dim);
+    }
+    .cb-actions { display: flex; gap: 2px; }
+    .cb-btn {
+      background: none;
+      border: none;
+      color: var(--dim);
+      cursor: pointer;
+      font-size: 10px;
+      font-family: inherit;
+      padding: 1px 6px;
+      border-radius: 3px;
+    }
+    .cb-btn:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+
+    /* ── Composer ─────────────────────────────────────────────── */
+    #composer {
+      position: relative;
+      flex-shrink: 0;
+      border-top: 1px solid var(--border);
+      padding: 10px 12px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      background: var(--vscode-sideBar-background);
+    }
+
+    /* Slash-command intent menu */
+    #slash-menu {
+      display: none;
+      position: absolute;
+      bottom: 100%;
+      left: 12px;
+      right: 12px;
+      margin-bottom: 4px;
+      background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+      overflow: hidden;
+      z-index: 10;
+    }
+    #slash-menu.open { display: block; }
+    .sm-item {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      padding: 5px 12px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .sm-item.sel, .sm-item:hover {
+      background: var(--vscode-list-activeSelectionBackground);
+      color: var(--vscode-list-activeSelectionForeground);
+    }
+    .sm-cmd { font-family: var(--vscode-editor-font-family); font-weight: 600; flex-shrink: 0; }
+    .sm-desc { color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sm-item.sel .sm-desc, .sm-item:hover .sm-desc { color: inherit; opacity: 0.8; }
+
+    /* Implicit-context pills */
+    #context-pills { display: flex; flex-wrap: wrap; gap: 5px; }
+    #context-pills:empty { display: none; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      max-width: 100%;
+      border: 1px solid var(--border);
+      background: var(--code-bg);
+      border-radius: 20px;
+      padding: 1px 8px;
+      font-size: 10.5px;
+      color: var(--dim);
+      font-family: var(--vscode-editor-font-family);
+    }
+    .pill .pill-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pill .x { cursor: pointer; opacity: 0.6; font-size: 12px; line-height: 1; }
+    .pill .x:hover { opacity: 1; }
+    #input-shell {
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      border: 1px solid var(--vscode-input-border, var(--border));
+      background: var(--vscode-input-background);
+      border-radius: 10px;
+      padding: 6px 6px 6px 12px;
+      transition: border-color 0.1s;
+    }
+    #input-shell:focus-within { border-color: var(--vscode-focusBorder); }
     #task-input {
       flex: 1;
-      padding: 7px 10px;
-      border: 1px solid var(--vscode-input-border);
-      background: var(--vscode-input-background);
+      border: none;
+      outline: none;
+      background: transparent;
       color: var(--vscode-input-foreground);
-      border-radius: 4px;
       font-family: inherit;
       font-size: 12.5px;
       resize: none;
-      min-height: 34px;
-      max-height: 120px;
-      line-height: 1.4;
+      min-height: 20px;
+      max-height: 140px;
+      line-height: 1.5;
+      padding: 2px 0;
     }
-    #task-input:focus { outline: 1px solid var(--vscode-focusBorder); }
-
     #send-btn {
-      padding: 7px 13px;
+      width: 26px; height: 26px;
+      border: none;
+      border-radius: 7px;
       background: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
-      border: none;
-      border-radius: 4px;
       cursor: pointer;
-      font-size: 12px;
-      align-self: flex-end;
-      min-width: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: opacity 0.1s;
     }
-    #send-btn:hover { background: var(--vscode-button-hoverBackground); }
-    #send-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-    #send-btn.stop { background: var(--vscode-inputValidation-errorBackground, #5a1d1d); }
+    #send-btn:hover { opacity: 0.9; }
+    #send-btn:disabled { opacity: 0.4; cursor: default; }
+    #send-btn svg { width: 13px; height: 13px; }
+    #send-btn.stop { background: var(--vscode-inputValidation-errorBackground, #5a1d1d); color: var(--vscode-errorForeground, #f48771); }
 
-    #token-counter {
-      color: var(--vscode-descriptionForeground);
+    #meta-line {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
       font-size: 10px;
-      font-weight: normal;
+      color: var(--dim);
+      padding: 0 2px;
+      min-height: 13px;
     }
+    #model-badge {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--vscode-editor-font-family);
+    }
+    #token-counter { flex-shrink: 0; }
   </style>
 </head>
 <body>
-  <div class="header">
-    <span>⬡ Crayon <span id="token-counter"></span></span>
-    <div class="header-actions">
-      <button class="icon-btn" id="clear-btn" title="Clear conversation">Clear</button>
+  <div id="messages"><div id="welcome">
+    <div class="logo">⬡</div>
+    <div class="title">Crayon</div>
+    <div class="hint">Autonomous coding agent. Describe a task — Crayon plans, edits files, runs commands, and verifies with tests.</div>
+    <div class="hint"><kbd>⏎</kbd> send &nbsp;·&nbsp; <kbd>⇧⏎</kbd> newline</div>
+  </div><div id="status"><div class="spinner"></div><span class="status-text"></span></div></div>
+  <div id="composer">
+    <div id="slash-menu"></div>
+    <div id="context-pills"></div>
+    <div id="input-shell">
+      <textarea id="task-input" placeholder="Ask Crayon to build, fix, or refactor…" rows="1"></textarea>
+      <button id="send-btn" title="Send (⏎)">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M1.72 1.05a.5.5 0 0 0-.71.55l1.4 5.4L9 8 2.41 9l-1.4 5.4a.5.5 0 0 0 .71.55l13-6.5a.5.5 0 0 0 0-.9l-13-6.5z"/></svg>
+      </button>
     </div>
-  </div>
-  <div id="messages"></div>
-  <div id="input-area">
-    <textarea id="task-input" placeholder="Ask Crayon to build, fix, or refactor..." rows="1"></textarea>
-    <button id="send-btn">Run</button>
+    <div id="meta-line">
+      <span id="model-badge"></span>
+      <span id="token-counter"></span>
+    </div>
   </div>
   <script nonce="${nonce}" src="${webviewScriptUri}"></script>
 </body>
