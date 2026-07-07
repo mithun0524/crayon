@@ -50,10 +50,22 @@ function detectPackageManager(workspaceRoot: string): string {
   return "npm";
 }
 
-export async function runEvaluation(workspaceRoot: string): Promise<EvalResult | null> {
+/**
+ * Run the post-edit verification.
+ * - verifyCommand === "none"          → verification disabled, returns null
+ * - verifyCommand set (any string)    → run EXACTLY that command (no tsc
+ *   pre-check, no detection — explicit config is authoritative)
+ * - verifyCommand unset               → auto-detect (tsc pre-check + test/build)
+ */
+export async function runEvaluation(workspaceRoot: string, verifyCommand?: string): Promise<EvalResult | null> {
   const isWin = process.platform === "win32";
   const shell = isWin ? "powershell.exe" : "/bin/sh";
   const shellFlag = isWin ? "-Command" : "-c";
+
+  if (verifyCommand === "none") return null;
+  if (verifyCommand && verifyCommand.trim()) {
+    return execEval(verifyCommand.trim(), workspaceRoot, shell, shellFlag);
+  }
 
   // Pre-check: Typescript compile
   if (existsSync(path.join(workspaceRoot, "tsconfig.json"))) {
@@ -77,6 +89,10 @@ export async function runEvaluation(workspaceRoot: string): Promise<EvalResult |
   const command = await detectTestCommand(workspaceRoot);
   if (!command) return null;
 
+  return execEval(command, workspaceRoot, shell, shellFlag);
+}
+
+function execEval(command: string, workspaceRoot: string, shell: string, shellFlag: string): Promise<EvalResult> {
   return new Promise((resolve) => {
     const proc = spawn(shell, [shellFlag, command], {
       cwd: workspaceRoot,

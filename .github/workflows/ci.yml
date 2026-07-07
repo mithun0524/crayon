@@ -1,0 +1,184 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CI: "true"
+  CRAYON_DISABLE_TELEMETRY: "1"
+
+jobs:
+  # ── Change detection ──────────────────────────────────────────────
+  # Downstream jobs run only when their package (or something it
+  # depends on) changed. "root" (lockfile, base tsconfig, workflows)
+  # invalidates everything.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      root: ${{ steps.filter.outputs.root }}
+      indexer: ${{ steps.filter.outputs.indexer }}
+      agent: ${{ steps.filter.outputs.agent }}
+      cli: ${{ steps.filter.outputs.cli }}
+      vscode: ${{ steps.filter.outputs.vscode }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            root:
+              - "pnpm-lock.yaml"
+              - "pnpm-workspace.yaml"
+              - "package.json"
+              - "tsconfig.base.json"
+              - ".github/**"
+            indexer:
+              - "packages/indexer/**"
+            agent:
+              - "packages/agent/**"
+            cli:
+              - "packages/cli/**"
+            vscode:
+              - "packages/vscode/**"
+            web:
+              - "apps/web/**"
+
+  # ── Per-package pipelines (fully parallel) ────────────────────────
+  indexer:
+    name: indexer · build + typecheck + test
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.indexer == 'true' || needs.changes.outputs.root == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: pnpm --filter crayon-indexer run build
+      - run: pnpm --filter crayon-indexer run typecheck
+      - run: pnpm --filter crayon-indexer run test
+
+  agent:
+    name: agent · build + typecheck + test
+    runs-on: ubuntu-latest
+    needs: changes
+    if: >-
+      needs.changes.outputs.agent == 'true' ||
+      needs.changes.outputs.indexer == 'true' ||
+      needs.changes.outputs.root == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      # "crayon-agent..." = agent plus its workspace dependencies (indexer)
+      - run: pnpm --filter "crayon-agent..." run build
+      - run: pnpm --filter crayon-agent run typecheck
+      - run: pnpm --filter crayon-agent run test
+
+  cli:
+    name: cli · build + typecheck + test (PTY e2e)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: >-
+      needs.changes.outputs.cli == 'true' ||
+      needs.changes.outputs.agent == 'true' ||
+      needs.changes.outputs.indexer == 'true' ||
+      needs.changes.outputs.root == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      # e2e tests drive dist/index.js in a real PTY — build must come first
+      - run: pnpm --filter "crayon-cli..." run build
+      - run: pnpm --filter crayon-cli run typecheck
+      - run: pnpm --filter crayon-cli run test
+
+  vscode:
+    name: vscode · build + typecheck + package
+    runs-on: ubuntu-latest
+    needs: changes
+    if: >-
+      needs.changes.outputs.vscode == 'true' ||
+      needs.changes.outputs.agent == 'true' ||
+      needs.changes.outputs.indexer == 'true' ||
+      needs.changes.outputs.root == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: pnpm --filter "crayon-vscode..." run build
+      - run: pnpm --filter crayon-vscode run typecheck
+      - name: Package VSIX (staged, self-contained)
+        run: pnpm --filter crayon-vscode run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crayon-vscode-vsix
+          path: packages/vscode/*.vsix
+          if-no-files-found: error
+          retention-days: 7
+
+  web:
+    name: web · lint + build
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.root == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Restore Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('apps/web/**/*.{ts,tsx,css}') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+      - run: pnpm --filter web run lint
+      - run: pnpm --filter web run build
+
+  # ── Bug & vulnerability detection ─────────────────────────────────
+  security:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.root == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level high
+
+  workflow-lint:
+    name: Lint GitHub workflows
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.root == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        uses: docker://rhysd/actionlint:latest
+        with:
+          args: -color
+
+  # ── Single required status for branch protection ──────────────────
+  # Skipped jobs count as success; failures/cancellations fail the gate.
+  ci-ok:
+    name: CI OK
+    runs-on: ubuntu-latest
+    needs: [indexer, agent, cli, vscode, web, security, workflow-lint]
+    if: always()
+    steps:
+      - name: Verify no job failed
+        run: |
+          results='${{ toJSON(needs) }}'
+          echo "$results"
+          if echo "$results" | grep -Eq '"result": *"(failure|cancelled)"'; then
+            echo "::error::One or more CI jobs failed."
+            exit 1
+          fi

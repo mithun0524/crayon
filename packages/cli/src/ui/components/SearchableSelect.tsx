@@ -63,61 +63,47 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
 
   return (
     <Box flexDirection="column">
-      <Box flexDirection="row" marginBottom={1}>
-        <Text color={theme.success}> ❯ </Text>
-        <TextInput
-          value={query}
-          onChange={setQuery}
-          placeholder={placeholder}
-        />
+      {/* Slim borderless list that hangs above the prompt (Claude Code-style). */}
+      <Box flexDirection="row">
+        <Text color={theme.subtle} dimColor>› </Text>
+        <TextInput value={query} onChange={setQuery} placeholder={placeholder} />
       </Box>
 
-      <Box flexDirection="column" paddingLeft={1} borderStyle="round" borderColor={theme.border} paddingX={1}>
-        {filteredItems.length === 0 ? (
-          <Text color={theme.subtle}>No matches found</Text>
-        ) : (
-          <React.Fragment>
-            {startIdx > 0 && (
-              <Box flexDirection="row" marginBottom={1}>
-                <Box width={3}></Box>
-                <Text color={theme.subtle} italic>... ({startIdx} more above)</Text>
-              </Box>
-            )}
+      {filteredItems.length === 0 ? (
+        <Text color={theme.subtle} dimColor>  no matches</Text>
+      ) : (
+        <React.Fragment>
+          {startIdx > 0 && (
+            <Text color={theme.subtle} dimColor>  ↑ {startIdx} more</Text>
+          )}
 
-            {visibleItems.map((item, idx) => {
-              const actualIdx = startIdx + idx;
-              const isSelected = selectedIndex === actualIdx;
-
-              return (
-                <Box key={item.value} flexDirection="row">
-                  <Box width={3}>
-                    <Text color={isSelected ? "white" : theme.subtle} bold={isSelected}>
-                      {isSelected ? " ❯ " : "   "}
-                    </Text>
-                  </Box>
-                  <Box minWidth={15} marginRight={2}>
-                    <Text color={isSelected ? "white" : theme.success} bold={isSelected}>
-                      {item.label}
-                    </Text>
-                  </Box>
-                  <Box>
-                    <Text color={isSelected ? "white" : theme.subtle}>
-                      {item.description || ""}
-                    </Text>
-                  </Box>
+          {visibleItems.map((item, idx) => {
+            const actualIdx = startIdx + idx;
+            const isSelected = selectedIndex === actualIdx;
+            return (
+              <Box key={item.value} flexDirection="row">
+                <Box width={2}>
+                  <Text color={theme.brand}>{isSelected ? "❯" : " "}</Text>
                 </Box>
-              );
-            })}
-
-            {startIdx + maxVisible < filteredItems.length && (
-              <Box flexDirection="row" marginTop={1}>
-                <Box width={3}></Box>
-                <Text color={theme.subtle} italic>... ({filteredItems.length - (startIdx + maxVisible)} more below)</Text>
+                <Box minWidth={14} marginRight={2}>
+                  <Text color={isSelected ? theme.brand : theme.text} bold={isSelected}>
+                    {item.label}
+                  </Text>
+                </Box>
+                <Box>
+                  <Text color={theme.subtle} dimColor={!isSelected}>
+                    {item.description || ""}
+                  </Text>
+                </Box>
               </Box>
-            )}
-          </React.Fragment>
-        )}
-      </Box>
+            );
+          })}
+
+          {startIdx + maxVisible < filteredItems.length && (
+            <Text color={theme.subtle} dimColor>  ↓ {filteredItems.length - (startIdx + maxVisible)} more</Text>
+          )}
+        </React.Fragment>
+      )}
     </Box>
   );
 };

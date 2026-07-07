@@ -9,6 +9,7 @@ import { render } from "ink";
 import { CrayonAgent } from "crayon-agent";
 import { CodeIndexer } from "crayon-indexer";
 import { loadConfig, hasApiKey } from "./config.js";
+import { listSessions } from "./session.js";
 import { App } from "./ui/App.js";
 import { initTelemetry, trackEvent, flushTelemetry } from "./telemetry.js";
 import { runOnboardingFlow } from "./onboarding.js";
@@ -98,8 +99,23 @@ program
   .command("run")
   .description("Run a one-shot autonomous task")
   .argument("<task>", "Task description")
-  .action(async (task: string) => {
+  .option("--json", "Headless mode: print a single JSON result object to stdout (no UI, no prompts)")
+  .option("-m, --mode <mode>", "Permission mode (ask, auto-edit, plan, auto, bypass)")
+  .action(async (task: string, options: { json?: boolean; mode?: string }) => {
     const config = await loadConfig();
+
+    if (options.json) {
+      // Headless: no update prompts, no onboarding, machine-readable output only.
+      if (!hasApiKey(config)) {
+        process.stdout.write(JSON.stringify({ success: false, error: "No API key configured. Run 'crayon config' first." }) + "\n");
+        await flushTelemetry().catch(() => {});
+        process.exit(2); // NOT exitCLI — it prints the update box to stdout
+        return;
+      }
+      await runHeadlessJson(task, config, options.mode);
+      return;
+    }
+
     await handleUpdateOnBoot(config);
     spawnBackgroundUpdateCheck();
 
@@ -116,7 +132,7 @@ program
     }
 
     try {
-      const { waitUntilExit } = render(React.createElement(App, { mode: "run", task }));
+      const { waitUntilExit } = render(React.createElement(App, { mode: "run", task }), { exitOnCtrlC: false });
       await waitUntilExit();
     } catch (err) {
       console.error(chalk.red(`TUI Error: ${err instanceof Error ? err.message : String(err)}`));
@@ -127,7 +143,7 @@ program
 program
   .command("chat")
   .description("Interactive agent session")
-  .option("-r, --resume", "Resume the last active session")
+  .option("-r, --resume [id]", "Resume the most recent session, or a specific session id")
   .option("-m, --mode <mode>", "Permission mode (ask, auto-edit, plan, auto, bypass)")
   .action(async (options) => {
     const config = await loadConfig();
@@ -148,17 +164,110 @@ program
 
 
     try {
-      const { waitUntilExit } = render(React.createElement(App, { 
-        mode: "chat", 
+      const { waitUntilExit } = render(React.createElement(App, {
+        mode: "chat",
         resume: options.resume,
         permissionMode: options.mode as any
-      }));
+      }), { exitOnCtrlC: false }); // our own double-tap Ctrl+C handler owns this
       await waitUntilExit();
+
+      // Point the user back to their session (kept in scrollback above).
+      const sessions = await listSessions(process.cwd());
+      if (sessions.length > 0) {
+        console.log(
+          chalk.dim(`\n↻ Resume:  `) + chalk.cyan(`crayon chat --resume ${sessions[0].id}`) +
+          chalk.dim(`   ·  list all:  `) + chalk.cyan(`crayon sessions`)
+        );
+      }
     } catch (err) {
       console.error(chalk.red(`TUI Error: ${err instanceof Error ? err.message : String(err)}`));
       await exitCLI(1);
     }
   });
+
+/**
+ * Headless JSON mode: run one task, print exactly one JSON object to stdout.
+ * All human-facing noise goes to stderr. Exit code 0 on success, 1 on failure.
+ * There is no interactivity: approvals auto-resolve by permission mode
+ * (default "auto" — reads/edits allowed, dangerous commands denied).
+ */
+async function runHeadlessJson(task: string, config: Awaited<ReturnType<typeof loadConfig>>, mode?: string) {
+  const started = Date.now();
+  const edits = new Set<string>();
+  const toolCalls: Array<{ name: string; ok: boolean }> = [];
+  const errors: string[] = [];
+  let tokens = 0;
+
+  const permissionMode = (mode as any) || "auto";
+
+  const agent = new CrayonAgent({
+    workspaceRoot: process.cwd(),
+    model: config.defaultModel,
+    provider: config.provider,
+    anthropicApiKey: config.anthropicApiKey,
+    openaiApiKey: config.openaiApiKey,
+    openrouterApiKey: config.openrouterApiKey,
+    googleApiKey: config.googleApiKey,
+    mcpServers: config.mcpServers,
+    verifyCommand: config.verifyCommand,
+    autoCommit: config.autoCommit,
+    permissionMode,
+    onEvent: (event) => {
+      if (process.env.CRAYON_DEBUG) {
+        const info = (event as any).content || (event as any).message || (event as any).name || "";
+        process.stderr.write(`[dbg +${((Date.now() - started) / 1000).toFixed(2)}s] ${event.type} ${String(info).slice(0, 80)}\n`);
+      }
+      switch (event.type) {
+        case "edit": edits.add(event.path); break;
+        case "tool_result": {
+          const r = event.result as any;
+          toolCalls.push({ name: event.name, ok: !(r && (r.success === false || r.error)) });
+          break;
+        }
+        case "usage": tokens += event.totalTokens; break;
+        case "error": errors.push(event.message); break;
+        case "thinking": case "text_delta": case "reasoning_delta":
+          break; // progress noise — omitted in JSON mode
+      }
+    },
+    // Headless cannot prompt. Anything the permission mode doesn't auto-allow is denied.
+    approveCommand: async () => false,
+    approveEdit: async () => false,
+  });
+
+  let result: { success: boolean; summary: string; steps: number; edits: string[] } | null = null;
+  let fatal: string | null = null;
+  try {
+    result = await agent.run(task, { skipHistory: true });
+  } catch (err) {
+    fatal = err instanceof Error ? err.message : String(err);
+  } finally {
+    agent.close();
+  }
+
+  const out = {
+    success: result?.success === true && !fatal,
+    task,
+    summary: result?.summary ?? "",
+    error: fatal ?? (errors.length ? errors.join("; ") : undefined),
+    edits: result ? result.edits : [...edits],
+    steps: result?.steps ?? 0,
+    toolCalls,
+    tokens,
+    durationMs: Date.now() - started,
+    model: config.defaultModel,
+    permissionMode,
+  };
+  // Write synchronously and wait for the pipe to drain before exiting —
+  // console.log + process.exit can silently drop buffered stdout on pipes.
+  await new Promise<void>((resolve) => {
+    process.stdout.write(JSON.stringify(out) + "\n", () => resolve());
+  });
+  // Exit directly — exitCLI() calls showPassiveNotification() which prints an
+  // "update available" box to stdout and would corrupt the single-JSON output.
+  await flushTelemetry().catch(() => {});
+  process.exit(out.success ? 0 : 1);
+}
 
 async function runFallback(task: string) {
   const config = await loadConfig();
@@ -173,6 +282,12 @@ async function runFallback(task: string) {
     openrouterApiKey: config.openrouterApiKey,
     googleApiKey: config.googleApiKey,
     mcpServers: config.mcpServers,
+    verifyCommand: config.verifyCommand,
+    autoCommit: config.autoCommit,
+    // Non-TTY (CI/pipes): can't prompt, so the permission mode decides.
+    // Default "auto" allows reads/edits but denies dangerous commands; the
+    // deny-approvals below ensure nothing the mode gates gets a blanket yes.
+    permissionMode: (config.permissionMode as any) || "auto",
     onEvent: (event) => {
       switch (event.type) {
         case "plan":
@@ -201,14 +316,13 @@ async function runFallback(task: string) {
           break;
       }
     },
+    // No interactive prompt available — deny anything the permission mode
+    // doesn't already auto-allow (never blanket-approve dangerous commands).
     approveCommand: async (cmd) => {
-      console.log(chalk.yellow(`\n⚠️ Auto-approving terminal command in non-TTY: ${cmd}`));
-      return true;
+      console.error(chalk.yellow(`⚠️ Denied (no TTY to approve): ${cmd.slice(0, 80)}. Use --mode bypass to allow, or run interactively.`));
+      return false;
     },
-    approveEdit: async (filePath) => {
-      console.log(chalk.yellow(`\n⚠️ Auto-approving file edit in non-TTY: ${filePath}`));
-      return true;
-    }
+    approveEdit: async () => false,
   });
 
   try {
@@ -320,6 +434,26 @@ program
   .action(async () => {
     const { runMcpServer } = await import("crayon-agent");
     await runMcpServer();
+  });
+
+program
+  .command("sessions")
+  .description("List saved chat sessions for this workspace")
+  .action(async () => {
+    const sessions = await listSessions(process.cwd());
+    if (sessions.length === 0) {
+      console.log(chalk.dim("No saved sessions in this workspace."));
+      return;
+    }
+    console.log(chalk.bold("Sessions (newest first):\n"));
+    for (const s of sessions) {
+      const when = s.timestamp ? new Date(s.timestamp).toLocaleString() : "unknown";
+      console.log(
+        `  ${chalk.cyan(s.id)}  ${chalk.dim(when)}  ${chalk.dim(`(${s.messageCount} msgs)`)}\n` +
+        `      ${s.title}`
+      );
+    }
+    console.log(chalk.dim(`\nResume:  crayon chat --resume <id>`));
   });
 
 program

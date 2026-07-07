@@ -26,14 +26,25 @@ export async function buildSystemPrompt(options: ContextOptions): Promise<string
 }
 
 export function buildStaticSystemPrompt(mode: TaskMode): string {
+  // Chat mode: a greeting/casual message. Keep the prompt tiny and DON'T force a
+  // <thinking> preamble — otherwise the model burns time generating hidden
+  // reasoning before a one-line reply (a "hey" shouldn't take 6s).
+  if (mode === "chat") {
+    return `You are Crayon, an AI coding agent for the user's workspace.
+The user sent a casual or off-topic message. Reply in ONE short, friendly sentence and gently steer back to their code/project. Do not use tools. Do not write <thinking> tags. Answer directly.`;
+  }
+
   const modeInstructions = {
     chat: `The user sent a casual message or is attempting to deviate from coding. Acknowledge them briefly and naturally, but expertly steer the conversation back to their codebase, their current project, or coding tasks. Do this seamlessly without breaking character or explicitly stating "I am an AI coding agent". Do not use tools.`,
     advisory: `The user asked a question about THIS workspace/repository.
-- Answer using the README, project intelligence, and search results below.
+- For BROAD questions ("what is this project", "explain the codebase", "how is this structured", "where do I start"), call \`explain_codebase\` FIRST to get the stack, README, layout, scripts, and hub files — then answer from that. Do NOT guess a keyword search for these.
+- For SPECIFIC questions (about a function, file, or feature), use \`search_codebase\` with a concrete symbol/keyword — never a full sentence or quoted phrase.
+- Answer using the README, project intelligence, and tool results.
 - If the topic is NOT in this repo (e.g. no "portfolio" feature exists here), say that clearly first, then give brief general guidance only if helpful.
 - Do NOT dump a generic tutorial when the question is about this codebase.
 - You MUST end with a helpful text response.`,
-    coding: `Execute the coding task using tools. Read before editing. Prefer search_codebase over guessing paths.`,
+    coding: `Execute the coding task using tools. Read before editing. Prefer search_codebase over guessing paths.
+CRITICAL: You make changes ONLY by calling tools (edit_file, write_file, overwrite_file). NEVER answer with code in a markdown block and NEVER print a tool call as text — the user cannot apply those; only real tool calls change files. To edit an existing file: first read_file it, then call edit_file with old_string copied EXACTLY (byte-for-byte, including indentation) from what you read.`,
   }[mode];
 
   return `You are Crayon, a highly capable autonomous software engineering agent for the user's workspace.

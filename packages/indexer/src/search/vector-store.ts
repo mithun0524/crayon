@@ -29,7 +29,13 @@ export class VectorStore {
     }
   }
 
+  /** Semantic search is only active when an embedding provider is configured. */
+  isEnabled(): boolean {
+    return this.provider.isAvailable();
+  }
+
   async addDocuments(records: Omit<VectorRecord, "vector">[]): Promise<void> {
+    if (!this.provider.isAvailable()) return;
     if (!this.db) await this.init();
     if (records.length === 0) return;
 
@@ -49,6 +55,7 @@ export class VectorStore {
   }
 
   async search(query: string, limit = 10): Promise<any[]> {
+    if (!this.provider.isAvailable()) return [];
     if (!this.table) return [];
 
     const queryVector = await this.provider.embedText(query);

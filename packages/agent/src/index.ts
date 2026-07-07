@@ -1,4 +1,5 @@
-import { streamText, tool, jsonSchema, type CoreMessage } from "ai";
+import pathModule from "node:path";
+import { streamText, generateText, tool, jsonSchema, type CoreMessage } from "ai";
 import { CodeIndexer } from "crayon-indexer";
 import type { AgentConfig, AgentEvent, AgentResult } from "./types.js";
 import { WorkingMemory } from "./memory/working.js";
@@ -11,6 +12,7 @@ import { createTools } from "./tools/index.js";
 import { McpClient } from "./tools/mcp.js";
 import { runEvaluation } from "./evaluator/check.js";
 import { withRetry } from "./services/withRetry.js";
+import { autoCommitEdits } from "./services/autoCommit.js";
 import { microCompact, autoCompact, getCompactionLevel } from "./context/compaction.js";
 import { FileStateCache } from "./context/fileState.js";
 import { TransactionManager } from "./context/transaction.js";
@@ -21,6 +23,7 @@ const CONCURRENT_SAFE_TOOLS = new Set([
   "read_file",
   "grep",
   "search_codebase",
+  "explain_codebase",
   "find_usages",
   "get_dependents",
   "get_dependencies",
@@ -92,7 +95,22 @@ export class CrayonAgent {
       approveEdit: this.config.approveEdit,
       fileState: this.fileState,
       transaction: this.transaction,
+      modelConfig: this.subagentModelConfig(),
+      allowSubagents: this.config.allowSubagents,
     });
+  }
+
+  /** Config forwarded to sub-agents so they inherit model/provider/credentials. */
+  private subagentModelConfig() {
+    return {
+      model: this.config.model,
+      provider: this.config.provider,
+      anthropicApiKey: this.config.anthropicApiKey,
+      openaiApiKey: this.config.openaiApiKey,
+      openrouterApiKey: this.config.openrouterApiKey,
+      googleApiKey: this.config.googleApiKey,
+      mcpServers: this.config.mcpServers,
+    };
   }
 
   constructor(config: AgentConfig) {
@@ -137,6 +155,50 @@ export class CrayonAgent {
 
   setHistory(history: CoreMessage[]): void {
     this.history = history;
+  }
+
+  /**
+   * Propose short follow-up requests based on the last exchange — used by UI
+   * surfaces for one-click suggestion chips. Cheap single completion, does
+   * NOT touch conversation history. Returns [] on any failure.
+   */
+  async suggestFollowUps(count = 3): Promise<string[]> {
+    const recent = this.history.slice(-4).map((m) => {
+      const content =
+        typeof m.content === "string"
+          ? m.content
+          : m.content.map((p: any) => (p?.type === "text" ? p.text : "")).join(" ");
+      return `${m.role}: ${content.slice(0, 1500)}`;
+    });
+    if (recent.length === 0) return [];
+
+    try {
+      const { text } = await generateText({
+        model: getExecutionModel(this.config),
+        system:
+          `You suggest follow-up actions for a coding-assistant chat. Given the last exchange, ` +
+          `propose ${count} short (under 10 words), concrete, actionable next requests the user might click. ` +
+          `Respond with ONLY a JSON array of strings — no prose, no markdown.`,
+        prompt: recent.join("\n\n"),
+        maxTokens: 200,
+        abortSignal: AbortSignal.timeout(15_000),
+      });
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((s): s is string => typeof s === "string" && s.trim().length > 0).slice(0, count);
+        }
+      }
+      // Fallback: parse line-per-suggestion output
+      return text
+        .split("\n")
+        .map((l) => l.replace(/^[\s\d.\-*•"']+|["',]+$/g, "").trim())
+        .filter((l) => l.length > 4 && l.length < 90)
+        .slice(0, count);
+    } catch {
+      return [];
+    }
   }
 
   getContextFiles(): string[] {
@@ -199,10 +261,25 @@ export class CrayonAgent {
       fileState: this.fileState,
       transaction: this.transaction,
       signal: options.signal,
+      modelConfig: this.subagentModelConfig(),
+      allowSubagents: this.config.allowSubagents,
     };
 
     this.emit({ type: "thinking", content: "Preparing context and tools..." });
-    const staticSystemPrompt = buildStaticSystemPrompt(mode);
+    let staticSystemPrompt = buildStaticSystemPrompt(mode);
+    // Plan mode + coding task: explore read-only and produce a reviewable plan
+    // instead of attempting (blocked) edits. The consumer shows the plan and
+    // asks the user to approve execution.
+    const planningOnly = this.config.permissionMode === "plan" && mode === "coding";
+    if (planningOnly) {
+      staticSystemPrompt += `
+
+## PLAN MODE (read-only)
+You are in plan mode. Do NOT edit files or run commands that modify anything — write tools are blocked and will fail.
+1. Explore the codebase with read-only tools (read_file, search_codebase, grep, list_directory) to ground the plan in reality.
+2. Then output a concrete implementation plan as a numbered markdown list: each step names the exact file(s) and the change to make.
+3. End with a one-line summary of the expected outcome. Do not ask for approval — just produce the plan.`;
+    }
 
     const staticSystemMessage: CoreMessage = {
       role: "system",
@@ -238,8 +315,9 @@ export class CrayonAgent {
           tool({
             description: toolDef.description,
             parameters: toolDef.parameters,
-            execute: async (args) => {
-              this.emit({ type: "tool_call", name, args });
+            execute: async (args, opts) => {
+              const id = opts?.toolCallId;
+              this.emit({ type: "tool_call", name, args, id });
               const result = await toolDef.execute(args);
               this.workingMemory.addToolOutput(name, result);
               if (name === "edit_file" || name === "write_file" || name === "overwrite_file") {
@@ -248,7 +326,7 @@ export class CrayonAgent {
                   this.workingMemory.markEdited(r.path);
                 }
               }
-              this.emit({ type: "tool_result", name, result });
+              this.emit({ type: "tool_result", name, result, id });
               return result;
             },
           }),
@@ -269,12 +347,13 @@ export class CrayonAgent {
       aiTools[safeName] = tool({
         description: `[MCP Server: ${t.server}] ${t.tool.description || t.tool.name}`,
         parameters: jsonSchema(t.tool.inputSchema as any),
-        execute: async (args: any) => {
-          this.emit({ type: "tool_call", name: safeName, args });
+        execute: async (args: any, opts: any) => {
+          const id = opts?.toolCallId;
+          this.emit({ type: "tool_call", name: safeName, args, id });
           try {
             const result = await this.mcpClient.callTool(t.server, t.tool.name, args);
             this.workingMemory.addToolOutput(safeName, result);
-            this.emit({ type: "tool_result", name: safeName, result });
+            this.emit({ type: "tool_result", name: safeName, result, id });
             return result;
           } catch (e: any) {
             return { error: e.message };
@@ -287,12 +366,13 @@ export class CrayonAgent {
 
     const maxEvalRetries = this.config.maxEvalRetries ?? 5;
     let evalRetries = 0;
+    let nudgedNoEdit = false; // one-shot corrective when a coding task makes no edits
     let summary = "";
     const edits: string[] = [];
     let totalSteps = 0;
 
     const useTools = mode !== "chat";
-    const maxSteps = mode === "chat" ? 1 : mode === "advisory" ? 8 : (this.config.maxSteps ?? 25);
+    const maxSteps = mode === "chat" ? 1 : mode === "advisory" ? 12 : (this.config.maxSteps ?? 25);
 
     let totalSessionCost = 0;
     const MAX_SESSION_COST = 2.00; // Hard limit to prevent runaway usage
@@ -338,6 +418,17 @@ export class CrayonAgent {
 
 
       this.emit({ type: "thinking", content: "Thinking..." });
+
+      // Idle guard: some providers accept the request then hold the stream open
+      // without ever sending tokens (e.g. a rate-limited free endpoint), which
+      // would spin "Working" forever. We race each stream read against a timer
+      // (below) rather than trusting the provider to honor an abort signal.
+      const IDLE_TIMEOUT_MS = Number(process.env.CRAYON_STREAM_IDLE_MS) || 60_000;
+      const idleController = new AbortController();
+      const combinedSignal = options.signal
+        ? AbortSignal.any([options.signal, idleController.signal])
+        : idleController.signal;
+
       // Use streamText with retry wrapper for resilience
       const { result: streamResult } = await withRetry(
         async () => {
@@ -346,7 +437,12 @@ export class CrayonAgent {
             messages,
             tools: useTools ? aiTools : undefined,
             maxSteps,
-            abortSignal: options.signal,
+            // Retry transient provider errors (503 "high demand", 500/502, 429
+            // throttles) with backoff — these usually clear on the next try.
+            // The stream idle-timeout below still bounds any single attempt so a
+            // truly stuck request can't hang forever.
+            maxRetries: 3,
+            abortSignal: combinedSignal,
             onStepFinish: (step) => {
               const { usage } = step;
               const pricing = getModelPricing(model.modelId || modelConfig.model || "");
@@ -372,7 +468,23 @@ export class CrayonAgent {
       let inThinking = false;
       let buffer = "";
 
-      for await (const chunk of streamResult.fullStream) {
+      const streamIterator = streamResult.fullStream[Symbol.asyncIterator]();
+      try {
+      while (true) {
+        let idleTimer: ReturnType<typeof setTimeout> | undefined;
+        const nextP = streamIterator.next();
+        // If the timeout wins the race, this promise is orphaned and later
+        // rejects (via idleController.abort()); swallow that so it can't become
+        // an unhandledRejection that the global handler turns into exit(1).
+        nextP.catch(() => {});
+        const nextChunk = await Promise.race([
+          nextP,
+          new Promise<never>((_, reject) => {
+            idleTimer = setTimeout(() => reject(new Error("__CRAYON_IDLE_TIMEOUT__")), IDLE_TIMEOUT_MS);
+          }),
+        ]).finally(() => { if (idleTimer) clearTimeout(idleTimer); });
+        if (nextChunk.done) break;
+        const chunk = nextChunk.value;
         if (chunk.type === "reasoning") {
           this.emit({ type: "reasoning_delta", content: chunk.textDelta });
           continue;
@@ -443,6 +555,15 @@ export class CrayonAgent {
         }
       }
       
+      } catch (streamErr: any) {
+        if (streamErr?.message === "__CRAYON_IDLE_TIMEOUT__") {
+          idleController.abort();
+          try { await streamIterator.return?.(undefined as any); } catch { /* best effort */ }
+          throw new Error(`Model did not respond within ${Math.round(IDLE_TIMEOUT_MS / 1000)}s (endpoint may be down or rate-limited). Use /model to switch models.`);
+        }
+        throw streamErr;
+      }
+
       // Flush any remaining buffer
       if (buffer) {
         if (inThinking) {
@@ -453,40 +574,85 @@ export class CrayonAgent {
         }
       }
 
-      // Await the full result for metadata (steps, tool results)
-      const steps = await streamResult.steps;
+      // Await the post-stream metadata, BOUNDED. When a provider aborts or
+      // returns a degraded/empty stream, the SDK's steps/usage/finishReason
+      // promises can never settle — an unbounded await here silently hangs the
+      // whole run after the stream has already closed.
+      const bounded = <T,>(p: Promise<T> | undefined, ms = 5_000): Promise<T | undefined> =>
+        p
+          ? Promise.race([
+              p.catch(() => undefined as T | undefined),
+              new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms)),
+            ])
+          : Promise.resolve(undefined);
+
+      const steps = await bounded(streamResult.steps);
       totalSteps += steps?.length ?? 1;
 
-      try {
-        const usage = await streamResult.usage;
+      const usage = await bounded(streamResult.usage);
+      if (usage) {
         this.emit({
           type: "usage",
           promptTokens: usage.promptTokens,
           completionTokens: usage.completionTokens,
           totalTokens: usage.totalTokens,
         });
-      } catch {
-        // Suppress usage resolution error if not supported
       }
 
-      // Check if the agent hit the maximum step limit
-      try {
-        const finishReason = await streamResult.finishReason;
-        if (finishReason === "tool-calls" || finishReason === "length") {
-          const warnMsg = "\n\n⚠️ [System: The agent reached the maximum number of steps allowed for this task without completing it. You may need to break the task down or increase the limit.]";
-          responseText += warnMsg;
-          this.emit({ type: "text_delta", content: warnMsg });
-        }
-      } catch {
-        // Suppress
-      }
+      const finishReason: string | undefined = await bounded(streamResult.finishReason);
 
-      // Fallback: if textStream was empty but steps had text
+      // A totally empty outcome (no text, no steps, no usage, no finish reason)
+      // means the provider silently failed — typically quota/rate-limit errors
+      // the SDK swallows into an empty stream. Surface it as an error instead
+      // of reporting a bogus success.
+      if (!responseText.trim() && !steps?.length && !usage && !finishReason) {
+        throw new Error(
+          "Model returned an empty response. This usually means the API quota is exhausted or the provider is rate-limiting — check your plan/billing or switch models with /model."
+        );
+      }
+      const exhausted = finishReason === "tool-calls" || finishReason === "length";
+
+      // Fallback: if the stream produced no text but steps carried some, use it.
       if (!responseText && steps?.length) {
         for (const step of steps) {
           if (step.text?.trim()) responseText += step.text.trim();
         }
       }
+
+      // If the model ran out of steps mid tool-loop and never wrote an answer,
+      // force one final tool-free synthesis pass so the user still gets a reply.
+      if (exhausted && !responseText.trim() && mode !== "chat") {
+        this.emit({ type: "thinking", content: "Reached step limit — composing an answer from gathered context..." });
+        try {
+          const respMsgs = ((await bounded(streamResult.response))?.messages ?? []) as CoreMessage[];
+          const synth = await generateText({
+            model,
+            messages: [
+              ...messages,
+              ...respMsgs,
+              { role: "user", content: "Stop calling tools. Using everything you have gathered so far, answer my previous request directly and concisely now." },
+            ],
+          });
+          if (synth.text?.trim()) {
+            responseText = synth.text.trim();
+            this.emit({ type: "text_delta", content: responseText });
+          }
+        } catch { /* fall through to warning */ }
+      }
+
+      // Only warn if we still have nothing to show.
+      if (exhausted && !responseText.trim()) {
+        const warnMsg = "⚠️ [System: Reached the maximum number of steps without completing. Try breaking the task down or raising the limit.]";
+        responseText += warnMsg;
+        this.emit({ type: "text_delta", content: warnMsg });
+      }
+
+      // Weaker models sometimes emit a tool call as plain text (e.g.
+      // {"name":"edit_file","parameters":{...}}) instead of a real tool call.
+      // Strip those blobs so raw JSON never becomes the user-facing answer.
+      responseText = responseText
+        .replace(/\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"(?:parameters|arguments|args)"\s*:\s*\{[\s\S]*?\}\s*\}/g, "")
+        .trim();
 
       if (responseText) {
         // Emit full text event for consumers that prefer complete messages
@@ -501,18 +667,38 @@ export class CrayonAgent {
           if (!["edit_file", "write_file", "overwrite_file", "edit_ast"].includes(toolName)) continue;
           const editResult = tr.result as { path?: string; success?: boolean };
           if (editResult?.path && editResult?.success !== false) {
-            edits.push(editResult.path);
+            // Normalize to a workspace-relative path — models sometimes pass
+            // absolute paths, which are ugly in output and awkward for git.
+            const abs = pathModule.resolve(this.config.workspaceRoot, editResult.path);
+            const rel = pathModule.relative(this.config.workspaceRoot, abs);
+            edits.push(rel && !rel.startsWith("..") ? rel : editResult.path);
           }
         }
       }
 
       // History push moved outside the while loop to avoid duplicates on eval retries
 
+      // Coding task ended with no file changes — weaker models often "answer"
+      // with a code block or a text tool-call instead of editing. Nudge once to
+      // actually apply the change via tools, then retry.
+      if (mode === "coding" && !this.workingMemory.hasEdits() && !nudgedNoEdit) {
+        nudgedNoEdit = true;
+        messages.push({ role: "assistant", content: responseText || "(no changes were made)" });
+        messages.push({
+          role: "user",
+          content: "You did NOT modify any files — describing the change or printing code does not count. Apply it now with a real tool call: read_file the target, then edit_file (copy old_string exactly) or write_file. Do not reply with code.",
+        });
+        continue;
+      }
+
       if (mode !== "coding" || !this.workingMemory.hasEdits()) {
         break;
       }
 
-      const evalResult = await runEvaluation(this.config.workspaceRoot);
+      const evalResult = await runEvaluation(
+        this.config.workspaceRoot,
+        this.config.verifyCommand ?? process.env.CRAYON_VERIFY_CMD
+      );
       if (!evalResult) break;
 
       this.emit({
@@ -552,6 +738,13 @@ export class CrayonAgent {
       }
     } else {
       await this.transaction.commitTransaction();
+      // Opt-in git workflow: commit this task's edits with a generated message.
+      if (this.config.autoCommit && edits.length > 0) {
+        const ac = await autoCommitEdits(this.config.workspaceRoot, task, [...new Set(edits)]);
+        if (ac.committed) {
+          this.emit({ type: "text", content: `\n[git] Committed ${[...new Set(edits)].length} file(s): ${ac.message} (${ac.hash?.slice(0, 7)})` });
+        }
+      }
     }
 
     const finalSummary =
@@ -579,6 +772,7 @@ export class CrayonAgent {
       summary: finalSummary,
       steps: totalSteps,
       edits: [...new Set(edits)],
+      planned: planningOnly && edits.length === 0,
     };
     } catch (err: any) {
       await this.transaction.rollbackTransaction();

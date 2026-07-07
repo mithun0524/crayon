@@ -11,8 +11,8 @@ export type AgentEvent =
   | { type: "reasoning_delta"; content: string }
   | { type: "text"; content: string }
   | { type: "text_delta"; content: string }
-  | { type: "tool_call"; name: string; args: unknown }
-  | { type: "tool_result"; name: string; result: unknown }
+  | { type: "tool_call"; name: string; args: unknown; id?: string }
+  | { type: "tool_result"; name: string; result: unknown; id?: string }
   | { type: "plan"; steps: string[] }
   | { type: "edit"; path: string; diff: string }
   | { type: "eval"; passed: boolean; output: string }
@@ -38,6 +38,16 @@ export interface AgentConfig {
   approveCommand?: (command: string) => Promise<boolean>;
   approveEdit?: (path: string, newContent: string) => Promise<boolean>;
   mcpServers?: McpServerConfig[];
+  /** When false, disables the `spawn_agent` tool. Defaults to true. Sub-agents set this to false. */
+  allowSubagents?: boolean;
+  /**
+   * Post-edit verification command. Set to run exactly this command after
+   * coding edits; "none" disables verification; unset auto-detects (tsc +
+   * test/build script).
+   */
+  verifyCommand?: string;
+  /** When true, commit each successful task's edited files with a generated message. */
+  autoCommit?: boolean;
 }
 
 export interface ToolDefinition<T extends z.ZodType = z.ZodType> {
@@ -57,6 +67,21 @@ export interface ToolContext {
   fileState?: FileStateCache;
   transaction?: TransactionManager;
   signal?: AbortSignal;
+  /**
+   * Model/provider/API-key config carried through so `spawn_agent` can
+   * construct a working sub-agent that inherits the parent's credentials.
+   */
+  modelConfig?: {
+    model?: string;
+    provider?: AgentConfig["provider"];
+    anthropicApiKey?: string;
+    openaiApiKey?: string;
+    openrouterApiKey?: string;
+    googleApiKey?: string;
+    mcpServers?: McpServerConfig[];
+  };
+  /** When false, the `spawn_agent` tool is disabled (prevents unbounded sub-agent recursion). */
+  allowSubagents?: boolean;
 }
 
 export interface AgentSession {
@@ -72,6 +97,8 @@ export interface AgentResult {
   summary: string;
   steps: number;
   edits: string[];
+  /** True when this was a plan-mode run that produced a plan (no edits made). */
+  planned?: boolean;
 }
 
 export type { CoreMessage, RepoIntelligence };

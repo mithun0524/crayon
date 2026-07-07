@@ -2,6 +2,8 @@ import { readFile, writeFile, mkdir, readdir, unlink, rename, stat } from "node:
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import net from "node:net";
+import { lookup } from "node:dns/promises";
 import { createTwoFilesPatch } from "diff";
 import { simpleGit } from "simple-git";
 import { z } from "zod";
@@ -24,16 +26,126 @@ const DANGEROUS_PATTERNS = [
   /mkfs/i,
   /:\(\)\s*\{\s*:\|:&\s*\}/,
   />\s*\/dev\/sd/,
+  // Shell chaining / redirection / command substitution — a single blocklist
+  // can never cover what these compose, so any of them requires approval.
+  /[;`]|\$\(|\$\{|\|\||&&|&(?!\d)|>>?|<|\|/,
+  // Inline env assignment (e.g. `X=curl $X ...`) hides the real command.
+  /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/,
 ];
+
+// Binaries that can execute code, exfiltrate, or destroy — flagged so `auto`
+// mode still asks. Not exhaustive (impossible for a denylist), but closes the
+// obvious gaps beyond the token list below.
+const DANGEROUS_BINARIES = new Set([
+  "cd", "rm", "del", "mv", "cp", "sh", "bash", "zsh", "dash", "ksh", "fish",
+  "cmd", "powershell", "pwsh", "node", "deno", "bun", "python", "python3",
+  "ruby", "perl", "php", "curl", "wget", "eval", "exec", "env", "dd", "chmod",
+  "chown", "ln", "ssh", "scp", "rsync", "nc", "ncat", "socat", "telnet",
+  "git", "make", "kill", "killall", "find", "xargs", "tar", "truncate",
+  "launchctl", "systemctl", "crontab", "at",
+]);
 
 function capResult(result: string, maxChars: number = 50000): string {
   if (result.length <= maxChars) return result;
   return result.slice(0, maxChars) + `\n\n... (output truncated at ${maxChars} chars. Full output is ${result.length} chars.)`;
 }
 
+/**
+ * Whitespace-tolerant fallback for edit_file: when old_string doesn't match
+ * exactly (the #1 failure for weaker models — different indentation or spacing,
+ * e.g. model sends "a - b" but the file has "a-b"), match ignoring ALL
+ * whitespace and map the normalized offsets back to the original text. Replaces
+ * only if the whitespace-stripped needle occurs exactly once. Returns null on 0
+ * or >1 matches (ambiguous → refuse rather than edit the wrong place).
+ */
+function fuzzyReplace(content: string, oldStr: string, newStr: string): string | null {
+  // Strip whitespace, keeping a map from each kept char to its original index.
+  const strip = (s: string): { out: string; map: number[] } => {
+    let out = "";
+    const map: number[] = [];
+    for (let i = 0; i < s.length; i++) {
+      if (!/\s/.test(s[i])) { out += s[i]; map.push(i); }
+    }
+    return { out, map };
+  };
+  const c = strip(content);
+  const o = strip(oldStr);
+  if (o.out.length === 0) return null;
+
+  const first = c.out.indexOf(o.out);
+  if (first === -1) return null;
+  if (c.out.indexOf(o.out, first + 1) !== -1) return null; // ambiguous
+
+  const origStart = c.map[first];
+  const origEnd = c.map[first + o.out.length - 1] + 1; // one past the last matched char
+  return content.slice(0, origStart) + newStr + content.slice(origEnd);
+}
+
+/** True if an IP is loopback / private / link-local / reserved (SSRF targets). */
+function isBlockedIp(ip: string): boolean {
+  const v = net.isIP(ip);
+  if (v === 4) {
+    const p = ip.split(".").map(Number);
+    return (
+      p[0] === 10 ||                                   // 10/8
+      p[0] === 127 ||                                  // loopback
+      (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||    // 172.16/12
+      (p[0] === 192 && p[1] === 168) ||                // 192.168/16
+      (p[0] === 169 && p[1] === 254) ||                // link-local (cloud metadata)
+      p[0] === 0 || p[0] >= 224                        // 0.0.0.0/8, multicast/reserved
+    );
+  }
+  const l = ip.toLowerCase().replace(/^\[|\]$/g, "");
+  return l === "::1" || l === "::" || l.startsWith("fe80") || l.startsWith("fc") || l.startsWith("fd") || l.startsWith("::ffff:");
+}
+
+/** Validate a URL for outbound fetch: http(s) only, resolves to a public IP. Throws otherwise. */
+async function assertPublicUrl(rawUrl: string): Promise<void> {
+  let u: URL;
+  try { u = new URL(rawUrl); } catch { throw new Error(`Invalid URL: ${rawUrl}`); }
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    throw new Error(`Blocked non-http(s) URL scheme: ${u.protocol}`);
+  }
+  const host = u.hostname.replace(/^\[|\]$/g, "");
+  if (/^(localhost|.*\.local|.*\.internal)$/i.test(host)) {
+    throw new Error(`Blocked internal host: ${u.hostname}`);
+  }
+  let ips: string[];
+  if (net.isIP(host)) ips = [host];
+  else {
+    try { ips = (await lookup(host, { all: true })).map((a) => a.address); }
+    catch { throw new Error(`Could not resolve host: ${u.hostname}`); }
+  }
+  if (ips.some(isBlockedIp)) {
+    throw new Error(`Blocked request to private/loopback address (${ips.join(", ")}) — possible SSRF.`);
+  }
+}
+
+/** Fetch that revalidates the target on every redirect hop (SSRF-safe). */
+async function safeFetch(url: string, signal: AbortSignal): Promise<Response> {
+  let current = url;
+  for (let hop = 0; hop < 5; hop++) {
+    await assertPublicUrl(current);
+    const res = await fetch(current, { redirect: "manual", signal });
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location");
+      if (!loc) return res;
+      current = new URL(loc, current).toString(); // re-validated at loop top
+      continue;
+    }
+    return res;
+  }
+  throw new Error("Too many redirects");
+}
+
 export function createTools(ctx: ToolContext) {
+    // Canonicalize the workspace root once. process.cwd() can be a symlink
+    // (e.g. macOS /var -> /private/var); without this, an absolute path from
+    // the model realpaths to /private/var and fails the containment check.
+    const rootReal = (() => { try { return realpathSync(ctx.workspaceRoot); } catch { return ctx.workspaceRoot; } })();
+
     const resolvePath = (filePath: string) => {
-      let resolved = path.resolve(ctx.workspaceRoot, filePath);
+      let resolved = path.resolve(rootReal, filePath);
       try {
         if (existsSync(resolved)) {
           resolved = realpathSync(resolved);
@@ -47,9 +159,14 @@ export function createTools(ctx: ToolContext) {
         // Fallback to unresolved if realpath fails
       }
 
-      const relative = path.relative(ctx.workspaceRoot, resolved);
+      const relative = path.relative(rootReal, resolved);
       if (relative.startsWith("..") || path.isAbsolute(relative)) {
         throw new Error(`Path escapes workspace: ${filePath}`);
+      }
+      // Reject option-like filenames so a path can never be misread as a CLI
+      // flag when passed to git/shell tooling (e.g. `-rf`, `--author=…`).
+      if (path.basename(resolved).startsWith("-")) {
+        throw new Error(`Refusing option-like filename: ${filePath}`);
       }
       return resolved;
     };
@@ -75,7 +192,8 @@ export function createTools(ctx: ToolContext) {
     ask_user: createAskUserTool(ctx),
     glob_search: createGlobTool(ctx),
     repl: createReplTool(ctx),
-    spawn_agent: createAgentTool(ctx),
+    // Only expose sub-agent delegation when allowed (disabled inside sub-agents to prevent recursion).
+    ...(ctx.allowSubagents === false ? {} : { spawn_agent: createAgentTool(ctx) }),
     todo: createTodoTool(ctx),
 
     // concurrent: true | readonly: true | permission: none
@@ -160,15 +278,20 @@ export function createTools(ctx: ToolContext) {
         const content = await readFile(absPath, "utf-8");
         const occurrences = content.split(old_string).length - 1;
 
-        if (occurrences === 0) {
-          return { success: false, error: notReadWarning + "old_string not found in file" };
-        }
-        if (occurrences > 1) {
+        let newContent: string;
+        if (occurrences === 1) {
+          newContent = content.replace(old_string, new_string);
+        } else if (occurrences > 1) {
           return { success: false, error: notReadWarning + `old_string found ${occurrences} times. Provide more context to make it unique.` };
+        } else {
+          // Exact match failed — try a whitespace-tolerant line match before giving up.
+          const fuzzy = fuzzyReplace(content, old_string, new_string);
+          if (fuzzy === null) {
+            return { success: false, error: notReadWarning + "old_string not found in file (also tried a whitespace-insensitive match). Read the file and copy the exact text to replace." };
+          }
+          newContent = fuzzy;
         }
 
-        const newContent = content.replace(old_string, new_string);
-        
         const approved = await checkEditPermission(filePath, newContent);
         if (!approved) {
           return { success: false, error: "PERMISSION_DENIED_BY_USER" };
@@ -432,9 +555,13 @@ export function createTools(ctx: ToolContext) {
 
     // concurrent: true | readonly: true | permission: none
     search_codebase: {
-      description: "Hybrid search: symbols + ripgrep + dependency graph. Best for finding relevant code.",
+      description:
+        "Hybrid search: symbols + ripgrep + dependency graph. Best for locating specific code by " +
+        "symbol name, identifier, or concrete keyword (e.g. 'parseConfig', 'auth middleware', 'retry'). " +
+        "Do NOT pass a whole question or a quoted phrase like 'my codebase' — it matches text literally " +
+        "and will return nothing. For broad 'what/how is this project' questions, call explain_codebase instead.",
       parameters: z.object({
-        query: z.string().describe("Natural language or symbol name to search for"),
+        query: z.string().describe("A symbol name, identifier, or short concrete keyword — not a full sentence"),
       }),
       execute: async ({ query }: { query: string }) => {
         const results = await ctx.indexer.search(query, 20);
@@ -449,6 +576,81 @@ export function createTools(ctx: ToolContext) {
         return {
           results: JSON.parse(capResult(raw)),
         };
+      },
+    },
+
+    // concurrent: true | readonly: true | permission: none
+    explain_codebase: {
+      description:
+        "Get a structured high-level overview of THIS repository in one call: detected stack " +
+        "(language/framework/package manager/test runner), README summary, top-level layout, " +
+        "package scripts, likely entry points, and the most-depended-on ('hub') files. " +
+        "Use this FIRST for broad questions like 'what is this project', 'explain the codebase', " +
+        "'how is this structured', or 'where do I start' — instead of guessing search queries.",
+      parameters: z.object({}),
+      execute: async () => {
+        const overview: Record<string, unknown> = {};
+
+        // 1. Detected stack
+        try {
+          const intel = (await ctx.indexer.getIntelligence?.()) ?? null;
+          if (intel) overview.stack = intel;
+        } catch { /* intelligence optional */ }
+
+        // 2. README summary
+        for (const name of ["README.md", "README", "readme.md", "docs/README.md"]) {
+          const abs = resolvePath(name);
+          if (existsSync(abs)) {
+            try {
+              const text = await readFile(abs, "utf8");
+              overview.readme = text.slice(0, 2000);
+              break;
+            } catch { /* try next */ }
+          }
+        }
+
+        // 3. package.json — name, description, scripts, entry points
+        const pkgAbs = resolvePath("package.json");
+        if (existsSync(pkgAbs)) {
+          try {
+            const pkg = JSON.parse(await readFile(pkgAbs, "utf8"));
+            overview.package = {
+              name: pkg.name,
+              description: pkg.description,
+              version: pkg.version,
+              scripts: pkg.scripts,
+              main: pkg.main,
+              bin: pkg.bin,
+              workspaces: pkg.workspaces,
+            };
+          } catch { /* malformed package.json */ }
+        }
+
+        // 4. Top-level layout (dirs + notable root files)
+        try {
+          const entries = await readdir(rootReal, { withFileTypes: true });
+          overview.layout = entries
+            .filter((e) => !e.name.startsWith(".") && e.name !== "node_modules")
+            .map((e) => (e.isDirectory() ? e.name + "/" : e.name))
+            .sort()
+            .slice(0, 60);
+        } catch { /* layout optional */ }
+
+        // 5. Hub files — most imported across the graph (architectural centers)
+        try {
+          const graph = ctx.indexer.getGraph();
+          const files = ctx.indexer.getAllFiles?.();
+          if (files && graph) {
+            const ranked = [...files.keys()]
+              .map((f) => ({ file: f, dependents: graph.getDependents(f).length }))
+              .filter((r) => r.dependents > 0)
+              .sort((a, b) => b.dependents - a.dependents)
+              .slice(0, 12);
+            if (ranked.length) overview.hubFiles = ranked;
+          }
+        } catch { /* graph optional */ }
+
+        return JSON.parse(capResult(JSON.stringify(overview)));
       },
     },
 
@@ -541,13 +743,14 @@ export function createTools(ctx: ToolContext) {
 
     // concurrent: false | readonly: false | permission: ask
     terminal: {
-      description: "Run a shell command in the workspace directory. Dangerous commands require approval.",
+      description: "Run a shell command in the workspace directory. Dangerous commands require approval. Set background:true for long-running processes like dev servers (returns immediately with the pid; the process keeps running).",
       parameters: z.object({
         command: z.string().describe("Shell command to execute"),
-        timeout_ms: z.number().default(30000).describe("Timeout in milliseconds (max 120000)"),
+        timeout_ms: z.number().default(30000).describe("Timeout in milliseconds (max 120000). Ignored when background is true."),
         cwd: z.string().optional().describe("Working directory (relative to workspace root). Defaults to workspace root."),
+        background: z.boolean().optional().describe("Run detached and return immediately — use for dev servers / watchers that don't exit. stdout/stderr go to .crayon/logs/."),
       }),
-      execute: async ({ command, timeout_ms, cwd: cwdPath }: { command: string; timeout_ms?: number; cwd?: string }) => {
+      execute: async ({ command, timeout_ms, cwd: cwdPath, background }: { command: string; timeout_ms?: number; cwd?: string; background?: boolean }) => {
         if (ctx.signal?.aborted) return { success: false, error: "Aborted", command };
         let isDangerous = false;
         for (const pattern of DANGEROUS_PATTERNS) {
@@ -563,7 +766,8 @@ export function createTools(ctx: ToolContext) {
             for (const token of parsed) {
               if (typeof token === "string") {
                 const lower = token.toLowerCase();
-                if (["cd", "rm", "del", "mv", "sh", "bash", "cmd", "powershell", "pwsh", "node", "python", "ruby", "perl", "curl", "wget", "eval", "exec", "env"].includes(lower)) {
+                const base = lower.split("/").pop() || lower; // handle /usr/bin/python3
+                if (DANGEROUS_BINARIES.has(lower) || DANGEROUS_BINARIES.has(base)) {
                   isDangerous = true;
                   break;
                 }
@@ -601,8 +805,14 @@ export function createTools(ctx: ToolContext) {
           return { success: false, error: "PERMISSION_DENIED_BY_USER", command };
         }
 
-        const timeout = Math.min(timeout_ms ?? 30000, 120000);
         const workDir = cwdPath ? resolvePath(cwdPath) : ctx.workspaceRoot;
+
+        if (background) {
+          const info = await runBackground(command, workDir);
+          return { success: true, background: true, pid: info.pid, logFile: info.logFile, message: `Started in background (pid ${info.pid}). Logs: ${info.logFile}` };
+        }
+
+        const timeout = Math.min(timeout_ms ?? 30000, 120000);
         const result = await runCommand(command, workDir, timeout, ctx.signal);
         return {
           ...result,
@@ -735,9 +945,7 @@ export function createTools(ctx: ToolContext) {
         }
 
         try {
-          const response = await fetch(url, {
-            signal: AbortSignal.timeout(10000),
-          });
+          const response = await safeFetch(url, AbortSignal.timeout(10000));
           const body = await response.text();
           const maxLen = max_length ?? 50000;
           return {
@@ -788,6 +996,29 @@ async function listDirRecursive(
   }
 
   return result;
+}
+
+/** Spawn a detached long-running process (dev server, watcher). Returns the
+ *  pid immediately; stdout/stderr are redirected to a log file so the agent can
+ *  read them later. The process outlives this tool call. */
+async function runBackground(command: string, cwd: string): Promise<{ pid: number; logFile: string }> {
+  const { open } = await import("node:fs/promises");
+  const logDir = path.join(cwd, ".crayon", "logs");
+  await mkdir(logDir, { recursive: true });
+  const logFile = path.join(logDir, `bg-${Date.now()}.log`);
+  const fh = await open(logFile, "a");
+  const isWin = process.platform === "win32";
+  const shell = isWin ? "powershell.exe" : "/bin/sh";
+  const shellFlag = isWin ? "-Command" : "-c";
+  const child = spawn(shell, [shellFlag, command], {
+    cwd,
+    env: process.env,
+    detached: true,
+    stdio: ["ignore", fh.fd, fh.fd],
+  });
+  child.unref();
+  await fh.close();
+  return { pid: child.pid ?? -1, logFile: path.relative(cwd, logFile) };
 }
 
 function runCommand(command: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {

@@ -62,8 +62,22 @@ function isContextOverflowError(err: Error): boolean {
   );
 }
 
+// A 429 that reflects a daily/quota cap (not a short per-minute throttle) will
+// not clear on retry — retrying just makes the app hang. Detect and fail fast.
+function isHardRateLimit(err: RetryableError): boolean {
+  const parts = [err.message, (err as any).responseBody, (err as any).data]
+    .map((p) => (typeof p === "string" ? p : JSON.stringify(p ?? "")))
+    .join(" ")
+    .toLowerCase();
+  return /per[-\s]?day|daily|quota|insufficient|add \d+ credits|billing|payment/.test(parts);
+}
+
 function isRetryableError(err: RetryableError): boolean {
   const status = getStatusCode(err);
+
+  if (status === 429) {
+    return !isHardRateLimit(err); // transient throttle → retry; hard cap → fail fast
+  }
   if (status !== undefined && RETRYABLE_STATUS_CODES.has(status)) {
     return true;
   }

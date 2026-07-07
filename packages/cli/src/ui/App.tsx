@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useInsertionEffect } from "react";
-import { Box, Text, useInput, useApp } from "ink";
+import { Box, Text, Static, useInput, useApp } from "ink";
 import TextInput from "ink-text-input";
 import { SearchableSelect, SelectOption } from "./components/SearchableSelect.js";
 import path from "node:path";
@@ -10,35 +10,37 @@ import { spawnSync } from "node:child_process";
 import { createTwoFilesPatch } from "diff";
 import { CrayonAgent, type AgentEvent, autoCompact, getModelPricing } from "crayon-agent";
 import { highlight } from "cli-highlight";
-import { marked } from "marked";
-import TerminalRenderer from "marked-terminal";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-marked.setOptions({
-  renderer: new TerminalRenderer({
-    listitem: (text: string) => `  • ${text.trim()}\n`,
-    firstHeading: (text: string) => `\x1b[1m\x1b[36m# ${text}\x1b[0m\n\n`,
-    heading: (text: string, level: number) => `\x1b[1m\x1b[36m${"#".repeat(level)} ${text}\x1b[0m\n\n`
-  }) as any
-});
 import { loadConfig } from "../config.js";
 import { getGitInfo } from "./gitHelper.js";
 import { PlanView } from "./PlanView.js";
 import { StatusBar } from "./StatusBar.js";
 import { DiffRenderer } from "./DiffRenderer.js";
 import { saveSession, loadSession } from "../session.js";
-import { theme } from "./theme.js";
+import { loadCustomCommands, expandTemplate, type CustomCommand } from "../customCommands.js";
+import { theme, ACCENTS, applyAccent } from "./theme.js";
 import { syntaxThemeDark } from "./syntaxTheme.js";
-import { useTerminalSize } from "./hooks/useTerminalSize.js";
 import { AgentProgress } from "./components/AgentProgress.js";
+import { CrayonLogo } from "./components/CrayonLogo.js";
+import { Markdown } from "./Markdown.js";
+import { useTerminalSize } from "./hooks/useTerminalSize.js";
 import { ThinkingMessage } from "./messages/ThinkingMessage.js";
+import {
+  AVAILABLE_COMMANDS,
+  buildAsciiTree,
+  POPULAR_MODELS,
+  getToolCallCompletedText,
+  formatToolResult,
+} from "./appConstants.js";
 
 interface AppProps {
   mode: "run" | "chat";
   task?: string;
-  resume?: boolean;
+  // true = resume most recent session; string = resume that session id.
+  resume?: boolean | string;
   permissionMode?: any;
 }
 
@@ -58,188 +60,22 @@ interface ChatMessage {
   };
 }
 
-const AVAILABLE_COMMANDS = [
-  { cmd: "/clear", desc: "Clear conversation history" },
-  { cmd: "/undo", desc: "Rewind conversation by 1 turn" },
-  { cmd: "/diff", desc: "Show git diff of changes" },
-  { cmd: "/status", desc: "Show git status of workspace" },
-  { cmd: "/mode", desc: "Change permission mode", usage: "ask | auto-edit | plan | auto | bypass" },
-  { cmd: "/cost", desc: "View token usage and cost" },
-  { cmd: "/files", desc: "View modified files this session" },
-  { cmd: "/compact", desc: "Compact conversation history" },
-  { cmd: "/model", desc: "Change the AI model", usage: "[model-name]" },
-  { cmd: "/config", desc: "Change provider, model, or theme" },
-  { cmd: "/easel", desc: "View the active agent context (files read)" },
-  { cmd: "/exit", desc: "Exit Crayon" },
-  { cmd: "/help", desc: "Show help information" }
-];
-
-function buildAsciiTree(paths: string[]): string {
-  if (paths.length === 0) return "  (Empty Context)";
-  
-  const tree: any = {};
-  paths.forEach(p => {
-    const parts = p.split(/[/\\]/).filter(Boolean);
-    let curr = tree;
-    parts.forEach(part => {
-      if (!curr[part]) curr[part] = {};
-      curr = curr[part];
-    });
-  });
-
-  const lines: string[] = [];
-  function traverse(node: any, prefix: string) {
-    const keys = Object.keys(node).sort();
-    keys.forEach((key, index) => {
-      const isLast = index === keys.length - 1;
-      const marker = isLast ? "└─ " : "├─ ";
-      lines.push(`${prefix}${marker}${key}`);
-      const nextPrefix = prefix + (isLast ? "   " : "│  ");
-      traverse(node[key], nextPrefix);
-    });
-  }
-  
-  traverse(tree, "");
-  return lines.join("\n");
+/** Commands whose name prefix-matches the current "/…" input (built-in + custom). */
+function commandMatches(input: string, custom: Array<{ cmd: string; desc: string }> = []) {
+  if (!input.startsWith("/")) return [];
+  const q = input.toLowerCase().split(" ")[0]; // ignore args after the command
+  return [...AVAILABLE_COMMANDS, ...custom].filter((c) => c.cmd.toLowerCase().startsWith(q));
 }
-
-const POPULAR_MODELS = {
-  anthropic: [
-    { label: "Claude 4.6 Sonnet (Latest)", value: "claude-sonnet-4-6" },
-    { label: "Claude 4.8 Opus", value: "claude-opus-4-8" },
-    { label: "Claude 4.5 Haiku", value: "claude-haiku-4-5-20251001" },
-    { label: "Claude 3.7 Sonnet", value: "claude-3-7-sonnet-latest" }
-  ],
-  openai: [
-    { label: "GPT-4.5", value: "gpt-4.5" },
-    { label: "GPT-4o (Latest)", value: "gpt-4o" },
-    { label: "o3 Mini", value: "o3-mini" },
-    { label: "o1", value: "o1" }
-  ],
-  google: [
-    { label: "Gemini 2.5 Pro", value: "gemini-2.5-pro" },
-    { label: "Gemini 2.0 Flash", value: "gemini-2.0-flash" }
-  ],
-  openrouter: [
-    { label: "Anthropic: Claude 4.6 Sonnet", value: "anthropic/claude-sonnet-4-6" },
-    { label: "OpenAI: GPT-4.5", value: "openai/gpt-4.5" },
-    { label: "OpenAI: o3 Mini", value: "openai/o3-mini" },
-    { label: "Google: Gemini 2.5 Pro", value: "google/gemini-2.5-pro" },
-    { label: "DeepSeek: R1", value: "deepseek/deepseek-r1" },
-    { label: "Meta: Llama 3.3 70B", value: "meta-llama/llama-3.3-70b-instruct" }
-  ],
-  ollama: [
-    { label: "Qwen 2.5 Coder (7B)", value: "qwen2.5-coder:7b" },
-    { label: "Llama 3 (8B)", value: "llama3:latest" },
-    { label: "Qwen 2.5 Coder (14B)", value: "qwen2.5-coder:14b" },
-    { label: "Llama 3.3 (70B)", value: "llama3.3:latest" }
-  ]
-};
-
-const getToolCallInitialText = (name: string, args: any) => {
-  switch (name) {
-    case "read_file":
-      return `⏳ Reading ${args?.path || ""}`;
-    case "edit_file":
-    case "edit_ast":
-      return `⏳ Editing ${args?.path || ""}`;
-    case "write_file":
-      return `⏳ Creating ${args?.path || ""}`;
-    case "overwrite_file":
-      return `⏳ Overwriting ${args?.path || ""}`;
-    case "grep":
-      return `⏳ Searching for "${args?.pattern || ""}"`;
-    case "search_codebase":
-      return `⏳ Searching codebase for "${args?.query || ""}"`;
-    case "terminal":
-      return `⏳ Running command: ${args?.command || ""}`;
-    case "list_directory":
-      return `⏳ Listing directory: ${args?.path || "."}`;
-    case "fetch_url":
-      return `⏳ Fetching URL: ${args?.url || ""}`;
-    case "delete_file":
-      return `⏳ Deleting ${args?.path || ""}`;
-    case "rename_file":
-      return `⏳ Renaming ${args?.old_path || ""} -> ${args?.new_path || ""}`;
-    case "git_status":
-      return `⏳ Getting Git status`;
-    case "git_diff":
-      return `⏳ Getting Git diff`;
-    case "git_commit":
-      return `⏳ Committing changes`;
-    default:
-      return `⏳ Running tool ${name}`;
-  }
-};
-
-const getToolCallCompletedText = (name: string, args: any, result: any, isError: boolean) => {
-  const icon = isError ? "✗" : "✓";
-  if (isError) {
-    const errMsg = result?.error || "Error";
-    return `${icon} Failed tool ${name}: ${errMsg}`;
-  }
-  
-  switch (name) {
-    case "read_file": {
-      const lineCount = result?.content ? result.content.split("\n").length : 0;
-      const byteCount = result?.content ? Buffer.byteLength(result.content, "utf-8") : 0;
-      return `${icon} Read ${args?.path || ""} (${lineCount} lines, ${byteCount} bytes)`;
-    }
-    case "edit_file":
-    case "edit_ast":
-      return `${icon} Edited ${args?.path || ""}`;
-    case "write_file":
-      return `${icon} Created ${args?.path || ""}`;
-    case "overwrite_file":
-      return `${icon} Overwrote ${args?.path || ""}`;
-    case "grep": {
-      const matchesCount = result?.results?.length ?? result?.matches?.length ?? 0;
-      return `${icon} Searched for "${args?.pattern || ""}" (${matchesCount} matches)`;
-    }
-    case "search_codebase": {
-      const matchesCount = result?.results?.length ?? result?.matches?.length ?? 0;
-      return `${icon} Searched codebase for "${args?.query || ""}" (${matchesCount} matches)`;
-    }
-    case "terminal":
-      return `${icon} Ran command: ${args?.command || ""}`;
-    case "list_directory": {
-      const entryCount = result?.entries?.length || 0;
-      return `${icon} Listed directory: ${args?.path || "."} (${entryCount} entries)`;
-    }
-    case "fetch_url": {
-      const byteCount = result?.content ? Buffer.byteLength(result.content, "utf-8") : 0;
-      return `${icon} Fetched URL: ${args?.url || ""} (${byteCount} bytes)`;
-    }
-    case "delete_file":
-      return `${icon} Deleted ${args?.path || ""}`;
-    case "rename_file":
-      return `${icon} Renamed ${args?.old_path || ""} -> ${args?.new_path || ""}`;
-    case "git_status":
-      return `${icon} Got Git status (branch: ${result?.branch || "unknown"})`;
-    case "git_diff":
-      return `${icon} Got Git diff`;
-    case "git_commit":
-      return `${icon} Committed with message: ${args?.message || ""}`;
-    default:
-      return `${icon} Ran tool ${name}`;
-  }
-};
 
 export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) => {
   const { exit } = useApp();
-  const { rows } = useTerminalSize();
+  const { columns } = useTerminalSize();
 
-  // Enter alternate screen buffer so Ink constrains rendering to the viewport.
-  // useInsertionEffect fires BEFORE Ink's first onRender, so the alt-screen
-  // escape reaches the terminal before any content does (same pattern as
-  // claude-code's AlternateScreen.tsx).
+  // Clear the terminal (screen + scrollback) once on start, then render inline
+  // in the NORMAL buffer via <Static> — so native trackpad scroll, copy/paste,
+  // and unlimited history all work, but the prior shell output is wiped away.
   useInsertionEffect(() => {
-    const ENTER = '\x1b[?1049h';
-    const EXIT  = '\x1b[?1049l';
-    process.stdout.write(ENTER + '\x1b[2J\x1b[H'); // enter + clear + home cursor
-    return () => {
-      process.stdout.write(EXIT);
-    };
+    process.stdout.write('\x1b[2J\x1b[3J\x1b[H'); // clear screen + scrollback + home
   }, []);
 
   const [gitBranch, setGitBranch] = useState("main");
@@ -255,19 +91,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   // We keep the state for triggering re-renders (used by getToolDisplay)
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
   const [activeToolArgs, setActiveToolArgs] = useState<any>(null);
-  const activeToolNameRef = useRef<string | null>(null);
-  const activeToolArgsRef = useRef<any>(null);
-  const activeToolMessageIdRef = useRef<string | null>(null);
+  // Tools in flight, keyed by tool-call id — supports parallel (read-only) tools
+  // without one clobbering another's pending UI state.
+  const activeToolsRef = useRef<Record<string, { name: string; args: any }>>({});
+  // Streaming-delta batching: accumulate raw text and flush to state on a timer
+  // so we re-render at most ~every 40ms instead of once per token.
+  const streamBufRef = useRef("");
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const updateMessage = (id: string, updates: Partial<Omit<ChatMessage, "id">>) => {
-    setHistory((prev) => {
-      const next = prev.map((msg) => (msg.id === id ? { ...msg, ...updates } : msg));
-      if (agentRef.current) {
-        saveSession(workspaceRoot, agentRef.current.getHistory(), next).catch(() => {});
-      }
-      return next;
-    });
-  };
   const [tokens, setTokens] = useState(0);
   const [cost, setCost] = useState(0);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -277,23 +108,34 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [approvalRequest, setApprovalRequest] = useState<any>(null);
   const [sessionFiles, setSessionFiles] = useState<string[]>([]);
   const [agentMode, setAgentMode] = useState<string>(permissionMode || "ask");
+  const agentModeRef = useRef(agentMode);
+  useEffect(() => { agentModeRef.current = agentMode; }, [agentMode]);
   const [defaultModel, setDefaultModel] = useState<string>("");
   const defaultModelRef = useRef<string>("");
   useEffect(() => {
     defaultModelRef.current = defaultModel;
   }, [defaultModel]);
+  // Reset command-menu highlight whenever the input changes.
+  useEffect(() => { setCmdIndex(0); }, [currentInput]);
   const [currentProvider, setCurrentProvider] = useState<"anthropic" | "openai" | "google" | "openrouter" | "ollama">("anthropic");
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
-  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
+  // Highlighted row in the inline "/…" command menu.
+  const [cmdIndex, setCmdIndex] = useState(0);
+  // Bumped after applyAccent() mutates the shared theme, to force a re-render.
+  const [, setThemeTick] = useState(0);
   const [availableModels, setAvailableModels] = useState<SelectOption[]>([]);
-  const [sessionId] = useState(() => {
+  const [customCommands, setCustomCommands] = useState<CustomCommand[]>([]);
+  const customCommandsRef = useRef<CustomCommand[]>([]);
+  useEffect(() => { customCommandsRef.current = customCommands; }, [customCommands]);
+  const [sessionId, setSessionId] = useState(() => {
     return Math.random().toString(36).substring(2, 10).toUpperCase();
   });
+  // Ref mirror so save callbacks always use the current id (incl. after resume).
+  const sessionIdRef = useRef(sessionId);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
   const sessionStartTimeRef = useRef(Date.now());
   const apiDurationRef = useRef(0);
-  // How many messages scrolled up from the bottom (0 = at bottom / live view)
-  const [scrollOffset, setScrollOffset] = useState(0);
-  const scrollOffsetRef = useRef(0);
 
   const agentRef = useRef<CrayonAgent | null>(null);
   const abortedRef = useRef(false);
@@ -302,6 +144,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const executionStartTime = useRef<number | undefined>(undefined);
 
   const modeSwitchTimeRef = useRef(0);
+  const lastCtrlCRef = useRef(0); // timestamp of the last Ctrl+C, for double-tap-to-quit
   const workspaceRoot = process.cwd();
   const workspaceName = path.basename(workspaceRoot);
 
@@ -311,13 +154,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     setHistory((prev) => {
       const next = [...prev, newMsg];
       if (agentRef.current) {
-        saveSession(workspaceRoot, agentRef.current.getHistory(), next).catch(() => {});
+        saveSession(workspaceRoot, sessionIdRef.current, agentRef.current.getHistory(), next).catch(() => {});
       }
       return next;
     });
-    // Auto-snap to bottom whenever a new message arrives
-    scrollOffsetRef.current = 0;
-    setScrollOffset(0);
   };
 
   useEffect(() => {
@@ -349,6 +189,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
       const loadedMode = permissionMode || config.permissionMode || "ask";
       setAgentMode(loadedMode);
+      loadCustomCommands(workspaceRoot, os.homedir()).then((cmds) => {
+        if (active && cmds.length > 0) setCustomCommands(cmds);
+      }).catch(() => {});
+      if (config.accent && applyAccent(config.accent)) setThemeTick((t) => t + 1);
       setDefaultModel(config.defaultModel || "");
       setCurrentProvider(config.provider as any);
       
@@ -397,6 +241,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         googleApiKey: config.googleApiKey,
         permissionMode: loadedMode as any,
         mcpServers: config.mcpServers,
+        verifyCommand: config.verifyCommand,
+    autoCommit: config.autoCommit,
         onEvent: (event: AgentEvent) => {
           if (!active || abortedRef.current) return;
           handleAgentEvent(event);
@@ -435,14 +281,28 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       agentRef.current = agent;
 
       if (resume) {
-        const session = await loadSession(workspaceRoot);
+        const wantId = typeof resume === "string" ? resume : undefined;
+        const session = await loadSession(workspaceRoot, wantId);
         if (session) {
+          // Continue the resumed session — further saves append to the same id.
+          setSessionId(session.id);
+          sessionIdRef.current = session.id;
           agent.setHistory(session.history || []);
-          // Note: we don't restore UI chatLog to avoid screen clutter on boot,
-          // just the agent's internal memory
-          pushMessage({ sender: "system", text: "↺ Session resumed from disk." });
+          // Restore the visible transcript too, so a resumed chat shows the
+          // prior conversation (not just the agent's hidden memory).
+          const restored = (session.chatLog || []).map((m: any, i: number) => ({
+            ...m,
+            id: `restored-${i}`,
+          }));
+          if (restored.length > 0) setHistory(restored as any);
+          pushMessage({ sender: "system", text: `↺ Resumed session ${session.id}${session.title ? ` — ${session.title}` : ""}` });
         } else {
-          pushMessage({ sender: "system", text: "⚠ No previous session found to resume." });
+          pushMessage({
+            sender: "system",
+            text: wantId
+              ? `⚠ No session found with id "${wantId}". Run 'crayon sessions' to list.`
+              : "⚠ No previous session found to resume.",
+          });
         }
       }
 
@@ -461,12 +321,29 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     };
   }, []);
 
+  // Coalesce streamed text: buffer deltas and flush at most ~every 40ms.
+  const flushStream = () => {
+    flushTimerRef.current = null;
+    const buf = streamBufRef.current;
+    if (buf) setStreamingText(buf);
+  };
+  const scheduleFlush = () => {
+    if (flushTimerRef.current) return;
+    flushTimerRef.current = setTimeout(flushStream, 40);
+  };
+  const resetStream = () => {
+    if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+    streamBufRef.current = "";
+    setStreamingText("");
+  };
+
   const runTask = async (agent: CrayonAgent, taskText: string) => {
     setIsExecuting(true);
-    setStreamingText("");
+    resetStream();
     setStreamingReasoning("");
     setActivePlan([]);
     activePlanRef.current = [];
+    activeToolsRef.current = {};
     setCurrentStepIndex(0);
     abortedRef.current = false;
     abortControllerRef.current = new AbortController();
@@ -484,8 +361,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
       const summaryMsg = result.summary || "Task completed successfully.";
       pushMessage({ sender: "crayon", text: summaryMsg, reasoning: streamingReasoning });
-      setStreamingText("");
+      resetStream();
       setStreamingReasoning("");
+
+      // Plan-approve gate: only when the agent actually ran in plan mode and
+      // produced a plan (result.planned) — never for advisory/chat answers.
+      if (mode === "chat" && result.planned && result.summary.trim()) {
+        setApprovalRequest({ type: "plan", plan: result.summary });
+      }
 
       if (mode === "run") {
         setTimeout(() => exit(), 1000);
@@ -520,87 +403,62 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       case "reasoning_delta":
         setStreamingReasoning((prev) => prev + event.content);
         break;
-      case "tool_call":
-        activeToolNameRef.current = event.name;
-        activeToolArgsRef.current = event.args;
+      case "tool_call": {
+        if (event.name === "thinking") {
+          setActiveToolName("thinking");
+          setActiveToolArgs({ status: "Thinking..." });
+          break;
+        }
+        const id = event.id || `${event.name}:${Date.now()}`;
+        activeToolsRef.current[id] = { name: event.name, args: event.args };
+        // Show the just-started tool in the live progress line.
         setActiveToolName(event.name);
         setActiveToolArgs(event.args);
-        setStreamingText("");
-        if (event.name !== "thinking") {
-          setCurrentStepIndex((prev) => Math.min(prev + 1, Math.max(0, activePlanRef.current.length - 1)));
-          // Push initial running message into history
-          historyCountRef.current += 1;
-          const msgId = String(historyCountRef.current);
-          activeToolMessageIdRef.current = msgId;
-          const initialText = getToolCallInitialText(event.name, event.args);
-          setHistory((prev) => {
-            const next = [...prev, {
-              id: msgId,
-              sender: "system" as const,
-              text: initialText,
-              toolCall: {
-                name: event.name,
-                args: event.args,
-                status: "running" as const
-              }
-            }];
-            if (agentRef.current) {
-              saveSession(workspaceRoot, agentRef.current.getHistory(), next).catch(() => {});
-            }
-            return next;
-          });
-          scrollOffsetRef.current = 0;
-          setScrollOffset(0);
-        } else {
-          activeToolArgsRef.current = { status: "Thinking..." };
-          setActiveToolArgs({ status: "Thinking..." });
-        }
+        setCurrentStepIndex((prev) => Math.min(prev + 1, Math.max(0, activePlanRef.current.length - 1)));
         break;
+      }
       case "tool_result": {
-        // Read from refs to avoid stale closure — state may not have updated yet
-        const toolName = activeToolNameRef.current;
-        const toolArgs = activeToolArgsRef.current || {};
         const toolResult = event.result as any;
-        const isError = toolResult && (toolResult.success === false || toolResult.error);
-        const errorText = toolResult?.error || "";
+        const id = event.id || "";
+        // Match this result to its originating call (parallel-safe).
+        const call = (id && activeToolsRef.current[id]) || undefined;
+        const toolName = call?.name || event.name;
+        const toolArgs = call?.args || {};
+        if (id) delete activeToolsRef.current[id];
 
         if (toolName && toolName !== "thinking") {
+          const isError = toolResult && (toolResult.success === false || toolResult.error);
           const completedText = getToolCallCompletedText(toolName, toolArgs, toolResult, !!isError);
-          
-          if (activeToolMessageIdRef.current) {
-            updateMessage(activeToolMessageIdRef.current, {
-              text: completedText,
-              toolCall: {
-                name: toolName,
-                args: toolArgs,
-                result: toolResult,
-                status: isError ? "error" : "success",
-                error: errorText
-              }
-            });
-          } else {
-            pushMessage({
-              sender: "system",
-              text: completedText,
-              toolCall: {
-                name: toolName,
-                args: toolArgs,
-                result: toolResult,
-                status: isError ? "error" : "success",
-                error: errorText
-              }
-            });
-          }
+          // Commit the FINAL tool line to scrollback (Static). Edit tools carry
+          // their diff in the result, so attach it here.
+          pushMessage({
+            sender: "system",
+            text: completedText,
+            diff: toolResult?.diff,
+            toolCall: {
+              name: toolName,
+              args: toolArgs,
+              result: toolResult,
+              status: isError ? "error" : "success",
+              error: toolResult?.error || "",
+            },
+          });
         }
-        activeToolNameRef.current = null;
-        activeToolArgsRef.current = null;
-        activeToolMessageIdRef.current = null;
-        setActiveToolName(null);
-        setActiveToolArgs(null);
+
+        // Reflect any still-running tool in the progress line, else clear.
+        const remaining = Object.values(activeToolsRef.current);
+        if (remaining.length > 0) {
+          setActiveToolName(remaining[remaining.length - 1].name);
+          setActiveToolArgs(remaining[remaining.length - 1].args);
+        } else {
+          setActiveToolName(null);
+          setActiveToolArgs(null);
+        }
         break;
       }
       case "text_delta":
-        setStreamingText((prev) => prev + event.content);
+        streamBufRef.current += event.content;
+        scheduleFlush();
         break;
       case "text":
         break;
@@ -611,11 +469,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           setGitBranch(git.branch);
           setGitDirtyCount(git.dirtyCount);
         }, 0);
-        if (activeToolMessageIdRef.current) {
-          updateMessage(activeToolMessageIdRef.current, { diff: event.diff });
-        } else {
-          pushMessage({ sender: "system", text: `Diff showing changes in ${event.path}:`, diff: event.diff });
-        }
         break;
       case "usage":
         setTokens((prev) => prev + event.totalTokens);
@@ -632,35 +485,59 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
   };
 
+  // Leave the transcript in scrollback on quit (don't wipe) so it can be
+  // scrolled/copied afterward; index.ts prints a resume hint after exit.
+  const cleanExit = () => {
+    if (agentRef.current) agentRef.current.close();
+    exit();
+  };
+
   const handleAbort = () => {
     abortedRef.current = true;
     abortControllerRef.current?.abort();
     setIsExecuting(false);
-    activeToolNameRef.current = null;
-    activeToolArgsRef.current = null;
+    activeToolsRef.current = {};
     setActiveToolName(null);
     setActiveToolArgs(null);
     setActivePlan([]);
     activePlanRef.current = [];
-    setStreamingText("");
+    resetStream();
     setStreamingReasoning("");
-    pushMessage({ sender: "system", text: "🚫 Agent execution interrupted by user." });
+    // Drop any queued messages too — one esc cancels the whole batch, not just
+    // the running task (otherwise the queue keeps draining, one esc per task).
+    const dropped = queuedTasks.length;
+    setQueuedTasks([]);
+    pushMessage({
+      sender: "system",
+      text: dropped > 0 ? `Interrupted by user. (${dropped} queued message${dropped === 1 ? "" : "s"} cancelled)` : "Interrupted by user.",
+    });
     if (approvalRequest) {
-      approvalRequest.resolve(false);
+      approvalRequest.resolve?.(false); // plan approvals have no resolver
       setApprovalRequest(null);
     }
   };
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
-      if (agentRef.current) agentRef.current.close();
-      exit();
+      const now = Date.now();
+      // Second Ctrl+C within 2s → actually quit.
+      if (now - lastCtrlCRef.current < 2000) {
+        cleanExit();
+        return;
+      }
+      lastCtrlCRef.current = now;
+      // First Ctrl+C: if the agent is running, interrupt it cleanly (aborts the
+      // task, rolls back its transaction, clears the queue); then prompt again.
+      if (isExecuting) {
+        handleAbort();
+      }
+      pushMessage({ sender: "system", text: "Press Ctrl+C again to exit." });
       return;
     }
 
-    if ((isModelSelectorOpen || isCommandPaletteOpen) && key.escape) {
+    if ((isModelSelectorOpen || isColorPickerOpen) && key.escape) {
       setIsModelSelectorOpen(false);
-      setIsCommandPaletteOpen(false);
+      setIsColorPickerOpen(false);
       return;
     }
 
@@ -719,12 +596,13 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
-    if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isCommandPaletteOpen) {
+    if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isColorPickerOpen) {
       if ((key.ctrl && input === "t") || input === "\u001b[Z" || (key.shift && (key.tab || input === "\t"))) {
         const modes = ["ask", "auto-edit", "plan", "auto", "bypass"];
         const currentIdx = modes.indexOf(agentMode);
         const nextMode = modes[(currentIdx + 1) % modes.length];
         setAgentMode(nextMode);
+        agentModeRef.current = nextMode; // sync now; the effect only runs post-render
         modeSwitchTimeRef.current = Date.now();
         if (agentRef.current) agentRef.current.setPermissionMode(nextMode as any);
         return;
@@ -750,36 +628,19 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         return;
       }
 
-      if (currentInput === "/") {
-        setIsCommandPaletteOpen(true);
-        setCurrentInput("");
-      } else {
-        // PageUp / PageDown or Shift+Arrows scroll through history
-        if (key.pageUp) {
-          const next = Math.max(0, Math.min(scrollOffsetRef.current + 5, history.length - 1));
-          scrollOffsetRef.current = next;
-          setScrollOffset(next);
-          return;
+      {
+        // Command menu (typed "/…") owns the arrows/Tab/Esc so the main input
+        // stays the single input field.
+        const matches = commandMatches(currentInput, customCommandsRef.current);
+        const inCmdMenu = currentInput.startsWith("/") && !currentInput.includes(" ") && matches.length > 0;
+        if (inCmdMenu) {
+          if (key.upArrow) { setCmdIndex((i) => Math.max(0, i - 1)); return; }
+          if (key.downArrow) { setCmdIndex((i) => Math.min(matches.length - 1, i + 1)); return; }
+          if (key.tab) { setCurrentInput(matches[Math.min(cmdIndex, matches.length - 1)].cmd + " "); return; }
+          if (key.escape) { setCurrentInput(""); return; }
         }
-        if (key.pageDown) {
-          const next = Math.max(0, scrollOffsetRef.current - 5);
-          scrollOffsetRef.current = next;
-          setScrollOffset(next);
-          return;
-        }
-        if ((key.shift && key.upArrow) || input === "\u001b[1;2A") {
-          const next = Math.max(0, Math.min(scrollOffsetRef.current + 1, history.length - 1));
-          scrollOffsetRef.current = next;
-          setScrollOffset(next);
-          return;
-        }
-        if ((key.shift && key.downArrow) || input === "\u001b[1;2B") {
-          const next = Math.max(0, scrollOffsetRef.current - 1);
-          scrollOffsetRef.current = next;
-          setScrollOffset(next);
-          return;
-        }
-
+        // History lives in the terminal's native scrollback — scroll with the
+        // mouse/trackpad. Plain arrows recall previous prompts.
         if (key.upArrow) {
           if (inputHistory.length > 0) {
             const newIndex = inputHistoryIndex < inputHistory.length - 1 ? inputHistoryIndex + 1 : inputHistoryIndex;
@@ -835,6 +696,25 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
   };
 
+  const updateAccent = async (name: string) => {
+    setIsColorPickerOpen(false);
+    const accent = ACCENTS.find((a) => a.name === name);
+    if (!applyAccent(name) || !accent) {
+      pushMessage({ sender: "system", text: `Unknown color "${name}". Try: ${ACCENTS.map((a) => a.name).join(", ")}` });
+      return;
+    }
+    setThemeTick((t) => t + 1); // force re-render so the mutated theme takes effect
+    pushMessage({ sender: "system", text: `Accent changed to ${accent.label}.` });
+    try {
+      const configPath = path.join(os.homedir(), ".crayon", "config.json");
+      const configObj = existsSync(configPath)
+        ? JSON.parse(await readFile(configPath, "utf-8"))
+        : {};
+      configObj.accent = name;
+      await writeFile(configPath, JSON.stringify(configObj, null, 2));
+    } catch { /* non-fatal */ }
+  };
+
   const handleSubmit = async (inputStr: string) => {
 
     const trimmed = inputStr.trim();
@@ -849,6 +729,21 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     if (trimmed.startsWith("/")) {
       const parts = trimmed.split(" ");
       const cmd = parts[0].toLowerCase();
+
+      // Custom commands (.crayon/commands/*.md): expand the template with the
+      // args and run it as a task. Built-ins take precedence via the switch.
+      const custom = customCommandsRef.current.find((c) => c.cmd === cmd);
+      const isBuiltin = AVAILABLE_COMMANDS.some((c) => c.cmd === cmd);
+      if (custom && !isBuiltin) {
+        const expanded = expandTemplate(custom.template, parts.slice(1).join(" "));
+        if (isExecuting) {
+          setQueuedTasks((prev) => [...prev, expanded]);
+        } else if (agentRef.current) {
+          runTask(agentRef.current, expanded);
+        }
+        return;
+      }
+
       switch (cmd) {
         case "/clear": {
           if (agentRef.current) agentRef.current.clearHistory();
@@ -887,7 +782,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             const actualIdx = history.length - 1 - lastUserIdxUI;
             const newUIHistory = history.slice(0, actualIdx);
             setHistory(newUIHistory);
-            saveSession(workspaceRoot, agentRef.current.getHistory(), newUIHistory).catch(() => {});
+            saveSession(workspaceRoot, sessionIdRef.current, agentRef.current.getHistory(), newUIHistory).catch(() => {});
             pushMessage({ sender: "system", text: "↩️ Last turn undone. Ready for your input." });
           } else {
             pushMessage({ sender: "system", text: "📭 No messages to undo." });
@@ -937,13 +832,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         }
         case "/exit":
         case "/quit":
-          exit();
+          cleanExit();
           break;
         case "/mode":
           const m = parts[1];
           if (["ask", "auto-edit", "plan", "auto", "bypass"].includes(m)) {
             if (agentRef.current) agentRef.current.setPermissionMode(m as any);
             setAgentMode(m);
+            agentModeRef.current = m; // sync now; the effect only runs post-render
             pushMessage({ sender: "system", text: `🔒 Permission mode set to: ${m}` });
           } else {
             pushMessage({ sender: "system", text: `Invalid mode. Use: ask, auto-edit, plan, auto, bypass` });
@@ -1042,6 +938,13 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         case "/config":
           pushMessage({ sender: "system", text: "[!] To change your AI provider, model, or UI theme, please exit the chat (Ctrl+C) and run `crayon config` in your terminal." });
           break;
+        case "/color":
+          if (parts.length > 1) {
+            updateAccent(parts[1].toLowerCase());
+          } else {
+            setIsColorPickerOpen(true);
+          }
+          break;
         case "/easel": {
           if (!agentRef.current) {
             pushMessage({ sender: "system", text: "Agent not initialized." });
@@ -1096,49 +999,58 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   };
 
   useEffect(() => {
-    if (!isExecuting && queuedTasks.length > 0 && agentRef.current) {
+    if (!isExecuting && !approvalRequest && queuedTasks.length > 0 && agentRef.current) {
       const nextTask = queuedTasks[0];
       setQueuedTasks((prev) => prev.slice(1));
       parseMentions(nextTask).then((enrichedText) => {
         runTask(agentRef.current!, enrichedText);
       });
     }
-  }, [isExecuting, queuedTasks]);
+  }, [isExecuting, queuedTasks, approvalRequest]);
 
   const truncate = (str: string, maxLen: number = 50) => {
     if (!str) return "";
     return str.length > maxLen ? str.slice(0, maxLen - 3) + "..." : str;
   };
 
+  // Literal, Claude Code-style tool label: ToolName(arg)
   const getToolDisplay = () => {
-    if (!activeToolName || activeToolName === "thinking") return "Thinking...";
-    
+    if (activeToolName === "thinking") {
+      // Surface a meaningful status (e.g. "API error, retrying in 8s…") instead
+      // of a mute "Working" so retries/rate-limits are visible.
+      const s = activeToolArgs?.status;
+      return s && s !== "Thinking..." ? truncate(s, 80) : "Thinking...";
+    }
+    if (!activeToolName) return "Thinking...";
+
     const args = activeToolArgs || {};
     const pathBase = args.path ? path.basename(args.path) : "";
-    const argStr = args.command || args.pattern || args.query || args.Query || args.CommandLine || pathBase || "";
-    const suffix = argStr ? ` · ${truncate(argStr)}` : "";
+    const argStr = args.command || args.pattern || args.query || pathBase || args.url || "";
+    const inner = argStr ? `(${truncate(argStr)})` : "";
 
-    if (activeToolName === "read_file" || activeToolName === "view_file" || activeToolName === "list_directory" || activeToolName === "list_dir") {
-      return `▤ Inspecting canvas${suffix}`;
-    } else if (activeToolName === "terminal" || activeToolName === "run_command") {
-      return `◧ Mixing colors${suffix}`;
-    } else if (activeToolName === "search_web" || activeToolName === "grep" || activeToolName === "grep_search" || activeToolName === "search_codebase") {
-      return `⌕ Looking for inspiration${suffix}`;
-    } else if (
-      activeToolName === "write_file" ||
-      activeToolName === "write_to_file" ||
-      activeToolName === "edit_file" ||
-      activeToolName === "replace_file_content" ||
-      activeToolName === "multi_replace_file_content" ||
-      activeToolName === "edit_ast" ||
-      activeToolName === "overwrite_file"
-    ) {
-      return `✎ Sketching details${suffix}`;
-    }
-    return `▶ Running ${activeToolName}${suffix}`;
+    const NAMES: Record<string, string> = {
+      read_file: "Read",
+      list_directory: "List",
+      terminal: "Bash",
+      grep: "Search",
+      search_codebase: "Search",
+      find_usages: "Search",
+      write_file: "Write",
+      overwrite_file: "Write",
+      edit_file: "Edit",
+      edit_ast: "Edit",
+      delete_file: "Delete",
+      rename_file: "Move",
+      web_fetch: "Fetch",
+      git_status: "Git",
+      git_diff: "Git",
+      git_commit: "Commit",
+    };
+    const label = NAMES[activeToolName] || activeToolName;
+    return `${label}${inner}`;
   };
 
-  const renderMarkdown = (text: string, isStreaming: boolean = false) => {
+  const renderMarkdown = (text: string) => {
     const parts = text.split(/(```[\s\S]*?```)/g);
     return parts.map((part, index) => {
       if (part.startsWith("```") && part.endsWith("```")) {
@@ -1157,21 +1069,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         );
       }
       if (part.trim() === "") return null;
-      let rawText = part;
-      if (isStreaming && index === parts.length - 1) {
-        // Wet ink effect: color the last word
-        const match = rawText.match(/([^\s`*_*~]+)(\s*)$/);
-        if (match) {
-           const brandColor = "\x1b[38;2;77;150;255m"; // theme.brand
-           const resetCode = "\x1b[0m";
-           rawText = rawText.slice(0, match.index) + `${brandColor}${match[1]}${resetCode}` + match[2];
-        }
-      }
-      let mdText = rawText;
-      try {
-        mdText = (marked.parse(rawText) as string).trim();
-      } catch {}
-      return <Text key={index}>{mdText}</Text>;
+      return <Markdown key={index} text={part} />;
     });
   };
 
@@ -1196,13 +1094,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     const hasMore = allLines.length > limit;
 
     return (
-      <Box key="term-out" flexDirection="column" marginY={0} paddingLeft={2} width="100%">
-        <Text color={theme.subtle} dimColor>stdout/stderr:</Text>
-        <Text color={theme.subtle}>{truncated}</Text>
+      <Box key="term-out" flexDirection="column">
+        <Text color={theme.subtle} dimColor>{truncated}</Text>
         {hasMore && (
-          <Text color={theme.subtle} italic dimColor>
-            ... (truncated {allLines.length - limit} lines)
-          </Text>
+          <Text color={theme.subtle} italic dimColor>… {allLines.length - limit} more lines</Text>
         )}
       </Box>
     );
@@ -1215,108 +1110,84 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     const hasMore = matches.length > limit;
 
     return (
-      <Box key="matches-out" flexDirection="column" marginY={1} paddingLeft={1} width="100%">
+      <Box key="matches-out" flexDirection="column">
         {displayed.map((m: any, i: number) => (
-          <Text key={i} color={theme.text}>
-            <Text color={theme.brand}>{m.path}:{m.line}</Text> <Text color={theme.subtle}>{m.snippet?.trim()}</Text>
+          <Text key={i}>
+            <Text color={theme.brand}>{m.path}:{m.line}</Text> <Text color={theme.subtle} dimColor>{m.snippet?.trim()}</Text>
           </Text>
         ))}
         {hasMore && (
-          <Text color={theme.subtle} italic>
-            ... and {matches.length - limit} more matches
-          </Text>
+          <Text color={theme.subtle} dimColor>… {matches.length - limit} more matches</Text>
         )}
       </Box>
     );
   };
 
   const renderMsg = (msg: ChatMessage) => {
-    const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
-
+    // Boot / cleared banner
     if (msg.text.startsWith("⬡ Crayon v")) {
       const hasUserMessages = history.some((m) => m.sender === "user");
       if (hasUserMessages) return null;
-
       const versionMatch = msg.text.match(/v([0-9.]+)/);
       const version = versionMatch ? versionMatch[1] : "0.1.0";
-      const tips = [
-        "Tip: Hit Ctrl+E to open your editor for multi-line prompts.",
-        "Tip: Hit Ctrl+T to quickly cycle permission modes.",
-        "Tip: Type / to open the Command Palette.",
-        "Tip: Crayon works best with a detailed system prompt."
-      ];
-      const randomTip = tips[parseInt(msg.id) % tips.length] || tips[0];
       return (
-        <Box key={msg.id} flexDirection="column" marginBottom={1} borderStyle="round" borderColor={theme.brand} paddingX={1}>
-          <Text color={theme.brand} bold>✶ Welcome to Crayon Code v{version}!</Text>
-          <Box marginTop={1} flexDirection="column">
-            <Text color={theme.subtle} italic>/help for help, /config for settings</Text>
-            <Text color={theme.text}>cwd: {workspaceRoot}</Text>
-          </Box>
-          <Box marginTop={1}>
-            <Text color={theme.subtle}>※ {randomTip}</Text>
+        <Box key={msg.id} flexDirection="column" marginBottom={1}>
+          <CrayonLogo version={version} />
+          <Box marginTop={1} paddingLeft={1}>
+            <Text color={theme.subtle} dimColor>/help for commands · cwd: {workspaceRoot}</Text>
           </Box>
         </Box>
       );
     }
 
     if (msg.sender === "user") {
+      // A new user turn — a subtle full-width band with a teal ❯ (Claude-style).
+      // Ink only supports backgroundColor on <Text>, so pad the line to the
+      // terminal width to make the band span full width.
+      const prefixLen = 3; // " ❯ "
+      const pad = Math.max(0, (columns || 80) - prefixLen - [...msg.text].length);
       return (
-        <Box key={msg.id} marginBottom={1} flexDirection="row" paddingLeft={1}>
-          <Box marginRight={1}>
-            <Text color={theme.subtle}>┃</Text>
-          </Box>
-          <Box flexDirection="column">
-            <Text color={theme.subtle} bold>You</Text>
-            <Text color={theme.text}>{msg.text}</Text>
-          </Box>
+        <Box key={msg.id} marginTop={1} marginBottom={1}>
+          <Text backgroundColor={theme.panelBg} color={theme.text}>
+            {" "}<Text color={theme.brand}>❯</Text>{" "}{msg.text}{" ".repeat(pad)}
+          </Text>
         </Box>
       );
     }
 
     if (msg.sender === "system") {
-      if (msg.text.startsWith("⬡ Crayon v")) {
-        const [crayonPart, restPart] = msg.text.split(" · Workspace: ");
-        const version = crayonPart.split(" v")[1];
-        return (
-          <Box key={msg.id} flexDirection="row" marginBottom={1}>
-            <Text color={theme.subtle}>⬡ </Text>
-            {"Crayon".split("").map((char, i) => (
-              <Text key={i} color={crayonColors[i % crayonColors.length]} bold>{char}</Text>
-            ))}
-            <Text color={theme.subtle}> v{version} · Workspace: {restPart}</Text>
-          </Box>
-        );
-      }
-
       if (msg.toolCall) {
         const tc = msg.toolCall;
-        const isRunning = tc.status === "running";
         const isError = tc.status === "error";
-        
-        const icon = isRunning ? "◓" : isError ? "✗" : "└";
-        const iconColor = isRunning ? theme.brand : isError ? theme.warning : theme.subtle;
-        const textColor = isRunning ? theme.subtle : isError ? theme.warning : theme.text;
-        
-        // Compute details to render below
-        let detailsComponent: React.ReactNode = null;
-        if (!isRunning && tc.result) {
-          const res = tc.result;
-          if (tc.name === "terminal") {
-            detailsComponent = renderTerminalOutput(res.stdout, res.stderr);
-          } else if (tc.name === "grep" || tc.name === "search_codebase") {
-            detailsComponent = renderMatches(res.matches);
-          }
+        const bulletColor = isError ? theme.error : theme.success;
+        const { verb, target, detail } = formatToolResult(tc.name, tc.args, tc.result, isError);
+
+        let details: React.ReactNode = null;
+        if (tc.result && !isError) {
+          if (tc.name === "terminal") details = renderTerminalOutput(tc.result.stdout, tc.result.stderr);
+          else if (tc.name === "grep" || tc.name === "search_codebase") details = renderMatches(tc.result.matches);
         }
-        
+        const hasBranch = !!(msg.diff || details || detail);
+
         return (
-          <Box key={msg.id} flexDirection="column" marginBottom={0}>
+          <Box key={msg.id} flexDirection="column">
             <Box flexDirection="row">
-              <Text color={iconColor}>{icon} </Text>
-              <Text color={textColor}>{msg.text}</Text>
+              <Text color={bulletColor}>⏺ </Text>
+              <Box flexGrow={1}>
+                <Text color={isError ? theme.error : theme.text} bold>{verb}</Text>
+                {target ? <Text color={theme.subtle}>({target})</Text> : null}
+              </Box>
             </Box>
-            {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
-            {detailsComponent}
+            {hasBranch && (
+              <Box flexDirection="row">
+                <Text color={theme.border}>  ⎿ </Text>
+                <Box flexDirection="column" flexGrow={1}>
+                  {detail ? <Text color={isError ? theme.error : theme.subtle} dimColor={!isError}>{detail}</Text> : null}
+                  {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
+                  {details}
+                </Box>
+              </Box>
+            )}
           </Box>
         );
       }
@@ -1338,61 +1209,44 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       );
     }
 
-    // crayon sender
+    // assistant (crayon) — ⏺ bullet + finalized markdown. The body gets an
+    // explicit width so wrapped lines stay indented under the bullet instead of
+    // collapsing to column 0 (an Ink flexGrow-in-a-row wrapping quirk).
+    const bodyWidth = Math.max(20, (columns || 80) - 2);
     return (
-      <Box key={msg.id} flexDirection="column" marginBottom={2} paddingLeft={1} borderStyle="single" borderRight={false} borderTop={false} borderBottom={false} borderColor={theme.brand}>
-        <Box flexDirection="row" marginBottom={1} marginLeft={1}>
-          <Text bold>
-            {"Crayon".split("").map((char, i) => (
-              <Text key={i} color={crayonColors[i % crayonColors.length]}>{char}</Text>
-            ))}
-          </Text>
-        </Box>
-        {msg.reasoning && (
-          <ThinkingMessage thinking={msg.reasoning} isCollapsed={true} />
-        )}
-        {msg.text && (
-          <Box flexDirection="column" marginLeft={1}>
-            {renderMarkdown(msg.text)}
+      <Box key={msg.id} flexDirection="column" marginBottom={1}>
+        {msg.reasoning && <ThinkingMessage thinking={msg.reasoning} isCollapsed={true} />}
+        <Box flexDirection="row">
+          <Text color={theme.brand}>⏺ </Text>
+          <Box flexDirection="column" width={bodyWidth}>
+            {msg.text ? renderMarkdown(msg.text) : null}
           </Box>
-        )}
+        </Box>
       </Box>
     );
   };
 
-  // Sliding window: when scrolled up, show older messages.
-  // scrollOffset=0 means live bottom view; scrollOffset=N means scrolled N messages up.
-  const WINDOW = 80; // max messages rendered at once
-  const totalMessages = history.length;
-  const endIdx   = scrollOffset > 0 ? totalMessages - scrollOffset : totalMessages;
-  const startIdx = Math.max(0, endIdx - WINDOW);
-  const visibleHistory = history.slice(startIdx, endIdx);
-  const olderCount = startIdx; // messages above the window
-  const atBottom = scrollOffset === 0;
+  // Inline command menu state (driven by the single main input).
+  const cmdItems = commandMatches(currentInput, customCommands);
+  const showCmdMenu =
+    currentInput.startsWith("/") && !currentInput.includes(" ") &&
+    cmdItems.length > 0 && !isExecuting &&
+    !isModelSelectorOpen && !isColorPickerOpen && !approvalRequest;
+  // Sliding window so the highlight stays visible when arrowing past the fold.
+  const CMD_MAX = 3;
+  const cmdSel = Math.min(cmdIndex, Math.max(0, cmdItems.length - 1));
+  const cmdStart = cmdSel >= CMD_MAX ? cmdSel - CMD_MAX + 1 : 0;
+  const cmdVisible = cmdItems.slice(cmdStart, cmdStart + CMD_MAX);
 
   return (
-    // height={rows} + overflow="hidden" tells Ink's yoga layout that this Box
-    // is exactly the viewport. Ink will never produce outputHeight >= rows,
-    // so the clearTerminal fallback in ink.js never fires.
-    // flexDirection="column" makes the footer (StatusBar) stick to the bottom.
-    <Box flexDirection="column" height={rows || 24} width="100%" overflow="hidden">
+    // No fixed viewport: finalized messages commit to native scrollback via
+    // <Static>; only the live region + input below re-render.
+    <Box flexDirection="column" width="100%">
 
-      {/* Scrollable history region — flexGrow takes all available space */}
-      <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingLeft={1} justifyContent="flex-end">
-        {/* "More above" indicator when scrolled into history */}
-        {olderCount > 0 && (
-          <Box paddingLeft={1}>
-            <Text color={theme.subtle} italic>↑ {olderCount} older message{olderCount !== 1 ? 's' : ''} — PgUp to scroll</Text>
-          </Box>
-        )}
-        {visibleHistory.map(renderMsg)}
-        {/* "At bottom" indicator when scrolled up */}
-        {!atBottom && (
-          <Box paddingLeft={1}>
-            <Text color={theme.subtle} italic>↓ {scrollOffset} newer message{scrollOffset !== 1 ? 's' : ''} — PgDn to scroll down</Text>
-          </Box>
-        )}
-      </Box>
+      {/* Committed history — rendered once each, lives in terminal scrollback */}
+      <Static items={history}>
+        {(msg) => renderMsg(msg)}
+      </Static>
 
       <Box flexShrink={0} flexDirection="column" paddingLeft={1}>
         {activePlan.length > 0 && currentStepIndex < activePlan.length && (
@@ -1404,29 +1258,22 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             {streamingReasoning && !streamingText && (
               <ThinkingMessage thinking={streamingReasoning} />
             )}
-            
+
+            {/* Live assistant text: render RAW while streaming (cheap, no
+                per-token markdown re-parse). It is re-rendered as finalized
+                markdown once committed to <Static> on completion. */}
             {streamingText && (
-              <Box flexDirection="column" marginBottom={1} borderStyle="single" borderRight={false} borderTop={false} borderBottom={false} borderColor={theme.brand}>
-                <Box flexDirection="row" marginBottom={1} marginLeft={1}>
-                  <Text bold>
-                    {"Crayon".split("").map((char, i) => {
-                      const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
-                      return <Text key={i} color={crayonColors[i % crayonColors.length]}>{char}</Text>
-                    })}
-                  </Text>
-                </Box>
-                {streamingReasoning && (
-                  <ThinkingMessage thinking={streamingReasoning} isCollapsed={true} />
-                )}
-                <Box flexDirection="column" marginLeft={1}>
-                  {renderMarkdown(streamingText, true)}
+              <Box flexDirection="row" marginBottom={1}>
+                <Text color={theme.brand}>⏺ </Text>
+                {/* Render through the SAME markdown+width path as the committed
+                    message, so finalizing causes no reflow / layout jump. */}
+                <Box flexDirection="column" width={Math.max(20, (columns || 80) - 2)}>
+                  {renderMarkdown(streamingText)}
                 </Box>
               </Box>
             )}
 
-            {/* Only show the animated progress when there's no streaming text yet —
-                prevents the "two sketching" bug where both the response text and
-                the progress animation render simultaneously */}
+            {/* Progress spinner only when no text is streaming yet */}
             {!streamingText && (
               <AgentProgress
                 statusText={getToolDisplay()}
@@ -1439,7 +1286,34 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
         {approvalRequest && (
           <Box flexDirection="column" borderStyle="single" borderColor={theme.warning} paddingX={1} marginY={1} width="100%">
-            {approvalRequest.type === "command" ? (
+            {approvalRequest.type === "plan" ? (
+              <Box flexDirection="column">
+                <Text color={theme.brand} bold>Plan ready — execute it?</Text>
+                <Box marginTop={1}>
+                  <SearchableSelect
+                    items={[
+                      { label: "Execute plan", value: "execute", description: "Switch to auto-edit and implement the plan above" },
+                      { label: "Keep planning", value: "keep", description: "Stay in plan mode; refine with another message" },
+                      { label: "Discard", value: "discard", description: "Do nothing" }
+                    ]}
+                    onSelect={(val) => {
+                      const plan = approvalRequest.plan as string;
+                      setApprovalRequest(null);
+                      if (val === "execute" && agentRef.current) {
+                        setAgentMode("auto-edit");
+                        agentModeRef.current = "auto-edit";
+                        agentRef.current.setPermissionMode("auto-edit" as any);
+                        pushMessage({ sender: "system", text: "Plan approved — executing in auto-edit mode." });
+                        runTask(agentRef.current, `Execute this approved implementation plan, step by step. Verify when done.\n\n${plan}`);
+                      } else if (val === "keep") {
+                        pushMessage({ sender: "system", text: "Staying in plan mode — send a message to refine the plan." });
+                      }
+                    }}
+                    onCancel={() => setApprovalRequest(null)}
+                  />
+                </Box>
+              </Box>
+            ) : approvalRequest.type === "command" ? (
               <Box flexDirection="column">
                 <Text color={theme.warning} bold>⚠️ Approve terminal command?</Text>
                 <Text color={theme.text} italic>  {approvalRequest.command}</Text>
@@ -1504,75 +1378,97 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         )}
       </Box>
 
-      <Box marginTop={1} paddingLeft={1} flexShrink={0}>
-        <Text color={theme.border}>{"─".repeat(40)}</Text>
-      </Box>
-
       {!approvalRequest && mode === "chat" && (
         <Box flexDirection="column" flexShrink={0}>
-          {isCommandPaletteOpen && (
-            <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
-              <Text color={theme.success} bold>Command Palette</Text>
-              <SearchableSelect
-                items={AVAILABLE_COMMANDS.map(c => ({
-                  label: c.cmd,
-                  value: c.cmd,
-                  description: c.desc + (c.usage ? `  ${c.usage}` : "")
-                }))}
-                placeholder="Search commands..."
-                onSelect={(val) => {
-                  setIsCommandPaletteOpen(false);
-                  handleSubmit(val);
-                }}
-                onCancel={() => setIsCommandPaletteOpen(false)}
-              />
+          {/* Inline command menu — filters as you type "/…", sits above the
+              single main input (Claude Code-style). */}
+          {showCmdMenu && (
+            <Box flexDirection="column" paddingLeft={2} marginBottom={1}>
+              {cmdVisible.map((c, i) => {
+                const actualIdx = cmdStart + i;
+                const sel = actualIdx === cmdSel;
+                return (
+                  <Box key={c.cmd} flexDirection="row">
+                    <Box width={2}><Text color={theme.brand}>{sel ? "❯" : " "}</Text></Box>
+                    <Box minWidth={11} marginRight={2}>
+                      <Text color={sel ? theme.brand : theme.text} bold={sel}>{c.cmd}</Text>
+                    </Box>
+                    <Box>
+                      <Text color={theme.subtle} dimColor={!sel}>
+                        {c.desc}{("usage" in c && c.usage) ? `  ${c.usage}` : ""}
+                      </Text>
+                    </Box>
+                  </Box>
+                );
+              })}
+              <Text color={theme.subtle} dimColor>
+                {"  "}
+                {cmdStart > 0 ? `↑${cmdStart} ` : ""}
+                {cmdStart + CMD_MAX < cmdItems.length ? `↓${cmdItems.length - (cmdStart + CMD_MAX)} · ` : ""}
+                ↑↓ select · ⏎ run · tab complete · esc clear
+              </Text>
             </Box>
           )}
-          
+
           {isModelSelectorOpen && (
             <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
-              <Text color={theme.success} bold>Select a model for {currentProvider}</Text>
+              <Text color={theme.subtle} dimColor>select model · {currentProvider}</Text>
               <SearchableSelect
                 items={availableModels}
-                placeholder="Search models..."
+                placeholder="model…"
                 onSelect={(val) => updateModel(val)}
                 onCancel={() => setIsModelSelectorOpen(false)}
               />
             </Box>
           )}
 
-          <Box marginTop={0} flexDirection="column" paddingLeft={1}>
-            <Box flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1}>
-              <Text bold>
-                {"crayon".split("").map((char, i) => {
-                  const crayonColors = ["#E0F7FA", "#B2EBF2", "#80DEEA", "#4DD0E1", "#26C6DA", "#00BCD4"];
-                  return <Text key={i} color={isExecuting ? theme.subtle : crayonColors[i % crayonColors.length]}>{char}</Text>
-                })}
-                <Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
-              </Text>
-              <TextInput 
-                focus={!isCommandPaletteOpen && !isModelSelectorOpen}
-                value={currentInput} 
-                onChange={(v) => { 
-                  if (Date.now() - modeSwitchTimeRef.current < 50 && v.endsWith("t")) {
-                    setCurrentInput(v.slice(0, -1));
-                    return;
-                  }
-                  if (v === "/") {
-                    setIsCommandPaletteOpen(true);
-                    setCurrentInput("");
-                  } else {
-                    setCurrentInput(v); 
-                  }
-                }} 
-                onSubmit={handleSubmit} 
+          {isColorPickerOpen && (
+            <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
+              <Text color={theme.subtle} dimColor>accent color</Text>
+              <SearchableSelect
+                items={ACCENTS.map((a) => ({ label: a.label, value: a.name, description: a.brand }))}
+                placeholder="color…"
+                onSelect={(val) => updateAccent(val)}
+                onCancel={() => setIsColorPickerOpen(false)}
               />
             </Box>
-            <Box paddingLeft={1}>
-              <Text color={theme.success}>⏸ {agentMode} mode on </Text>
-              <Text color={theme.subtle}>(Ctrl+T or Shift+Tab to cycle)</Text>
+          )}
+
+          {/* Hide the main prompt only while an overlay picker owns input, so
+              there is only ever one input field on screen. */}
+          {!isModelSelectorOpen && !isColorPickerOpen && (
+            <Box marginTop={0} flexDirection="column" paddingLeft={1}>
+              <Box flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1}>
+                <Text bold color={isExecuting ? theme.subtle : theme.brand}>
+                  crayon<Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
+                </Text>
+                <TextInput
+                  focus={!isModelSelectorOpen && !isColorPickerOpen}
+                  value={currentInput}
+                  onChange={(v) => {
+                    if (Date.now() - modeSwitchTimeRef.current < 50 && v.endsWith("t")) {
+                      setCurrentInput(v.slice(0, -1));
+                      return;
+                    }
+                    setCurrentInput(v);
+                  }}
+                  onSubmit={(v) => {
+                    const m = commandMatches(v, customCommandsRef.current);
+                    // Substitute the highlighted command only when no args typed yet.
+                    if (v.startsWith("/") && !v.includes(" ") && m.length > 0) {
+                      handleSubmit(m[Math.min(cmdIndex, m.length - 1)].cmd);
+                    } else {
+                      handleSubmit(v);
+                    }
+                  }}
+                />
+              </Box>
+              <Box paddingLeft={1}>
+                <Text color={theme.success}>⏸ {agentMode} mode on </Text>
+                <Text color={theme.subtle}>(Ctrl+T or Shift+Tab to cycle)</Text>
+              </Box>
             </Box>
-          </Box>
+          )}
         </Box>
       )}
 
@@ -1584,8 +1480,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         cost={cost}
         isExecuting={isExecuting}
         modelName={defaultModel}
-        scrollOffset={scrollOffset}
-        historyLength={history.length}
       />
     </Box>
   );
