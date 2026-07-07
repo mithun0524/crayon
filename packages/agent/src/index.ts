@@ -23,6 +23,7 @@ const CONCURRENT_SAFE_TOOLS = new Set([
   "read_file",
   "grep",
   "search_codebase",
+  "explain_codebase",
   "find_usages",
   "get_dependents",
   "get_dependencies",
@@ -154,6 +155,50 @@ export class CrayonAgent {
 
   setHistory(history: CoreMessage[]): void {
     this.history = history;
+  }
+
+  /**
+   * Propose short follow-up requests based on the last exchange — used by UI
+   * surfaces for one-click suggestion chips. Cheap single completion, does
+   * NOT touch conversation history. Returns [] on any failure.
+   */
+  async suggestFollowUps(count = 3): Promise<string[]> {
+    const recent = this.history.slice(-4).map((m) => {
+      const content =
+        typeof m.content === "string"
+          ? m.content
+          : m.content.map((p: any) => (p?.type === "text" ? p.text : "")).join(" ");
+      return `${m.role}: ${content.slice(0, 1500)}`;
+    });
+    if (recent.length === 0) return [];
+
+    try {
+      const { text } = await generateText({
+        model: getExecutionModel(this.config),
+        system:
+          `You suggest follow-up actions for a coding-assistant chat. Given the last exchange, ` +
+          `propose ${count} short (under 10 words), concrete, actionable next requests the user might click. ` +
+          `Respond with ONLY a JSON array of strings — no prose, no markdown.`,
+        prompt: recent.join("\n\n"),
+        maxTokens: 200,
+        abortSignal: AbortSignal.timeout(15_000),
+      });
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((s): s is string => typeof s === "string" && s.trim().length > 0).slice(0, count);
+        }
+      }
+      // Fallback: parse line-per-suggestion output
+      return text
+        .split("\n")
+        .map((l) => l.replace(/^[\s\d.\-*•"']+|["',]+$/g, "").trim())
+        .filter((l) => l.length > 4 && l.length < 90)
+        .slice(0, count);
+    } catch {
+      return [];
+    }
   }
 
   getContextFiles(): string[] {

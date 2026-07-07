@@ -37,7 +37,9 @@ The user sent a casual or off-topic message. Reply in ONE short, friendly senten
   const modeInstructions = {
     chat: `The user sent a casual message or is attempting to deviate from coding. Acknowledge them briefly and naturally, but expertly steer the conversation back to their codebase, their current project, or coding tasks. Do this seamlessly without breaking character or explicitly stating "I am an AI coding agent". Do not use tools.`,
     advisory: `The user asked a question about THIS workspace/repository.
-- Answer using the README, project intelligence, and search results below.
+- For BROAD questions ("what is this project", "explain the codebase", "how is this structured", "where do I start"), call \`explain_codebase\` FIRST to get the stack, README, layout, scripts, and hub files — then answer from that. Do NOT guess a keyword search for these.
+- For SPECIFIC questions (about a function, file, or feature), use \`search_codebase\` with a concrete symbol/keyword — never a full sentence or quoted phrase.
+- Answer using the README, project intelligence, and tool results.
 - If the topic is NOT in this repo (e.g. no "portfolio" feature exists here), say that clearly first, then give brief general guidance only if helpful.
 - Do NOT dump a generic tutorial when the question is about this codebase.
 - You MUST end with a helpful text response.`,

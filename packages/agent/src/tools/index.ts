@@ -555,9 +555,13 @@ export function createTools(ctx: ToolContext) {
 
     // concurrent: true | readonly: true | permission: none
     search_codebase: {
-      description: "Hybrid search: symbols + ripgrep + dependency graph. Best for finding relevant code.",
+      description:
+        "Hybrid search: symbols + ripgrep + dependency graph. Best for locating specific code by " +
+        "symbol name, identifier, or concrete keyword (e.g. 'parseConfig', 'auth middleware', 'retry'). " +
+        "Do NOT pass a whole question or a quoted phrase like 'my codebase' — it matches text literally " +
+        "and will return nothing. For broad 'what/how is this project' questions, call explain_codebase instead.",
       parameters: z.object({
-        query: z.string().describe("Natural language or symbol name to search for"),
+        query: z.string().describe("A symbol name, identifier, or short concrete keyword — not a full sentence"),
       }),
       execute: async ({ query }: { query: string }) => {
         const results = await ctx.indexer.search(query, 20);
@@ -572,6 +576,81 @@ export function createTools(ctx: ToolContext) {
         return {
           results: JSON.parse(capResult(raw)),
         };
+      },
+    },
+
+    // concurrent: true | readonly: true | permission: none
+    explain_codebase: {
+      description:
+        "Get a structured high-level overview of THIS repository in one call: detected stack " +
+        "(language/framework/package manager/test runner), README summary, top-level layout, " +
+        "package scripts, likely entry points, and the most-depended-on ('hub') files. " +
+        "Use this FIRST for broad questions like 'what is this project', 'explain the codebase', " +
+        "'how is this structured', or 'where do I start' — instead of guessing search queries.",
+      parameters: z.object({}),
+      execute: async () => {
+        const overview: Record<string, unknown> = {};
+
+        // 1. Detected stack
+        try {
+          const intel = (await ctx.indexer.getIntelligence?.()) ?? null;
+          if (intel) overview.stack = intel;
+        } catch { /* intelligence optional */ }
+
+        // 2. README summary
+        for (const name of ["README.md", "README", "readme.md", "docs/README.md"]) {
+          const abs = resolvePath(name);
+          if (existsSync(abs)) {
+            try {
+              const text = await readFile(abs, "utf8");
+              overview.readme = text.slice(0, 2000);
+              break;
+            } catch { /* try next */ }
+          }
+        }
+
+        // 3. package.json — name, description, scripts, entry points
+        const pkgAbs = resolvePath("package.json");
+        if (existsSync(pkgAbs)) {
+          try {
+            const pkg = JSON.parse(await readFile(pkgAbs, "utf8"));
+            overview.package = {
+              name: pkg.name,
+              description: pkg.description,
+              version: pkg.version,
+              scripts: pkg.scripts,
+              main: pkg.main,
+              bin: pkg.bin,
+              workspaces: pkg.workspaces,
+            };
+          } catch { /* malformed package.json */ }
+        }
+
+        // 4. Top-level layout (dirs + notable root files)
+        try {
+          const entries = await readdir(rootReal, { withFileTypes: true });
+          overview.layout = entries
+            .filter((e) => !e.name.startsWith(".") && e.name !== "node_modules")
+            .map((e) => (e.isDirectory() ? e.name + "/" : e.name))
+            .sort()
+            .slice(0, 60);
+        } catch { /* layout optional */ }
+
+        // 5. Hub files — most imported across the graph (architectural centers)
+        try {
+          const graph = ctx.indexer.getGraph();
+          const files = ctx.indexer.getAllFiles?.();
+          if (files && graph) {
+            const ranked = [...files.keys()]
+              .map((f) => ({ file: f, dependents: graph.getDependents(f).length }))
+              .filter((r) => r.dependents > 0)
+              .sort((a, b) => b.dependents - a.dependents)
+              .slice(0, 12);
+            if (ranked.length) overview.hubFiles = ranked;
+          }
+        } catch { /* graph optional */ }
+
+        return JSON.parse(capResult(JSON.stringify(overview)));
       },
     },
 
