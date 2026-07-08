@@ -26,6 +26,14 @@ vi.mock("./evaluator/check.js", () => ({
   runEvaluation: async () => (ev.queue.length ? ev.queue.shift() : null),
 }));
 
+// ── Stub createPlan (keep classifyTask real) so planning doesn't consume
+// scripted model turns; tests opt into a plan via pl.steps. ─────────────
+const pl = vi.hoisted(() => ({ steps: [] as string[] }));
+vi.mock("./planner/plan.js", async (orig) => {
+  const actual = await orig<typeof import("./planner/plan.js")>();
+  return { ...actual, createPlan: async () => pl.steps };
+});
+
 // ── Mock the heavy indexer (no tree-sitter / LanceDB in unit tests) ───
 vi.mock("crayon-indexer", () => {
   class CodeIndexer {
@@ -85,6 +93,7 @@ describe("CrayonAgent.run() — core loop", () => {
     root = mkdtempSync(path.join(tmpdir(), "crayon-loop-"));
     events = [];
     ev.queue = [];
+    pl.steps = [];
     h.model = null;
   });
 
@@ -141,6 +150,23 @@ describe("CrayonAgent.run() — core loop", () => {
     const evalEvents = events.filter((e) => e.type === "eval") as any[];
     expect(evalEvents.length).toBeGreaterThanOrEqual(1);
     expect(evalEvents.at(-1)!.passed).toBe(true);
+    expect(result.success).toBe(true);
+  });
+
+  it("coding: emits a plan event and grounds the run with it", async () => {
+    pl.steps = ["Create config.ts", "Wire it into index", "Add a test"];
+    ev.queue = [{ passed: true, command: "test", exitCode: 0, stdout: "ok", stderr: "" }];
+    h.model = scriptedModel([
+      [toolCallPart("write_file", { path: "config.ts", content: "export const c = {};\n" }), finishPart("tool-calls")],
+      [textPart("Added config.ts."), finishPart("stop")],
+    ]).model;
+    const agent = makeAgent(root, events);
+    const result = await agent.run("implement a config module");
+    agent.close();
+
+    const planEvents = events.filter((e) => e.type === "plan") as any[];
+    expect(planEvents.length).toBe(1);
+    expect(planEvents[0].steps).toEqual(["Create config.ts", "Wire it into index", "Add a test"]);
     expect(result.success).toBe(true);
   });
 

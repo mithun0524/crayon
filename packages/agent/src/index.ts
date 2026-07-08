@@ -4,7 +4,7 @@ import { CodeIndexer } from "crayon-indexer";
 import type { AgentConfig, AgentEvent, AgentResult } from "./types.js";
 import { WorkingMemory } from "./memory/working.js";
 import { EpisodicMemory } from "./memory/episodic.js";
-import { classifyTask, type TaskMode } from "./planner/plan.js";
+import { classifyTask, createPlan, type TaskMode } from "./planner/plan.js";
 import { buildStaticSystemPrompt, buildDynamicContext } from "./context/manager.js";
 import { getExecutionModel } from "./models/router.js";
 import type { ModelConfig } from "./models/router.js";
@@ -595,6 +595,23 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
 
     let totalSessionCost = 0;
     const MAX_SESSION_COST = 2.00; // Hard limit to prevent runaway usage
+
+    // Decompose non-trivial coding tasks into an execution plan up front. This
+    // grounds the loop (the plan is injected into dynamic context) and gives
+    // the UI a checklist via the `plan` event. Best-effort — a planning
+    // failure never blocks the actual work. Plan mode produces its own plan.
+    if (mode === "coding" && !planningOnly && !options.signal?.aborted) {
+      this.emit({ type: "thinking", content: "Planning the task..." });
+      try {
+        const generated = await createPlan(task, modelConfig);
+        if (generated.length > 1) {
+          plan.push(...generated);
+          this.emit({ type: "plan", steps: generated });
+        }
+      } catch {
+        /* planning is optional — proceed without it */
+      }
+    }
 
     while (evalRetries <= maxEvalRetries) {
       if (options.signal?.aborted) {
