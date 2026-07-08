@@ -81,6 +81,50 @@ ${modeInstructions}
 - **Before reporting that a task is complete, you MUST verify that your changes work.** Execute a terminal command (such as compiling the project, running unit tests, or running a lint/check script) to verify your changes. If verification is impossible, state this explicitly.`;
 }
 
+/**
+ * Collect durable instruction files (CLAUDE.md / AGENTS.md / .crayon.md) from
+ * the workspace root down to the directory of the current file. Root-level
+ * rules appear first; deeper, more-specific rules appear later so they take
+ * precedence. Each file is capped so a huge doc can't dominate the prompt.
+ */
+async function collectDurableMemory(workspaceRoot: string, currentFile?: string): Promise<string> {
+  const NAMES = ["CLAUDE.md", "AGENTS.md", ".crayon.md"];
+  const PER_FILE_CAP = 4000;
+
+  // Build the chain of directories from root → current file's directory.
+  const dirs: string[] = [workspaceRoot];
+  if (currentFile) {
+    const absFile = path.isAbsolute(currentFile) ? currentFile : path.join(workspaceRoot, currentFile);
+    const rel = path.relative(workspaceRoot, path.dirname(absFile));
+    // Only descend when the file is inside the workspace.
+    if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+      let acc = workspaceRoot;
+      for (const seg of rel.split(path.sep).filter(Boolean)) {
+        acc = path.join(acc, seg);
+        dirs.push(acc);
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  let out = "";
+  for (const dir of dirs) {
+    for (const name of NAMES) {
+      const p = path.join(dir, name);
+      if (seen.has(p) || !existsSync(p)) continue;
+      seen.add(p);
+      try {
+        const content = (await readFile(p, "utf-8")).slice(0, PER_FILE_CAP);
+        const label = path.relative(workspaceRoot, p) || name;
+        out += `\n### From ${label}:\n${content}\n`;
+      } catch {
+        /* unreadable — skip */
+      }
+    }
+  }
+  return out;
+}
+
 export async function buildDynamicContext(options: ContextOptions): Promise<string> {
   const {
     task,
@@ -96,14 +140,22 @@ export async function buildDynamicContext(options: ContextOptions): Promise<stri
   } = options;
 
   const searchResults = mode === "chat" ? [] : await indexer.search(task, 15);
-  const fileContext = searchResults
-    .slice(0, 10)
-    .map((r) => {
-      const sym = r.symbol ? ` (symbol: ${r.symbol})` : "";
-      const snippet = r.snippet ? `: ${r.snippet.slice(0, 100)}` : "";
-      return `- ${r.path}:${r.line ?? "?"}${sym}${snippet}`;
-    })
-    .join("\n");
+  // Budget the relevant-files list by characters instead of a blind top-N.
+  // Results arrive ranked by the indexer's hybrid score; we take from the top
+  // until the budget is spent, always keeping at least the 3 best matches.
+  const FILE_LIST_BUDGET = 2500;
+  const RELEVANT_KEEP_MIN = 3;
+  const fileLines: string[] = [];
+  let fileBudgetUsed = 0;
+  for (const r of searchResults) {
+    const sym = r.symbol ? ` (symbol: ${r.symbol})` : "";
+    const snippet = r.snippet ? `: ${r.snippet.slice(0, 160).replace(/\s+/g, " ").trim()}` : "";
+    const line = `- ${r.path}:${r.line ?? "?"}${sym}${snippet}`;
+    if (fileBudgetUsed + line.length > FILE_LIST_BUDGET && fileLines.length >= RELEVANT_KEEP_MIN) break;
+    fileLines.push(line);
+    fileBudgetUsed += line.length + 1;
+  }
+  const fileContext = fileLines.join("\n");
 
   let readmeExcerpt = "";
   if (mode === "advisory") {
@@ -118,18 +170,10 @@ export async function buildDynamicContext(options: ContextOptions): Promise<stri
     }
   }
 
-  // Read durable project memories (CLAUDE.md or .crayon.md)
-  let durableMemory = "";
-  const memoryFiles = ["CLAUDE.md", ".crayon.md"];
-  for (const mf of memoryFiles) {
-    const memPath = path.join(workspaceRoot, mf);
-    if (existsSync(memPath)) {
-      try {
-        const content = await readFile(memPath, "utf-8");
-        durableMemory += `\n### From ${mf}:\n${content}\n`;
-      } catch {}
-    }
-  }
+  // Read durable project memories from the CLAUDE.md / AGENTS.md / .crayon.md
+  // hierarchy: workspace root first (general rules), then each directory down
+  // to the current file (more specific rules come later = higher priority).
+  const durableMemory = await collectDurableMemory(workspaceRoot, currentFile);
 
   const todoPath = path.join(workspaceRoot, ".crayon.todo");
   let todoMemory = "";
