@@ -208,6 +208,48 @@ describe("CrayonAgent.run() — core loop", () => {
     expect(textOf()).toContain("42");
   });
 
+  it("drives a multi-step tool sequence itself (read, then read, then answer)", async () => {
+    writeFileSync(path.join(root, "a.ts"), "export const a = 1;\n");
+    writeFileSync(path.join(root, "b.ts"), "export const b = 2;\n");
+    h.model = scriptedModel([
+      [toolCallPart("read_file", { path: "a.ts" }, "c1"), finishPart("tool-calls")],
+      [toolCallPart("read_file", { path: "b.ts" }, "c2"), finishPart("tool-calls")],
+      [textPart("a=1, b=2."), finishPart("stop")],
+    ]).model;
+    const agent = makeAgent(root, events);
+    const result = await agent.run("what are a and b");
+    agent.close();
+
+    const reads = (events.filter((e) => e.type === "tool_call") as any[]).filter((e) => e.name === "read_file");
+    expect(reads.length).toBe(2);
+    expect(events.filter((e) => e.type === "tool_result").length).toBe(2);
+    expect(textOf()).toContain("a=1, b=2");
+    expect(result.success).toBe(true);
+  });
+
+  it("executes multiple read-only tool calls from a single turn", async () => {
+    writeFileSync(path.join(root, "a.ts"), "export const a = 1;\n");
+    writeFileSync(path.join(root, "b.ts"), "export const b = 2;\n");
+    // Two read_file calls in ONE turn → run concurrently, both results returned.
+    h.model = scriptedModel([
+      [
+        toolCallPart("read_file", { path: "a.ts" }, "p1"),
+        toolCallPart("read_file", { path: "b.ts" }, "p2"),
+        finishPart("tool-calls"),
+      ],
+      [textPart("Read both files."), finishPart("stop")],
+    ]).model;
+    const agent = makeAgent(root, events);
+    const result = await agent.run("what do a.ts and b.ts contain");
+    agent.close();
+
+    const resultEvents = events.filter((e) => e.type === "tool_result") as any[];
+    expect(resultEvents.length).toBe(2);
+    const ids = resultEvents.map((e) => e.id).sort();
+    expect(ids).toEqual(["p1", "p2"]);
+    expect(result.success).toBe(true);
+  });
+
   it("parses <thinking> tags out of the text stream into reasoning", async () => {
     h.model = scriptedModel([
       [
