@@ -31,6 +31,39 @@ describe("EpisodicMemory", () => {
     memory.close();
   });
 
+  it("ranks recall by lexical relevance, not recency (no embedder)", async () => {
+    dir = mkdtempSync(path.join(tmpdir(), "crayon-test-"));
+    const memory = new EpisodicMemory(dir); // no OPENAI key in tests → lexical
+    const base = new Date().toISOString();
+    memory.save({ task: "add authentication middleware", actions: "[]", outcome: "done", success: true, timestamp: base });
+    memory.save({ task: "fix the CSS navbar spacing", actions: "[]", outcome: "done", success: true, timestamp: base });
+    memory.save({ task: "write docs for the readme", actions: "[]", outcome: "done", success: true, timestamp: base });
+
+    // Query relevant to the FIRST (oldest) episode — recency would rank it last.
+    const relevant = await memory.getRelevant("update authentication login flow", 1);
+    expect(relevant).toHaveLength(1);
+    expect(relevant[0].task).toBe("add authentication middleware");
+    memory.close();
+  });
+
+  it("ranks recall by semantic similarity when an embedder is provided", async () => {
+    dir = mkdtempSync(path.join(tmpdir(), "crayon-test-"));
+    // Toy embedder: map text to a 2-D vector by keyword presence.
+    const embed = async (t: string) => [
+      /auth|login|session/i.test(t) ? 1 : 0,
+      /css|style|navbar|ui/i.test(t) ? 1 : 0,
+    ];
+    const memory = new EpisodicMemory(dir, { embed });
+    const base = new Date().toISOString();
+    memory.save({ task: "auth session handling", actions: "[]", outcome: "ok", success: true, timestamp: base });
+    memory.save({ task: "navbar css tweaks", actions: "[]", outcome: "ok", success: true, timestamp: base });
+
+    const relevant = await memory.getRelevant("fix the login session bug", 1);
+    expect(relevant).toHaveLength(1);
+    expect(relevant[0].task).toBe("auth session handling");
+    memory.close();
+  });
+
   it("stores semantic memory", () => {
     dir = mkdtempSync(path.join(tmpdir(), "crayon-test-"));
     const memory = new EpisodicMemory(dir);

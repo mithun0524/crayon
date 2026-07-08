@@ -184,8 +184,9 @@ export async function buildDynamicContext(options: ContextOptions): Promise<stri
     } catch {}
   }
 
-  const recentEpisodes = episodicMemory
-    .getRecent(3)
+  // Recall past episodes by RELEVANCE to the current task (semantic when an
+  // embedder is available, else lexical) rather than pure recency.
+  const relevantEpisodes = (await episodicMemory.getRelevant(task, 3))
     .map((e) => `- [${e.success ? "OK" : "FAIL"}] ${e.task}: ${e.outcome.slice(0, 100)}`)
     .join("\n");
 
@@ -217,8 +218,8 @@ ${readmeExcerpt ? `## README (excerpt)\n${readmeExcerpt}\n` : ""}
 
 ${durableMemory ? `## Project Instructions (Durable Rules)\n${durableMemory}\n` : ""}
 ${todoMemory}
-## Past Sessions
-${recentEpisodes || "None."}
+## Relevant Past Sessions
+${relevantEpisodes || "None."}
 
 ## Session Memory
 ${semantic || "None."}

@@ -41,6 +41,7 @@ describe("manager", () => {
 
       const mockEpisodicMemory = {
         getRecent: vi.fn().mockReturnValue([]),
+        getRelevant: vi.fn().mockResolvedValue([]),
         getSemanticSummary: vi.fn().mockReturnValue(""),
       } as unknown as EpisodicMemory;
 
@@ -81,6 +82,7 @@ describe("manager", () => {
       const wm = { getRecentToolOutputs: vi.fn().mockReturnValue("") } as unknown as WorkingMemory;
       const em = {
         getRecent: vi.fn().mockReturnValue([]),
+        getRelevant: vi.fn().mockResolvedValue([]),
         getSemanticSummary: vi.fn().mockReturnValue(""),
       } as unknown as EpisodicMemory;
 
@@ -122,6 +124,7 @@ describe("manager", () => {
       const wm = { getRecentToolOutputs: vi.fn().mockReturnValue("") } as unknown as WorkingMemory;
       const em = {
         getRecent: vi.fn().mockReturnValue([]),
+        getRelevant: vi.fn().mockResolvedValue([]),
         getSemanticSummary: vi.fn().mockReturnValue(""),
       } as unknown as EpisodicMemory;
 
