@@ -31,6 +31,9 @@ const CONCURRENT_SAFE_TOOLS = new Set([
   "list_directory",
   "git_status",
   "git_diff",
+  "web_search",
+  "list_background",
+  "read_background_output",
   "thinking",
 ]);
 
@@ -594,7 +597,8 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
     const maxSteps = mode === "chat" ? 1 : mode === "advisory" ? 12 : (this.config.maxSteps ?? 25);
 
     let totalSessionCost = 0;
-    const MAX_SESSION_COST = 2.00; // Hard limit to prevent runaway usage
+    // Hard limit to prevent runaway usage — configurable per run / via env.
+    const MAX_SESSION_COST = this.config.maxSessionCost ?? (Number(process.env.CRAYON_MAX_COST) || 2.0);
 
     // Decompose non-trivial coding tasks into an execution plan up front. This
     // grounds the loop (the plan is injected into dynamic context) and gives

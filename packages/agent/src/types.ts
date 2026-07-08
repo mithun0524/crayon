@@ -33,6 +33,8 @@ export interface AgentConfig {
   googleApiKey?: string;
   maxSteps?: number;
   maxEvalRetries?: number;
+  /** Hard USD ceiling for one run's model spend (default 2.00; env CRAYON_MAX_COST). */
+  maxSessionCost?: number;
   permissionMode?: PermissionMode;
   onEvent?: (event: AgentEvent) => void;
   approveCommand?: (command: string) => Promise<boolean>;

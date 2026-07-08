@@ -170,6 +170,40 @@ describe("file tools", () => {
     expect(existsSync(path.join(root, "sub/created.ts"))).toBe(true);
   });
 
+  it("manages background processes: start, list, read output, kill", async () => {
+    const tools = createTools(makeCtx(root));
+    const started: any = await tools.terminal.execute({ command: "echo bg-marker && sleep 30", background: true });
+    expect(started.pid).toBeGreaterThan(0);
+    try {
+      const list: any = await tools.list_background.execute({});
+      const mine = list.jobs.find((j: any) => j.pid === started.pid);
+      expect(mine).toBeTruthy();
+      expect(mine.running).toBe(true);
+
+      // Give the echo a moment to flush to the log, then tail it.
+      await new Promise((r) => setTimeout(r, 400));
+      const out: any = await tools.read_background_output.execute({ pid: started.pid });
+      expect(out.output).toContain("bg-marker");
+
+      const killed: any = await tools.kill_background.execute({ pid: started.pid });
+      expect(killed.success).toBe(true);
+    } finally {
+      try { process.kill(started.pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+  });
+
+  it("read_background_output rejects an unknown pid", async () => {
+    const tools = createTools(makeCtx(root));
+    const res: any = await tools.read_background_output.execute({ pid: 2147483000 });
+    expect(res.success).toBe(false);
+  });
+
+  it("git mutating tools deny by default when no approver is wired (ask mode)", async () => {
+    const tools = createTools({ workspaceRoot: root, indexer: fakeIndexer, permissionMode: "ask" });
+    const res: any = await tools.git_create_branch.execute({ branch_name: "feature/x" });
+    expect(res.error).toBe("PERMISSION_DENIED_BY_USER");
+  });
+
   it("disables spawn_agent when allowSubagents is false", () => {
     const withSub = createTools(makeCtx(root));
     expect("spawn_agent" in withSub).toBe(true);
