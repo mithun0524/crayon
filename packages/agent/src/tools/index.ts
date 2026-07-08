@@ -71,6 +71,9 @@ function fuzzyReplace(content: string, oldStr: string, newStr: string): string |
   const c = strip(content);
   const o = strip(oldStr);
   if (o.out.length === 0) return null;
+  // Guard against a short needle uniquely (but wrongly) matching somewhere:
+  // require enough signal that a whitespace-insensitive hit is meaningful.
+  if (o.out.length < 3) return null;
 
   const first = c.out.indexOf(o.out);
   if (first === -1) return null;
@@ -279,17 +282,19 @@ export function createTools(ctx: ToolContext) {
         const occurrences = content.split(old_string).length - 1;
 
         let newContent: string;
+        let fuzzyUsed = false;
         if (occurrences === 1) {
           newContent = content.replace(old_string, new_string);
         } else if (occurrences > 1) {
           return { success: false, error: notReadWarning + `old_string found ${occurrences} times. Provide more context to make it unique.` };
         } else {
-          // Exact match failed — try a whitespace-tolerant line match before giving up.
+          // Exact match failed — try a whitespace-tolerant match before giving up.
           const fuzzy = fuzzyReplace(content, old_string, new_string);
           if (fuzzy === null) {
             return { success: false, error: notReadWarning + "old_string not found in file (also tried a whitespace-insensitive match). Read the file and copy the exact text to replace." };
           }
           newContent = fuzzy;
+          fuzzyUsed = true;
         }
 
         const approved = await checkEditPermission(filePath, newContent);
@@ -304,7 +309,91 @@ export function createTools(ctx: ToolContext) {
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
 
         const result: Record<string, unknown> = { success: true, path: filePath, diff };
-        if (notReadWarning) result.warning = notReadWarning.trim();
+        // A fuzzy match landed the edit despite an inexact old_string — surface
+        // it so the model/UI can verify it hit the intended location.
+        const warnings = [
+          notReadWarning.trim(),
+          fuzzyUsed ? "Applied via whitespace-insensitive match — verify the change landed where intended." : "",
+        ].filter(Boolean);
+        if (warnings.length) result.warning = warnings.join(" ");
+        return result;
+      },
+    },
+
+    // concurrent: false | readonly: false | permission: ask
+    multi_edit: {
+      description:
+        "Apply several search/replace edits to a SINGLE file, in order, ATOMICALLY. " +
+        "Each edit's old_string must match exactly once in the file as it stands after the " +
+        "previous edits. If ANY edit fails to apply, nothing is written. Prefer this over " +
+        "multiple edit_file calls on the same file.",
+      parameters: z.object({
+        path: z.string().describe("Relative path to the file"),
+        edits: z
+          .array(
+            z.object({
+              old_string: z.string().describe("Exact text to find (unique after prior edits)"),
+              new_string: z.string().describe("Replacement text"),
+            })
+          )
+          .min(1)
+          .describe("Edits applied sequentially; all-or-nothing"),
+      }),
+      execute: async ({ path: filePath, edits }: { path: string; edits: Array<{ old_string: string; new_string: string }> }) => {
+        const absPath = resolvePath(filePath);
+        if (!existsSync(absPath)) {
+          return { success: false, error: `File not found: ${filePath}. Use write_file for new files.` };
+        }
+        const stats = await stat(absPath);
+        if (stats.size > 2 * 1024 * 1024) {
+          throw new Error("File is too large (>2MB).");
+        }
+
+        const notReadWarning = ctx.fileState && !ctx.fileState.hasRead(filePath)
+          ? "Warning: You have not read this file yet. Read it first to avoid overwriting changes. "
+          : "";
+
+        const original = await readFile(absPath, "utf-8");
+        // Build the full result in memory; write only if EVERY edit applies.
+        let working = original;
+        let fuzzyUsed = false;
+        for (let i = 0; i < edits.length; i++) {
+          const { old_string, new_string } = edits[i];
+          const occurrences = working.split(old_string).length - 1;
+          if (occurrences === 1) {
+            working = working.replace(old_string, new_string);
+          } else if (occurrences > 1) {
+            return { success: false, error: notReadWarning + `edit #${i + 1}: old_string found ${occurrences} times. Provide more context to make it unique. No changes written.` };
+          } else {
+            const fuzzy = fuzzyReplace(working, old_string, new_string);
+            if (fuzzy === null) {
+              return { success: false, error: notReadWarning + `edit #${i + 1}: old_string not found. No changes written.` };
+            }
+            working = fuzzy;
+            fuzzyUsed = true;
+          }
+        }
+
+        if (working === original) {
+          return { success: false, error: "No changes — edits produced identical content." };
+        }
+
+        const approved = await checkEditPermission(filePath, working);
+        if (!approved) {
+          return { success: false, error: "PERMISSION_DENIED_BY_USER" };
+        }
+
+        const diff = createTwoFilesPatch(filePath, filePath, original, working);
+        await ctx.transaction?.snapshotFile(filePath);
+        await writeFile(absPath, working, "utf-8");
+        ctx.onEvent?.({ type: "edit", path: filePath, diff });
+
+        const result: Record<string, unknown> = { success: true, path: filePath, diff, editsApplied: edits.length };
+        const warnings = [
+          notReadWarning.trim(),
+          fuzzyUsed ? "One or more edits used a whitespace-insensitive match — verify." : "",
+        ].filter(Boolean);
+        if (warnings.length) result.warning = warnings.join(" ");
         return result;
       },
     },
