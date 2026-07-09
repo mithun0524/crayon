@@ -18,6 +18,8 @@ import { FileStateCache } from "./context/fileState.js";
 import { TransactionManager } from "./context/transaction.js";
 import { createLSPServerManager, type LSPServerManager } from "./services/lsp/LSPServerManager.js";
 import { createLSPTools } from "./tools/lsp.js";
+import { createWorktreeManager, type WorktreeManager } from "./services/WorktreeManager.js";
+import { createWorktreeTools } from "./tools/worktree.js";
 
 /** Tools that are safe to execute concurrently (read-only). Exported for consumer use. */
 export { CONCURRENT_SAFE_TOOLS };
@@ -40,6 +42,8 @@ const CONCURRENT_SAFE_TOOLS = new Set([
   "lsp_goto_definition",
   "lsp_find_references",
   "lsp_hover",
+  "worktree_list",
+  "worktree_diff",
 ]);
 
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -94,6 +98,7 @@ export class CrayonAgent {
   private transaction: TransactionManager;
   public activePtyWrite?: (data: string) => void;
   public lspManager: LSPServerManager;
+  public worktreeManager: WorktreeManager;
 
   public get tools() {
     const standardTools = createTools({
@@ -108,9 +113,11 @@ export class CrayonAgent {
       modelConfig: this.subagentModelConfig(),
       allowSubagents: this.config.allowSubagents,
       lspManager: this.lspManager,
+      worktreeManager: this.worktreeManager,
     });
     const lspTools = createLSPTools(this.lspManager);
-    return { ...standardTools, ...lspTools };
+    const worktreeTools = createWorktreeTools(this.worktreeManager);
+    return { ...standardTools, ...lspTools, ...worktreeTools };
   }
 
   /** Config forwarded to sub-agents so they inherit model/provider/credentials. */
@@ -138,6 +145,7 @@ export class CrayonAgent {
     });
     this.transaction = new TransactionManager(config.workspaceRoot);
     this.lspManager = createLSPServerManager(config.workspaceRoot);
+    this.worktreeManager = createWorktreeManager(config.workspaceRoot);
   }
 
   private emit(event: AgentEvent): void {
@@ -685,6 +693,7 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
             currentFile: options.currentFile,
             selection: options.selection,
             lspManager: this.lspManager,
+            worktreeManager: this.worktreeManager,
           });
         }
 

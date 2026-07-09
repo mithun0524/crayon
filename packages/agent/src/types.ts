@@ -4,6 +4,7 @@ import type { z } from "zod";
 import type { McpServerConfig } from "./tools/mcp.js";
 import type { FileStateCache } from "./context/fileState.js";
 import type { TransactionManager } from "./context/transaction.js";
+import type { WorktreeManager } from "./services/WorktreeManager.js";
 
 export type AgentEvent =
   | { type: "thinking"; content: string }
@@ -79,6 +80,7 @@ export interface ToolContext {
   signal?: AbortSignal;
   setActivePtyWrite?: (writeFn?: (data: string) => void) => void;
   lspManager?: any;
+  worktreeManager?: WorktreeManager;
   /**
    * Model/provider/API-key config carried through so `spawn_agent` can
    * construct a working sub-agent that inherits the parent's credentials.

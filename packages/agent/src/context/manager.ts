@@ -18,6 +18,7 @@ export interface ContextOptions {
   currentFile?: string;
   selection?: string;
   lspManager?: any;
+  worktreeManager?: any;
 }
 
 export async function buildSystemPrompt(options: ContextOptions): Promise<string> {
@@ -139,6 +140,7 @@ export async function buildDynamicContext(options: ContextOptions): Promise<stri
     currentFile,
     selection,
     lspManager,
+    worktreeManager,
   } = options;
 
   const searchResults = mode === "chat" ? [] : await indexer.search(task, 15);
@@ -223,6 +225,21 @@ Test runner: ${intelligence.testRunner ?? "unknown"}`
     }
   }
 
+  let activeSandboxes = "";
+  if (worktreeManager) {
+    try {
+      const sandboxes = await worktreeManager.list();
+      if (sandboxes.length > 0) {
+        const lines = sandboxes.map(
+          (wt: any) => `- ${wt.label} | branch: ${wt.branch} | path: ${wt.path} | created: ${wt.createdAt}`
+        );
+        activeSandboxes = `\n## Active Git Worktree Sandboxes\n${lines.join("\n")}\nUse worktree_diff to review or worktree_merge / worktree_remove to finalise.\n`;
+      }
+    } catch {
+      /* list failure is non-fatal — ignore */
+    }
+  }
+
   return `Here is the current workspace environment and session context:
 
 ## Workspace
@@ -244,5 +261,5 @@ ${plan.length > 0 ? `## Execution Plan\n${plan.map((s, i) => `${i + 1}. ${s}`).j
 ${fileContext || "No direct code matches for this query."}
 
 ${currentFile ? `## Current File\n${currentFile}\n` : ""}${selection ? `## Selected Code\n\`\`\`\n${selection}\n\`\`\`\n` : ""}## Recent Tool Outputs
-${workingMemory.getRecentToolOutputs(5) || "None."}${passiveDiagnostics}`;
+${workingMemory.getRecentToolOutputs(5) || "None."}${passiveDiagnostics}${activeSandboxes}`;
 }
