@@ -104,6 +104,57 @@ describe("file tools", () => {
     expect(res.error).toMatch(/found 2 times|unique/i);
   });
 
+  it("edit_file surfaces a warning when the fuzzy path is used", async () => {
+    await writeFile(path.join(root, "m.js"), "let v = a-b;\n", "utf-8");
+    const tools = createTools(makeCtx(root));
+    const res: any = await tools.edit_file.execute({ path: "m.js", old_string: "a - b", new_string: "a + b" });
+    expect(res.success).toBe(true);
+    expect(res.warning).toMatch(/whitespace-insensitive/i);
+  });
+
+  it("edit_file refuses a too-short fuzzy needle (mis-target guard)", async () => {
+    await writeFile(path.join(root, "f.ts"), "const zz = 1;\n", "utf-8");
+    const tools = createTools(makeCtx(root));
+    // "z z" strips to "zz" (2 chars) — below the min fuzzy length, so refuse.
+    const res: any = await tools.edit_file.execute({ path: "f.ts", old_string: "z z", new_string: "qq" });
+    expect(res.success).toBe(false);
+    expect(await readFile(path.join(root, "f.ts"), "utf-8")).toContain("zz");
+  });
+
+  it("multi_edit applies multiple edits atomically", async () => {
+    await writeFile(path.join(root, "f.ts"), "const a = 1;\nconst b = 2;\nconst c = 3;\n", "utf-8");
+    const tools = createTools(makeCtx(root));
+    const res: any = await tools.multi_edit.execute({
+      path: "f.ts",
+      edits: [
+        { old_string: "const a = 1;", new_string: "const a = 10;" },
+        { old_string: "const c = 3;", new_string: "const c = 30;" },
+      ],
+    });
+    expect(res.success).toBe(true);
+    expect(res.editsApplied).toBe(2);
+    const out = await readFile(path.join(root, "f.ts"), "utf-8");
+    expect(out).toContain("const a = 10;");
+    expect(out).toContain("const c = 30;");
+    expect(out).toContain("const b = 2;");
+  });
+
+  it("multi_edit writes nothing if any edit fails (atomic)", async () => {
+    await writeFile(path.join(root, "f.ts"), "const a = 1;\nconst b = 2;\n", "utf-8");
+    const tools = createTools(makeCtx(root));
+    const res: any = await tools.multi_edit.execute({
+      path: "f.ts",
+      edits: [
+        { old_string: "const a = 1;", new_string: "const a = 10;" }, // ok
+        { old_string: "not present anywhere", new_string: "x" }, // fails
+      ],
+    });
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/edit #2/);
+    // First edit must NOT have been written — the file is untouched.
+    expect(await readFile(path.join(root, "f.ts"), "utf-8")).toBe("const a = 1;\nconst b = 2;\n");
+  });
+
   it("write_file refuses to overwrite an existing file", async () => {
     await writeFile(path.join(root, "exists.ts"), "old", "utf-8");
     const tools = createTools(makeCtx(root));
@@ -117,6 +168,54 @@ describe("file tools", () => {
     const res: any = await tools.write_file.execute({ path: "sub/created.ts", content: "hi" });
     expect(res.success).toBe(true);
     expect(existsSync(path.join(root, "sub/created.ts"))).toBe(true);
+  });
+
+  it("manages background processes: start, list, read output, kill", async () => {
+    const tools = createTools(makeCtx(root));
+    const started: any = await tools.terminal.execute({ command: "echo bg-marker && sleep 30", background: true });
+    expect(started.pid).toBeGreaterThan(0);
+    try {
+      const list: any = await tools.list_background.execute({});
+      const mine = list.jobs.find((j: any) => j.pid === started.pid);
+      expect(mine).toBeTruthy();
+      expect(mine.running).toBe(true);
+
+      // Give the echo a moment to flush to the log, then tail it.
+      await new Promise((r) => setTimeout(r, 400));
+      const out: any = await tools.read_background_output.execute({ pid: started.pid });
+      expect(out.output).toContain("bg-marker");
+
+      const killed: any = await tools.kill_background.execute({ pid: started.pid });
+      expect(killed.success).toBe(true);
+    } finally {
+      try { process.kill(started.pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+  });
+
+  it("read_background_output rejects an unknown pid", async () => {
+    const tools = createTools(makeCtx(root));
+    const res: any = await tools.read_background_output.execute({ pid: 2147483000 });
+    expect(res.success).toBe(false);
+  });
+
+  it("git mutating tools deny by default when no approver is wired (ask mode)", async () => {
+    const tools = createTools({ workspaceRoot: root, indexer: fakeIndexer, permissionMode: "ask" });
+    const res: any = await tools.git_create_branch.execute({ branch_name: "feature/x" });
+    expect(res.error).toBe("PERMISSION_DENIED_BY_USER");
+  });
+
+  it("ask_user uses the interactive callback and returns the answer", async () => {
+    const ctx = { ...makeCtx(root), askUser: async (q: string) => `answer to: ${q}` };
+    const tools = createTools(ctx as any);
+    const res: any = await tools.ask_user.execute({ question: "which db?" });
+    expect(res.status).toBe("answered");
+    expect(res.answer).toBe("answer to: which db?");
+  });
+
+  it("ask_user falls back to stop-and-wait when no callback is wired", async () => {
+    const tools = createTools(makeCtx(root));
+    const res: any = await tools.ask_user.execute({ question: "which db?" });
+    expect(res.status).toBe("waiting_for_user");
   });
 
   it("disables spawn_agent when allowSubagents is false", () => {

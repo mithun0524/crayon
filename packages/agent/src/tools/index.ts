@@ -71,6 +71,9 @@ function fuzzyReplace(content: string, oldStr: string, newStr: string): string |
   const c = strip(content);
   const o = strip(oldStr);
   if (o.out.length === 0) return null;
+  // Guard against a short needle uniquely (but wrongly) matching somewhere:
+  // require enough signal that a whitespace-insensitive hit is meaningful.
+  if (o.out.length < 3) return null;
 
   const first = c.out.indexOf(o.out);
   if (first === -1) return null;
@@ -279,17 +282,19 @@ export function createTools(ctx: ToolContext) {
         const occurrences = content.split(old_string).length - 1;
 
         let newContent: string;
+        let fuzzyUsed = false;
         if (occurrences === 1) {
           newContent = content.replace(old_string, new_string);
         } else if (occurrences > 1) {
           return { success: false, error: notReadWarning + `old_string found ${occurrences} times. Provide more context to make it unique.` };
         } else {
-          // Exact match failed — try a whitespace-tolerant line match before giving up.
+          // Exact match failed — try a whitespace-tolerant match before giving up.
           const fuzzy = fuzzyReplace(content, old_string, new_string);
           if (fuzzy === null) {
             return { success: false, error: notReadWarning + "old_string not found in file (also tried a whitespace-insensitive match). Read the file and copy the exact text to replace." };
           }
           newContent = fuzzy;
+          fuzzyUsed = true;
         }
 
         const approved = await checkEditPermission(filePath, newContent);
@@ -304,7 +309,91 @@ export function createTools(ctx: ToolContext) {
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
 
         const result: Record<string, unknown> = { success: true, path: filePath, diff };
-        if (notReadWarning) result.warning = notReadWarning.trim();
+        // A fuzzy match landed the edit despite an inexact old_string — surface
+        // it so the model/UI can verify it hit the intended location.
+        const warnings = [
+          notReadWarning.trim(),
+          fuzzyUsed ? "Applied via whitespace-insensitive match — verify the change landed where intended." : "",
+        ].filter(Boolean);
+        if (warnings.length) result.warning = warnings.join(" ");
+        return result;
+      },
+    },
+
+    // concurrent: false | readonly: false | permission: ask
+    multi_edit: {
+      description:
+        "Apply several search/replace edits to a SINGLE file, in order, ATOMICALLY. " +
+        "Each edit's old_string must match exactly once in the file as it stands after the " +
+        "previous edits. If ANY edit fails to apply, nothing is written. Prefer this over " +
+        "multiple edit_file calls on the same file.",
+      parameters: z.object({
+        path: z.string().describe("Relative path to the file"),
+        edits: z
+          .array(
+            z.object({
+              old_string: z.string().describe("Exact text to find (unique after prior edits)"),
+              new_string: z.string().describe("Replacement text"),
+            })
+          )
+          .min(1)
+          .describe("Edits applied sequentially; all-or-nothing"),
+      }),
+      execute: async ({ path: filePath, edits }: { path: string; edits: Array<{ old_string: string; new_string: string }> }) => {
+        const absPath = resolvePath(filePath);
+        if (!existsSync(absPath)) {
+          return { success: false, error: `File not found: ${filePath}. Use write_file for new files.` };
+        }
+        const stats = await stat(absPath);
+        if (stats.size > 2 * 1024 * 1024) {
+          throw new Error("File is too large (>2MB).");
+        }
+
+        const notReadWarning = ctx.fileState && !ctx.fileState.hasRead(filePath)
+          ? "Warning: You have not read this file yet. Read it first to avoid overwriting changes. "
+          : "";
+
+        const original = await readFile(absPath, "utf-8");
+        // Build the full result in memory; write only if EVERY edit applies.
+        let working = original;
+        let fuzzyUsed = false;
+        for (let i = 0; i < edits.length; i++) {
+          const { old_string, new_string } = edits[i];
+          const occurrences = working.split(old_string).length - 1;
+          if (occurrences === 1) {
+            working = working.replace(old_string, new_string);
+          } else if (occurrences > 1) {
+            return { success: false, error: notReadWarning + `edit #${i + 1}: old_string found ${occurrences} times. Provide more context to make it unique. No changes written.` };
+          } else {
+            const fuzzy = fuzzyReplace(working, old_string, new_string);
+            if (fuzzy === null) {
+              return { success: false, error: notReadWarning + `edit #${i + 1}: old_string not found. No changes written.` };
+            }
+            working = fuzzy;
+            fuzzyUsed = true;
+          }
+        }
+
+        if (working === original) {
+          return { success: false, error: "No changes — edits produced identical content." };
+        }
+
+        const approved = await checkEditPermission(filePath, working);
+        if (!approved) {
+          return { success: false, error: "PERMISSION_DENIED_BY_USER" };
+        }
+
+        const diff = createTwoFilesPatch(filePath, filePath, original, working);
+        await ctx.transaction?.snapshotFile(filePath);
+        await writeFile(absPath, working, "utf-8");
+        ctx.onEvent?.({ type: "edit", path: filePath, diff });
+
+        const result: Record<string, unknown> = { success: true, path: filePath, diff, editsApplied: edits.length };
+        const warnings = [
+          notReadWarning.trim(),
+          fuzzyUsed ? "One or more edits used a whitespace-insensitive match — verify." : "",
+        ].filter(Boolean);
+        if (warnings.length) result.warning = warnings.join(" ");
         return result;
       },
     },
@@ -741,6 +830,108 @@ export function createTools(ctx: ToolContext) {
       },
     },
 
+    // concurrent: true | readonly: true | permission: none
+    list_background: {
+      description: "List background processes started this session (from terminal background:true), with pid, command, and whether each is still running.",
+      parameters: z.object({}),
+      execute: async () => {
+        const jobs = [...backgroundJobs.values()].map((j) => ({
+          pid: j.pid,
+          command: j.command,
+          logFile: j.logFile,
+          running: isAlive(j.pid),
+          startedAgoMs: Date.now() - j.startedAt,
+        }));
+        return { jobs };
+      },
+    },
+
+    // concurrent: true | readonly: true | permission: none
+    read_background_output: {
+      description: "Read the captured stdout/stderr of a background process by pid (tails the log). Use to check on a dev server, watcher, or long build.",
+      parameters: z.object({
+        pid: z.number().describe("pid returned by terminal background:true"),
+        max_length: z.number().optional().default(10000).describe("Max chars from the end of the log"),
+      }),
+      execute: async ({ pid, max_length }: { pid: number; max_length?: number }) => {
+        const job = backgroundJobs.get(pid);
+        if (!job) return { success: false, error: `No background job with pid ${pid} in this session.` };
+        if (!existsSync(job.logFileAbs)) return { success: false, error: "Log file not found (job may have produced no output yet)." };
+        const content = await readFile(job.logFileAbs, "utf-8");
+        const cap = max_length ?? 10000;
+        return {
+          pid,
+          running: isAlive(pid),
+          output: content.length > cap ? content.slice(-cap) : content,
+        };
+      },
+    },
+
+    // concurrent: false | readonly: false | permission: ask
+    kill_background: {
+      description: "Terminate a background process started this session, by pid.",
+      parameters: z.object({ pid: z.number().describe("pid to terminate") }),
+      execute: async ({ pid }: { pid: number }) => {
+        const job = backgroundJobs.get(pid);
+        if (!job) return { success: false, error: `No background job with pid ${pid} in this session.` };
+        const approved = await checkCommandPermission(`kill ${pid} (${job.command})`, false);
+        if (!approved) return { success: false, error: "PERMISSION_DENIED_BY_USER" };
+        try {
+          process.kill(pid, "SIGTERM");
+          backgroundJobs.delete(pid);
+          return { success: true, pid, command: job.command };
+        } catch (e: any) {
+          backgroundJobs.delete(pid);
+          return { success: false, error: e?.message || String(e) };
+        }
+      },
+    },
+
+    // concurrent: true | readonly: true | permission: none
+    web_search: {
+      description: "Search the web (DuckDuckGo) and return the top results (title, url, snippet). Use for documentation, error messages, or current information not in the codebase. No API key required.",
+      parameters: z.object({
+        query: z.string().describe("Search query"),
+        max_results: z.number().optional().default(5).describe("Max results (1-10)"),
+      }),
+      execute: async ({ query, max_results }: { query: string; max_results?: number }) => {
+        const limit = Math.max(1, Math.min(max_results ?? 5, 10));
+        try {
+          const res = await safeFetch(
+            `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+            ctx.signal ?? AbortSignal.timeout(10_000)
+          );
+          const html = await res.text();
+          const decode = (s: string) =>
+            s
+              .replace(/<[^>]+>/g, "")
+              .replace(/&amp;/g, "&")
+              .replace(/&lt;/g, "<")
+              .replace(/&gt;/g, ">")
+              .replace(/&quot;/g, '"')
+              .replace(/&#x27;|&#39;/g, "'")
+              .trim();
+          // DuckDuckGo wraps result URLs as /l/?uddg=<encoded>
+          const unwrap = (href: string) => {
+            const m = href.match(/[?&]uddg=([^&]+)/);
+            return m ? decodeURIComponent(m[1]) : href;
+          };
+          const anchorRe = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+          const snippetRe = /<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+          const snippets: string[] = [];
+          for (let m = snippetRe.exec(html); m; m = snippetRe.exec(html)) snippets.push(decode(m[1]));
+          const results: Array<{ title: string; url: string; snippet: string }> = [];
+          for (let m = anchorRe.exec(html); m && results.length < limit; m = anchorRe.exec(html)) {
+            results.push({ title: decode(m[2]), url: unwrap(m[1]), snippet: snippets[results.length] ?? "" });
+          }
+          if (results.length === 0) return { results: [], note: "No results parsed (DuckDuckGo markup may have changed)." };
+          return { results };
+        } catch (e: any) {
+          return { success: false, error: `web_search failed: ${e?.message || String(e)}` };
+        }
+      },
+    },
+
     // concurrent: false | readonly: false | permission: ask
     terminal: {
       description: "Run a shell command in the workspace directory. Dangerous commands require approval. Set background:true for long-running processes like dev servers (returns immediately with the pid; the process keeps running).",
@@ -1001,12 +1192,32 @@ async function listDirRecursive(
 /** Spawn a detached long-running process (dev server, watcher). Returns the
  *  pid immediately; stdout/stderr are redirected to a log file so the agent can
  *  read them later. The process outlives this tool call. */
+/** Registry of background jobs started this process, for list/tail/kill. */
+interface BgJob {
+  pid: number;
+  command: string;
+  logFileAbs: string;
+  logFile: string; // workspace-relative, for display
+  startedAt: number;
+}
+const backgroundJobs = new Map<number, BgJob>();
+
+/** True if a pid is still alive (signal 0 probes without killing). */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e: any) {
+    return e?.code === "EPERM"; // exists but not ours
+  }
+}
+
 async function runBackground(command: string, cwd: string): Promise<{ pid: number; logFile: string }> {
   const { open } = await import("node:fs/promises");
   const logDir = path.join(cwd, ".crayon", "logs");
   await mkdir(logDir, { recursive: true });
-  const logFile = path.join(logDir, `bg-${Date.now()}.log`);
-  const fh = await open(logFile, "a");
+  const logFileAbs = path.join(logDir, `bg-${Date.now()}.log`);
+  const fh = await open(logFileAbs, "a");
   const isWin = process.platform === "win32";
   const shell = isWin ? "powershell.exe" : "/bin/sh";
   const shellFlag = isWin ? "-Command" : "-c";
@@ -1018,7 +1229,10 @@ async function runBackground(command: string, cwd: string): Promise<{ pid: numbe
   });
   child.unref();
   await fh.close();
-  return { pid: child.pid ?? -1, logFile: path.relative(cwd, logFile) };
+  const pid = child.pid ?? -1;
+  const logFile = path.relative(cwd, logFileAbs);
+  if (pid > 0) backgroundJobs.set(pid, { pid, command, logFileAbs, logFile, startedAt: Date.now() });
+  return { pid, logFile };
 }
 
 function runCommand(command: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {

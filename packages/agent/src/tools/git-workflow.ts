@@ -5,6 +5,15 @@ import type { ToolContext } from "../types.js";
 export function createGitTools(ctx: ToolContext) {
   const git = simpleGit(ctx.workspaceRoot);
 
+  // Mirror the core tools' permission model: auto/bypass allow, plan blocks,
+  // otherwise ask — and DENY by default when no approver is wired (the old
+  // `?? true` silently allowed mutating git ops in that case).
+  const approve = async (command: string): Promise<boolean> => {
+    if (ctx.permissionMode === "bypass" || ctx.permissionMode === "auto") return true;
+    if (ctx.permissionMode === "plan") return false;
+    return (await ctx.approveCommand?.(command)) ?? false;
+  };
+
   return {
     // concurrent: false | readonly: false | permission: ask
     git_create_branch: {
@@ -13,7 +22,7 @@ export function createGitTools(ctx: ToolContext) {
         branch_name: z.string().describe("Name of the new branch"),
       }),
       execute: async ({ branch_name }: { branch_name: string }) => {
-        const approved = await ctx.approveCommand?.(`git checkout -b ${branch_name}`) ?? true;
+        const approved = await approve(`git checkout -b ${branch_name}`);
         if (!approved) return { error: "PERMISSION_DENIED_BY_USER" };
         
         try {
@@ -32,7 +41,7 @@ export function createGitTools(ctx: ToolContext) {
         message: z.string().optional().describe("Optional stash message"),
       }),
       execute: async ({ message }: { message?: string }) => {
-        const approved = await ctx.approveCommand?.(`git stash${message ? ` save "${message}"` : ''}`) ?? true;
+        const approved = await approve(`git stash${message ? ` save "${message}"` : ''}`);
         if (!approved) return { error: "PERMISSION_DENIED_BY_USER" };
         
         try {
@@ -49,7 +58,7 @@ export function createGitTools(ctx: ToolContext) {
       description: "Pop the latest stashed changes.",
       parameters: z.object({}),
       execute: async () => {
-        const approved = await ctx.approveCommand?.(`git stash pop`) ?? true;
+        const approved = await approve(`git stash pop`);
         if (!approved) return { error: "PERMISSION_DENIED_BY_USER" };
         
         try {
@@ -69,7 +78,7 @@ export function createGitTools(ctx: ToolContext) {
         branch: z.string().describe("Branch name to push"),
       }),
       execute: async ({ remote, branch }: { remote: string; branch: string }) => {
-        const approved = await ctx.approveCommand?.(`git push -u ${remote} ${branch}`) ?? true;
+        const approved = await approve(`git push -u ${remote} ${branch}`);
         if (!approved) return { error: "PERMISSION_DENIED_BY_USER" };
         
         try {

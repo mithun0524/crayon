@@ -24,6 +24,7 @@ import { loadCustomCommands, expandTemplate, type CustomCommand } from "../custo
 import { theme, ACCENTS, applyAccent } from "./theme.js";
 import { syntaxThemeDark } from "./syntaxTheme.js";
 import { AgentProgress } from "./components/AgentProgress.js";
+import { verbForTurn, formatDuration } from "./workingVerb.js";
 import { CrayonLogo } from "./components/CrayonLogo.js";
 import { Markdown } from "./Markdown.js";
 import { useTerminalSize } from "./hooks/useTerminalSize.js";
@@ -126,6 +127,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [, setThemeTick] = useState(0);
   const [availableModels, setAvailableModels] = useState<SelectOption[]>([]);
   const [customCommands, setCustomCommands] = useState<CustomCommand[]>([]);
+  // Claude-Code-style next-action hints proposed after each chat answer.
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  // Buffer for the free-text answer to an agent ask_user question.
+  const [askInput, setAskInput] = useState<string>("");
   const customCommandsRef = useRef<CustomCommand[]>([]);
   useEffect(() => { customCommandsRef.current = customCommands; }, [customCommands]);
   const [sessionId, setSessionId] = useState(() => {
@@ -276,6 +281,26 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             });
           });
         },
+        askUser: async (question) => {
+          const CONTINUE = "(No response — proceed using your best judgment.)";
+          if (!active || abortedRef.current) return CONTINUE;
+          return new Promise<string>((resolve) => {
+            // Auto-continue after 60s of no answer instead of hanging.
+            const timer = setTimeout(() => {
+              setApprovalRequest(null);
+              pushMessage({ sender: "system", text: "No response after 60s — continued without an answer." });
+              resolve(CONTINUE);
+            }, 60000);
+            setApprovalRequest({
+              type: "ask",
+              question,
+              resolve: (answer: string) => {
+                clearTimeout(timer);
+                resolve(answer && answer.trim() ? answer.trim() : CONTINUE);
+              },
+            });
+          });
+        },
       });
 
       agentRef.current = agent;
@@ -364,10 +389,21 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       resetStream();
       setStreamingReasoning("");
 
+      // Per-turn completed footer (Claude-Code idiom): "✻ Brewed for 3m 39s".
+      const { past } = verbForTurn(executionStartTime.current);
+      pushMessage({ sender: "system", text: `✻ ${past} for ${formatDuration(Date.now() - executionStartTime.current)}` });
+
       // Plan-approve gate: only when the agent actually ran in plan mode and
       // produced a plan (result.planned) — never for advisory/chat answers.
       if (mode === "chat" && result.planned && result.summary.trim()) {
         setApprovalRequest({ type: "plan", plan: result.summary });
+      } else if (mode === "chat" && agentRef.current) {
+        // Propose next-action hints (Claude-Code-style). Fire-and-forget; the
+        // user can ignore, pick by number, or just type something else.
+        agentRef.current
+          .suggestFollowUps(3)
+          .then((s) => { if (!abortedRef.current) setSuggestions(s); })
+          .catch(() => {});
       }
 
       if (mode === "run") {
@@ -547,6 +583,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
 
     if (approvalRequest) {
+      // The free-text "ask" prompt renders its own TextInput — let it own keys.
+      if (approvalRequest.type === "ask") return;
       const k = input.toLowerCase();
       if (approvalRequest.type === "command") {
         if (k === "y" || key.return) {
@@ -717,9 +755,16 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
   const handleSubmit = async (inputStr: string) => {
 
-    const trimmed = inputStr.trim();
+    let trimmed = inputStr.trim();
     if (!trimmed) return;
-    
+
+    // Pick a proposed next action by number ("1", "2", "3") while hints show.
+    if (suggestions.length > 0 && /^[1-9]$/.test(trimmed)) {
+      const pick = suggestions[Number(trimmed) - 1];
+      if (pick) trimmed = pick;
+    }
+    setSuggestions([]); // any submission clears the hints
+
     setInputHistory((prev) => [...prev, trimmed]);
     setInputHistoryIndex(-1);
     setCurrentInput("");
@@ -1286,7 +1331,28 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
         {approvalRequest && (
           <Box flexDirection="column" borderStyle="single" borderColor={theme.warning} paddingX={1} marginY={1} width="100%">
-            {approvalRequest.type === "plan" ? (
+            {approvalRequest.type === "ask" ? (
+              <Box flexDirection="column">
+                <Text color={theme.brand} bold>Crayon asked:</Text>
+                <Text color={theme.text}>  {approvalRequest.question}</Text>
+                <Box marginTop={1} flexDirection="row">
+                  <Text color={theme.brand}>❯ </Text>
+                  <TextInput
+                    focus
+                    value={askInput}
+                    onChange={setAskInput}
+                    onSubmit={(v) => {
+                      const resolve = approvalRequest.resolve;
+                      setApprovalRequest(null);
+                      setAskInput("");
+                      pushMessage({ sender: "user", text: v.trim() || "(no answer)" });
+                      resolve(v);
+                    }}
+                  />
+                </Box>
+                <Text color={theme.subtle} dimColor>{"  ⏎ answer · auto-continues after 60s"}</Text>
+              </Box>
+            ) : approvalRequest.type === "plan" ? (
               <Box flexDirection="column">
                 <Text color={theme.brand} bold>Plan ready — execute it?</Text>
                 <Box marginTop={1}>
@@ -1380,6 +1446,21 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
       {!approvalRequest && mode === "chat" && (
         <Box flexDirection="column" flexShrink={0}>
+          {/* Next-action hints — proposed after an answer; pick with a number,
+              or just keep typing. Hidden while the command menu is open. */}
+          {suggestions.length > 0 && !showCmdMenu && !isExecuting && !isModelSelectorOpen && !isColorPickerOpen && !currentInput.trim() && (
+            <Box flexDirection="column" paddingLeft={2} marginBottom={1}>
+              <Text color={theme.subtle} dimColor>Next:</Text>
+              {suggestions.map((s, i) => (
+                <Box key={i} flexDirection="row">
+                  <Box width={4} marginRight={1}><Text color={theme.brand}>{`  ${i + 1}.`}</Text></Box>
+                  <Box flexGrow={1}><Text color={theme.subtle}>{s}</Text></Box>
+                </Box>
+              ))}
+              <Text color={theme.subtle} dimColor>{"  type a number to run · or keep typing"}</Text>
+            </Box>
+          )}
+
           {/* Inline command menu — filters as you type "/…", sits above the
               single main input (Claude Code-style). */}
           {showCmdMenu && (

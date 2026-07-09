@@ -1,18 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
+import { verbForTurn, formatDuration } from "../workingVerb.js";
 
 interface AgentProgressProps {
   statusText: string;
   tokens?: number;
   startTime?: number;
-}
-
-function formatDuration(ms: number) {
-  const secs = Math.floor(ms / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  return `${mins}m ${secs % 60}s`;
 }
 
 // Braille spinner — every frame is exactly one cell wide, so the text after it
@@ -36,7 +30,8 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
   const spinnerColor = isStalled ? theme.warning : theme.brand;
 
   const kTokens = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
-  const label = statusText === "Thinking..." ? "Working" : statusText;
+  // Generic waiting → whimsical verb; a specific tool status stays as-is.
+  const label = statusText === "Thinking..." ? `${verbForTurn(startTime).present}…` : statusText;
 
   return (
     <Box flexDirection="row" marginTop={0}>

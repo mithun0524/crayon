@@ -1,10 +1,10 @@
 import pathModule from "node:path";
-import { streamText, generateText, tool, jsonSchema, type CoreMessage } from "ai";
+import { streamText, generateText, tool, jsonSchema, type CoreMessage, type LanguageModel } from "ai";
 import { CodeIndexer } from "crayon-indexer";
 import type { AgentConfig, AgentEvent, AgentResult } from "./types.js";
 import { WorkingMemory } from "./memory/working.js";
 import { EpisodicMemory } from "./memory/episodic.js";
-import { classifyTask, type TaskMode } from "./planner/plan.js";
+import { classifyTask, createPlan, type TaskMode } from "./planner/plan.js";
 import { buildStaticSystemPrompt, buildDynamicContext } from "./context/manager.js";
 import { getExecutionModel } from "./models/router.js";
 import type { ModelConfig } from "./models/router.js";
@@ -31,6 +31,9 @@ const CONCURRENT_SAFE_TOOLS = new Set([
   "list_directory",
   "git_status",
   "git_diff",
+  "web_search",
+  "list_background",
+  "read_background_output",
   "thinking",
 ]);
 
@@ -213,6 +216,244 @@ export class CrayonAgent {
     this.config.provider = provider;
   }
 
+  /**
+   * One model turn: stream text/reasoning (parsing `<thinking>` tags out of
+   * the text channel), then return the tool calls the model requested WITHOUT
+   * executing them — the caller (the agentic loop) executes and decides
+   * whether to continue. `maxSteps: 1` guarantees the SDK does not run its own
+   * multi-step loop. Preserves the idle-timeout guard, retry-with-backoff, and
+   * bounded metadata awaits.
+   */
+  private async streamStep(
+    model: LanguageModel,
+    messages: CoreMessage[],
+    aiTools: Record<string, any> | undefined,
+    signal?: AbortSignal
+  ): Promise<{
+    text: string;
+    finishReason?: string;
+    usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+    toolCalls: Array<{ toolCallId: string; toolName: string; args: unknown }>;
+    assistantMessages: CoreMessage[];
+  }> {
+    const IDLE_TIMEOUT_MS = Number(process.env.CRAYON_STREAM_IDLE_MS) || 60_000;
+    const idleController = new AbortController();
+    const combinedSignal = signal
+      ? AbortSignal.any([signal, idleController.signal])
+      : idleController.signal;
+
+    const { result: streamResult } = await withRetry(
+      async () =>
+        streamText({
+          model,
+          messages,
+          tools: aiTools,
+          // We drive the loop; the SDK does exactly one generation per call.
+          maxSteps: 1,
+          maxRetries: 3,
+          abortSignal: combinedSignal,
+        }),
+      {
+        onRetry: (error, attempt, delayMs) => {
+          this.emit({
+            type: "thinking",
+            content: `API error (attempt ${attempt}), retrying in ${Math.round(delayMs / 1000)}s: ${error.message}`,
+          });
+        },
+      }
+    );
+
+    let responseText = "";
+    let inThinking = false;
+    let buffer = "";
+
+    const streamIterator = streamResult.fullStream[Symbol.asyncIterator]();
+    try {
+      while (true) {
+        let idleTimer: ReturnType<typeof setTimeout> | undefined;
+        const nextP = streamIterator.next();
+        nextP.catch(() => {});
+        const nextChunk = await Promise.race([
+          nextP,
+          new Promise<never>((_, reject) => {
+            idleTimer = setTimeout(() => reject(new Error("__CRAYON_IDLE_TIMEOUT__")), IDLE_TIMEOUT_MS);
+          }),
+        ]).finally(() => {
+          if (idleTimer) clearTimeout(idleTimer);
+        });
+        if (nextChunk.done) break;
+        const chunk = nextChunk.value;
+        if (chunk.type === "reasoning") {
+          this.emit({ type: "reasoning_delta", content: chunk.textDelta });
+          continue;
+        }
+        if (chunk.type === "text-delta") {
+          buffer += chunk.textDelta;
+          while (buffer.length > 0) {
+            if (!inThinking) {
+              const startIdx = buffer.indexOf("<thinking>");
+              if (startIdx !== -1) {
+                const before = buffer.slice(0, startIdx);
+                if (before) {
+                  responseText += before;
+                  this.emit({ type: "text_delta", content: before });
+                }
+                this.emit({ type: "thinking", content: "Thinking..." });
+                inThinking = true;
+                buffer = buffer.slice(startIdx + 10);
+              } else {
+                const possibleTag = buffer.lastIndexOf("<");
+                if (possibleTag !== -1 && "<thinking>".startsWith(buffer.slice(possibleTag))) {
+                  const safePart = buffer.slice(0, possibleTag);
+                  if (safePart) {
+                    responseText += safePart;
+                    this.emit({ type: "text_delta", content: safePart });
+                  }
+                  buffer = buffer.slice(possibleTag);
+                  break;
+                } else {
+                  responseText += buffer;
+                  this.emit({ type: "text_delta", content: buffer });
+                  buffer = "";
+                }
+              }
+            } else {
+              const endIdx = buffer.indexOf("</thinking>");
+              if (endIdx !== -1) {
+                const reasoning = buffer.slice(0, endIdx);
+                if (reasoning) this.emit({ type: "reasoning_delta", content: reasoning });
+                inThinking = false;
+                buffer = buffer.slice(endIdx + 11);
+              } else {
+                const possibleTag = buffer.lastIndexOf("<");
+                if (possibleTag !== -1 && "</thinking>".startsWith(buffer.slice(possibleTag))) {
+                  const safeReasoning = buffer.slice(0, possibleTag);
+                  if (safeReasoning) this.emit({ type: "reasoning_delta", content: safeReasoning });
+                  buffer = buffer.slice(possibleTag);
+                  break;
+                } else {
+                  this.emit({ type: "reasoning_delta", content: buffer });
+                  buffer = "";
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (streamErr: any) {
+      if (streamErr?.message === "__CRAYON_IDLE_TIMEOUT__") {
+        idleController.abort();
+        try {
+          await streamIterator.return?.(undefined as any);
+        } catch {
+          /* best effort */
+        }
+        throw new Error(
+          `Model did not respond within ${Math.round(IDLE_TIMEOUT_MS / 1000)}s (endpoint may be down or rate-limited). Use /model to switch models.`
+        );
+      }
+      throw streamErr;
+    }
+
+    if (buffer) {
+      if (inThinking) {
+        this.emit({ type: "reasoning_delta", content: buffer });
+      } else {
+        responseText += buffer;
+        this.emit({ type: "text_delta", content: buffer });
+      }
+    }
+
+    const bounded = <T,>(p: Promise<T> | undefined, ms = 5_000): Promise<T | undefined> =>
+      p
+        ? Promise.race([
+            p.catch(() => undefined as T | undefined),
+            new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms)),
+          ])
+        : Promise.resolve(undefined);
+
+    const usage = await bounded(streamResult.usage);
+    const finishReason = await bounded(streamResult.finishReason);
+    const toolCalls = (await bounded(streamResult.toolCalls)) ?? [];
+    const response = await bounded(streamResult.response);
+    const assistantMessages = (response?.messages ?? []) as CoreMessage[];
+
+    return {
+      text: responseText,
+      finishReason,
+      usage: usage
+        ? { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, totalTokens: usage.totalTokens }
+        : undefined,
+      toolCalls: (toolCalls as any[]).map((tc) => ({
+        toolCallId: tc.toolCallId,
+        toolName: tc.toolName,
+        args: tc.args,
+      })),
+      assistantMessages,
+    };
+  }
+
+  /**
+   * Execute a batch of tool calls from one model turn and return the
+   * `tool`-role message to append. Read-only tools (CONCURRENT_SAFE_TOOLS) run
+   * concurrently; mutating tools run sequentially in call order so edits and
+   * transaction snapshots stay deterministic. Edited paths are collected into
+   * `edits` (workspace-relative).
+   */
+  private async executeToolCalls(
+    toolCalls: Array<{ toolCallId: string; toolName: string; args: unknown }>,
+    execMap: Map<string, (args: unknown) => Promise<unknown>>,
+    edits: string[]
+  ): Promise<CoreMessage> {
+    const results = new Map<string, unknown>();
+    const EDIT_TOOLS = ["edit_file", "write_file", "overwrite_file", "edit_ast", "multi_edit"];
+
+    const runOne = async (call: { toolCallId: string; toolName: string; args: unknown }) => {
+      this.emit({ type: "tool_call", name: call.toolName, args: call.args, id: call.toolCallId });
+      let result: unknown;
+      const exec = execMap.get(call.toolName);
+      if (!exec) {
+        result = { error: `Unknown tool: ${call.toolName}` };
+      } else {
+        try {
+          result = await exec(call.args);
+        } catch (e: any) {
+          result = { error: e?.message || String(e) };
+        }
+      }
+      this.workingMemory.addToolOutput(call.toolName, result);
+      if (EDIT_TOOLS.includes(call.toolName)) {
+        const r = result as { path?: string; paths?: string[]; success?: boolean };
+        if (r?.success !== false) {
+          const paths = r?.paths ?? (r?.path ? [r.path] : []);
+          for (const p of paths) {
+            this.workingMemory.markEdited(p);
+            const abs = pathModule.resolve(this.config.workspaceRoot, p);
+            const rel = pathModule.relative(this.config.workspaceRoot, abs);
+            edits.push(rel && !rel.startsWith("..") ? rel : p);
+          }
+        }
+      }
+      this.emit({ type: "tool_result", name: call.toolName, result, id: call.toolCallId });
+      results.set(call.toolCallId, result);
+    };
+
+    const safe = toolCalls.filter((c) => CONCURRENT_SAFE_TOOLS.has(c.toolName));
+    const unsafe = toolCalls.filter((c) => !CONCURRENT_SAFE_TOOLS.has(c.toolName));
+    await Promise.all(safe.map(runOne));
+    for (const c of unsafe) await runOne(c);
+
+    return {
+      role: "tool",
+      content: toolCalls.map((c) => ({
+        type: "tool-result" as const,
+        toolCallId: c.toolCallId,
+        toolName: c.toolName,
+        result: results.get(c.toolCallId) ?? { error: "no result" },
+      })),
+    } as CoreMessage;
+  }
+
   async run(
     task: string,
     options: { currentFile?: string; selection?: string; skipHistory?: boolean; signal?: AbortSignal } = {}
@@ -258,6 +499,7 @@ export class CrayonAgent {
       onEvent: this.config.onEvent,
       approveCommand: this.config.approveCommand,
       approveEdit: this.config.approveEdit,
+      askUser: this.config.askUser,
       fileState: this.fileState,
       transaction: this.transaction,
       signal: options.signal,
@@ -302,37 +544,24 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
       ? [staticSystemMessage, dynamicSystemMessage, userMessage]
       : [staticSystemMessage, dynamicSystemMessage, ...this.history, userMessage];
 
+    // Crayon drives its own agentic loop (see the step loop below) rather than
+    // delegating tool execution to the SDK's maxSteps. So model-facing tools
+    // carry only their schema (no `execute`) — the SDK emits the tool call and
+    // stops; we execute it ourselves. `execMap` holds the real executors,
+    // keyed by the same name, and records read-only tools for safe parallelism.
     const tools = createTools(toolCtx);
-    const aiTools: Record<string, any> = Object.fromEntries(
-      Object.entries(tools).map(([name, t]) => {
-        const toolDef = t as {
-          description: string;
-          parameters: Parameters<typeof tool>[0]["parameters"];
-          execute: (args: unknown) => Promise<unknown>;
-        };
-        return [
-          name,
-          tool({
-            description: toolDef.description,
-            parameters: toolDef.parameters,
-            execute: async (args, opts) => {
-              const id = opts?.toolCallId;
-              this.emit({ type: "tool_call", name, args, id });
-              const result = await toolDef.execute(args);
-              this.workingMemory.addToolOutput(name, result);
-              if (name === "edit_file" || name === "write_file" || name === "overwrite_file") {
-                const r = result as { path?: string; success?: boolean };
-                if (r.path && r.success !== false) {
-                  this.workingMemory.markEdited(r.path);
-                }
-              }
-              this.emit({ type: "tool_result", name, result, id });
-              return result;
-            },
-          }),
-        ];
-      })
-    );
+    const aiTools: Record<string, any> = {};
+    const execMap = new Map<string, (args: unknown) => Promise<unknown>>();
+
+    for (const [name, t] of Object.entries(tools)) {
+      const toolDef = t as {
+        description: string;
+        parameters: Parameters<typeof tool>[0]["parameters"];
+        execute: (args: unknown) => Promise<unknown>;
+      };
+      aiTools[name] = tool({ description: toolDef.description, parameters: toolDef.parameters });
+      execMap.set(name, (args) => toolDef.execute(args));
+    }
 
     let mcpTools: Awaited<ReturnType<typeof this.mcpClient.listTools>> = [];
     try {
@@ -343,21 +572,15 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
     }
     for (const t of mcpTools) {
       const safeName = `mcp_${t.server}_${t.tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_");
-
       aiTools[safeName] = tool({
         description: `[MCP Server: ${t.server}] ${t.tool.description || t.tool.name}`,
         parameters: jsonSchema(t.tool.inputSchema as any),
-        execute: async (args: any, opts: any) => {
-          const id = opts?.toolCallId;
-          this.emit({ type: "tool_call", name: safeName, args, id });
-          try {
-            const result = await this.mcpClient.callTool(t.server, t.tool.name, args);
-            this.workingMemory.addToolOutput(safeName, result);
-            this.emit({ type: "tool_result", name: safeName, result, id });
-            return result;
-          } catch (e: any) {
-            return { error: e.message };
-          }
+      });
+      execMap.set(safeName, async (args) => {
+        try {
+          return await this.mcpClient.callTool(t.server, t.tool.name, args as any);
+        } catch (e: any) {
+          return { error: e.message };
         }
       });
     }
@@ -366,7 +589,8 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
 
     const maxEvalRetries = this.config.maxEvalRetries ?? 5;
     let evalRetries = 0;
-    let nudgedNoEdit = false; // one-shot corrective when a coding task makes no edits
+    let noEditNudges = 0; // escalating correctives when a coding task makes no edits
+    const MAX_NO_EDIT_NUDGES = 3;
     let summary = "";
     const edits: string[] = [];
     let totalSteps = 0;
@@ -375,261 +599,135 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
     const maxSteps = mode === "chat" ? 1 : mode === "advisory" ? 12 : (this.config.maxSteps ?? 25);
 
     let totalSessionCost = 0;
-    const MAX_SESSION_COST = 2.00; // Hard limit to prevent runaway usage
+    // Hard limit to prevent runaway usage — configurable per run / via env.
+    const MAX_SESSION_COST = this.config.maxSessionCost ?? (Number(process.env.CRAYON_MAX_COST) || 2.0);
+
+    // Decompose non-trivial coding tasks into an execution plan up front. This
+    // grounds the loop (the plan is injected into dynamic context) and gives
+    // the UI a checklist via the `plan` event. Best-effort — a planning
+    // failure never blocks the actual work. Plan mode produces its own plan.
+    if (mode === "coding" && !planningOnly && !options.signal?.aborted) {
+      this.emit({ type: "thinking", content: "Planning the task..." });
+      try {
+        const generated = await createPlan(task, modelConfig);
+        if (generated.length > 1) {
+          plan.push(...generated);
+          this.emit({ type: "plan", steps: generated });
+        }
+      } catch {
+        /* planning is optional — proceed without it */
+      }
+    }
 
     while (evalRetries <= maxEvalRetries) {
       if (options.signal?.aborted) {
         throw new Error("Agent execution aborted");
       }
 
-      // Update the dynamic system message with fresh workspace context
-      const dynamicMsg = messages.find(
-        (m) =>
-          m.role === "system" &&
-          (m.content === "" || m.content.startsWith("Here is the current workspace environment"))
-      );
-      if (dynamicMsg) {
-        dynamicMsg.content = await buildDynamicContext({
-          task,
-          plan,
-          mode,
-          workspaceRoot: this.config.workspaceRoot,
-          indexer: this.indexer,
-          workingMemory: this.workingMemory,
-          episodicMemory: this.episodicMemory,
-          intelligence,
-          currentFile: options.currentFile,
-          selection: options.selection,
-        });
-      }
-
-      // --- Context compaction before LLM call ---
+      // ── Inner agentic loop: one model turn per iteration ─────────────
+      // Rebuild dynamic context and compact BEFORE each turn so the model
+      // always sees fresh workspace state — the SDK's internal maxSteps loop
+      // could not re-ground mid-sequence. We execute the requested tools
+      // ourselves between turns (read-only ones concurrently).
       const model = getExecutionModel(modelConfig);
-      const ctxWindow = getContextWindow(model.modelId || modelConfig.model || "");
-      const compactionLevel = getCompactionLevel(messages, ctxWindow);
-      if (compactionLevel === "auto") {
-        this.emit({ type: "thinking", content: "Context window filling up, compacting conversation..." });
-        const compacted = await autoCompact(messages, modelConfig);
-        messages.splice(0, messages.length, ...compacted);
-      } else if (compactionLevel === "micro") {
-        const compacted = microCompact(messages);
-        messages.splice(0, messages.length, ...compacted);
-      }
-
-
-      this.emit({ type: "thinking", content: "Thinking..." });
-
-      // Idle guard: some providers accept the request then hold the stream open
-      // without ever sending tokens (e.g. a rate-limited free endpoint), which
-      // would spin "Working" forever. We race each stream read against a timer
-      // (below) rather than trusting the provider to honor an abort signal.
-      const IDLE_TIMEOUT_MS = Number(process.env.CRAYON_STREAM_IDLE_MS) || 60_000;
-      const idleController = new AbortController();
-      const combinedSignal = options.signal
-        ? AbortSignal.any([options.signal, idleController.signal])
-        : idleController.signal;
-
-      // Use streamText with retry wrapper for resilience
-      const { result: streamResult } = await withRetry(
-        async () => {
-          return streamText({
-            model,
-            messages,
-            tools: useTools ? aiTools : undefined,
-            maxSteps,
-            // Retry transient provider errors (503 "high demand", 500/502, 429
-            // throttles) with backoff — these usually clear on the next try.
-            // The stream idle-timeout below still bounds any single attempt so a
-            // truly stuck request can't hang forever.
-            maxRetries: 3,
-            abortSignal: combinedSignal,
-            onStepFinish: (step) => {
-              const { usage } = step;
-              const pricing = getModelPricing(model.modelId || modelConfig.model || "");
-              const stepCost = (usage.promptTokens * pricing.input / 1_000_000) + (usage.completionTokens * pricing.output / 1_000_000);
-              totalSessionCost += stepCost;
-              if (totalSessionCost > MAX_SESSION_COST) {
-                throw new Error("Cost limit exceeded. Aborting to prevent runaway usage.");
-              }
-            },
-          });
-        },
-        {
-          onRetry: (error, attempt, delayMs) => {
-            this.emit({
-              type: "thinking",
-              content: `API error (attempt ${attempt}), retrying in ${Math.round(delayMs / 1000)}s: ${error.message}`,
-            });
-          },
-        }
-      );
-
+      const pricing = getModelPricing(model.modelId || modelConfig.model || "");
       let responseText = "";
-      let inThinking = false;
-      let buffer = "";
+      let lastFinishReason: string | undefined;
+      let sawUsage = false;
+      let completedNaturally = false;
 
-      const streamIterator = streamResult.fullStream[Symbol.asyncIterator]();
-      try {
-      while (true) {
-        let idleTimer: ReturnType<typeof setTimeout> | undefined;
-        const nextP = streamIterator.next();
-        // If the timeout wins the race, this promise is orphaned and later
-        // rejects (via idleController.abort()); swallow that so it can't become
-        // an unhandledRejection that the global handler turns into exit(1).
-        nextP.catch(() => {});
-        const nextChunk = await Promise.race([
-          nextP,
-          new Promise<never>((_, reject) => {
-            idleTimer = setTimeout(() => reject(new Error("__CRAYON_IDLE_TIMEOUT__")), IDLE_TIMEOUT_MS);
-          }),
-        ]).finally(() => { if (idleTimer) clearTimeout(idleTimer); });
-        if (nextChunk.done) break;
-        const chunk = nextChunk.value;
-        if (chunk.type === "reasoning") {
-          this.emit({ type: "reasoning_delta", content: chunk.textDelta });
-          continue;
+      for (let step = 0; step < maxSteps; step++) {
+        if (options.signal?.aborted) throw new Error("Agent execution aborted");
+
+        // Fresh workspace context each turn (the key win over SDK maxSteps).
+        const dynamicMsg = messages.find(
+          (m) =>
+            m.role === "system" &&
+            (m.content === "" ||
+              (typeof m.content === "string" && m.content.startsWith("Here is the current workspace environment")))
+        );
+        if (dynamicMsg) {
+          dynamicMsg.content = await buildDynamicContext({
+            task,
+            plan,
+            mode,
+            workspaceRoot: this.config.workspaceRoot,
+            indexer: this.indexer,
+            workingMemory: this.workingMemory,
+            episodicMemory: this.episodicMemory,
+            intelligence,
+            currentFile: options.currentFile,
+            selection: options.selection,
+          });
         }
-        
-        if (chunk.type === "text-delta") {
-          buffer += chunk.textDelta;
-          
-          while (buffer.length > 0) {
-            if (!inThinking) {
-              const startIdx = buffer.indexOf("<thinking>");
-              if (startIdx !== -1) {
-                // Emit text before <thinking>
-                const before = buffer.slice(0, startIdx);
-                if (before) {
-                  responseText += before;
-                  this.emit({ type: "text_delta", content: before });
-                }
-                this.emit({ type: "thinking", content: "Thinking..." });
-                inThinking = true;
-                buffer = buffer.slice(startIdx + 10); // 10 is "<thinking>".length
-              } else {
-                // If it ends with something that could be `<thinking>`, hold it.
-                const possibleTag = buffer.lastIndexOf("<");
-                if (possibleTag !== -1 && "<thinking>".startsWith(buffer.slice(possibleTag))) {
-                  // Buffer ends with a partial <thinking> tag, emit up to the `<`
-                  const safePart = buffer.slice(0, possibleTag);
-                  if (safePart) {
-                    responseText += safePart;
-                    this.emit({ type: "text_delta", content: safePart });
-                  }
-                  buffer = buffer.slice(possibleTag);
-                  break; // Wait for more chunks
-                } else {
-                  // Safe to emit all
-                  responseText += buffer;
-                  this.emit({ type: "text_delta", content: buffer });
-                  buffer = "";
-                }
-              }
-            } else {
-              const endIdx = buffer.indexOf("</thinking>");
-              if (endIdx !== -1) {
-                // Emit reasoning before </thinking>
-                const reasoning = buffer.slice(0, endIdx);
-                if (reasoning) {
-                  this.emit({ type: "reasoning_delta", content: reasoning });
-                }
-                inThinking = false;
-                buffer = buffer.slice(endIdx + 11); // 11 is "</thinking>".length
-              } else {
-                // Could end with partial </thinking>
-                const possibleTag = buffer.lastIndexOf("<");
-                if (possibleTag !== -1 && "</thinking>".startsWith(buffer.slice(possibleTag))) {
-                  const safeReasoning = buffer.slice(0, possibleTag);
-                  if (safeReasoning) {
-                    this.emit({ type: "reasoning_delta", content: safeReasoning });
-                  }
-                  buffer = buffer.slice(possibleTag);
-                  break; // Wait for more chunks
-                } else {
-                  this.emit({ type: "reasoning_delta", content: buffer });
-                  buffer = "";
-                }
-              }
-            }
+
+        // Compaction before the call.
+        const ctxWindow = getContextWindow(model.modelId || modelConfig.model || "");
+        const compactionLevel = getCompactionLevel(messages, ctxWindow);
+        if (compactionLevel === "auto") {
+          this.emit({ type: "thinking", content: "Context window filling up, compacting conversation..." });
+          const compacted = await autoCompact(messages, modelConfig);
+          messages.splice(0, messages.length, ...compacted);
+        } else if (compactionLevel === "micro") {
+          messages.splice(0, messages.length, ...microCompact(messages));
+        }
+
+        this.emit({ type: "thinking", content: "Thinking..." });
+
+        const turn = await this.streamStep(model, messages, useTools ? aiTools : undefined, options.signal);
+        totalSteps++;
+        lastFinishReason = turn.finishReason;
+
+        if (turn.usage) {
+          sawUsage = true;
+          this.emit({
+            type: "usage",
+            promptTokens: turn.usage.promptTokens,
+            completionTokens: turn.usage.completionTokens,
+            totalTokens: turn.usage.totalTokens,
+          });
+          totalSessionCost +=
+            (turn.usage.promptTokens * pricing.input) / 1_000_000 +
+            (turn.usage.completionTokens * pricing.output) / 1_000_000;
+          if (totalSessionCost > MAX_SESSION_COST) {
+            throw new Error("Cost limit exceeded. Aborting to prevent runaway usage.");
           }
         }
-      }
-      
-      } catch (streamErr: any) {
-        if (streamErr?.message === "__CRAYON_IDLE_TIMEOUT__") {
-          idleController.abort();
-          try { await streamIterator.return?.(undefined as any); } catch { /* best effort */ }
-          throw new Error(`Model did not respond within ${Math.round(IDLE_TIMEOUT_MS / 1000)}s (endpoint may be down or rate-limited). Use /model to switch models.`);
+
+        // The most recent turn's text is the working answer.
+        if (turn.text.trim()) responseText = turn.text;
+
+        // Append the assistant message(s) so the next turn sees full history.
+        if (turn.assistantMessages.length) messages.push(...turn.assistantMessages);
+
+        if (turn.toolCalls.length === 0) {
+          completedNaturally = true;
+          break;
         }
-        throw streamErr;
+
+        // Execute the requested tools and feed the results back.
+        const toolMsg = await this.executeToolCalls(turn.toolCalls, execMap, edits);
+        messages.push(toolMsg);
       }
 
-      // Flush any remaining buffer
-      if (buffer) {
-        if (inThinking) {
-           this.emit({ type: "reasoning_delta", content: buffer });
-        } else {
-           responseText += buffer;
-           this.emit({ type: "text_delta", content: buffer });
-        }
-      }
-
-      // Await the post-stream metadata, BOUNDED. When a provider aborts or
-      // returns a degraded/empty stream, the SDK's steps/usage/finishReason
-      // promises can never settle — an unbounded await here silently hangs the
-      // whole run after the stream has already closed.
-      const bounded = <T,>(p: Promise<T> | undefined, ms = 5_000): Promise<T | undefined> =>
-        p
-          ? Promise.race([
-              p.catch(() => undefined as T | undefined),
-              new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms)),
-            ])
-          : Promise.resolve(undefined);
-
-      const steps = await bounded(streamResult.steps);
-      totalSteps += steps?.length ?? 1;
-
-      const usage = await bounded(streamResult.usage);
-      if (usage) {
-        this.emit({
-          type: "usage",
-          promptTokens: usage.promptTokens,
-          completionTokens: usage.completionTokens,
-          totalTokens: usage.totalTokens,
-        });
-      }
-
-      const finishReason: string | undefined = await bounded(streamResult.finishReason);
-
-      // A totally empty outcome (no text, no steps, no usage, no finish reason)
-      // means the provider silently failed — typically quota/rate-limit errors
-      // the SDK swallows into an empty stream. Surface it as an error instead
-      // of reporting a bogus success.
-      if (!responseText.trim() && !steps?.length && !usage && !finishReason) {
+      // Empty provider response — quota/rate-limit swallowed into an empty stream.
+      if (!responseText.trim() && !sawUsage && !lastFinishReason && edits.length === 0) {
         throw new Error(
           "Model returned an empty response. This usually means the API quota is exhausted or the provider is rate-limiting — check your plan/billing or switch models with /model."
         );
       }
-      const exhausted = finishReason === "tool-calls" || finishReason === "length";
 
-      // Fallback: if the stream produced no text but steps carried some, use it.
-      if (!responseText && steps?.length) {
-        for (const step of steps) {
-          if (step.text?.trim()) responseText += step.text.trim();
-        }
-      }
+      const exhausted = !completedNaturally || lastFinishReason === "length";
 
-      // If the model ran out of steps mid tool-loop and never wrote an answer,
-      // force one final tool-free synthesis pass so the user still gets a reply.
+      // Ran out of steps mid tool-loop without a written answer — force one
+      // tool-free synthesis pass so the user still gets a reply.
       if (exhausted && !responseText.trim() && mode !== "chat") {
         this.emit({ type: "thinking", content: "Reached step limit — composing an answer from gathered context..." });
         try {
-          const respMsgs = ((await bounded(streamResult.response))?.messages ?? []) as CoreMessage[];
           const synth = await generateText({
             model,
             messages: [
               ...messages,
-              ...respMsgs,
               { role: "user", content: "Stop calling tools. Using everything you have gathered so far, answer my previous request directly and concisely now." },
             ],
           });
@@ -647,47 +745,35 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
         this.emit({ type: "text_delta", content: warnMsg });
       }
 
-      // Weaker models sometimes emit a tool call as plain text (e.g.
-      // {"name":"edit_file","parameters":{...}}) instead of a real tool call.
-      // Strip those blobs so raw JSON never becomes the user-facing answer.
+      // Weaker models sometimes emit a tool call as plain-text JSON instead of
+      // a real tool call. Strip those blobs so they never become the answer.
       responseText = responseText
         .replace(/\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"(?:parameters|arguments|args)"\s*:\s*\{[\s\S]*?\}\s*\}/g, "")
         .trim();
 
       if (responseText) {
-        // Emit full text event for consumers that prefer complete messages
         this.emit({ type: "text", content: responseText });
         summary = responseText;
       }
-
-      // Collect edited files from tool results
-      for (const step of steps ?? []) {
-        for (const tr of step.toolResults ?? []) {
-          const toolName = "toolName" in tr ? String(tr.toolName) : "";
-          if (!["edit_file", "write_file", "overwrite_file", "edit_ast"].includes(toolName)) continue;
-          const editResult = tr.result as { path?: string; success?: boolean };
-          if (editResult?.path && editResult?.success !== false) {
-            // Normalize to a workspace-relative path — models sometimes pass
-            // absolute paths, which are ugly in output and awkward for git.
-            const abs = pathModule.resolve(this.config.workspaceRoot, editResult.path);
-            const rel = pathModule.relative(this.config.workspaceRoot, abs);
-            edits.push(rel && !rel.startsWith("..") ? rel : editResult.path);
-          }
-        }
-      }
+      // (edited paths are collected inside executeToolCalls)
 
       // History push moved outside the while loop to avoid duplicates on eval retries
 
       // Coding task ended with no file changes — weaker models often "answer"
-      // with a code block or a text tool-call instead of editing. Nudge once to
-      // actually apply the change via tools, then retry.
-      if (mode === "coding" && !this.workingMemory.hasEdits() && !nudgedNoEdit) {
-        nudgedNoEdit = true;
+      // with a code block or a text tool-call instead of editing. Nudge with an
+      // escalating directive and retry, up to MAX_NO_EDIT_NUDGES times, before
+      // giving up. Each retry is firmer and more prescriptive than the last.
+      if (mode === "coding" && !this.workingMemory.hasEdits() && noEditNudges < MAX_NO_EDIT_NUDGES) {
+        const nudges = [
+          "You did NOT modify any files — describing the change or printing code does not count. Apply it now with a real tool call: read_file the target, then edit_file (copy old_string exactly) or write_file. Do not reply with code.",
+          "Still no file was changed. STOP explaining. Your NEXT action must be a single tool call — write_file for a new file, or edit_file with an old_string copied verbatim from the file you read. Emit only the tool call, no prose.",
+          "FINAL ATTEMPT. You have not edited anything. Call write_file or edit_file RIGHT NOW with the complete change. If the file exists, use edit_file (or overwrite_file with the full new contents). Do not output any text — only the tool call.",
+        ];
+        const msg = nudges[Math.min(noEditNudges, nudges.length - 1)];
+        noEditNudges++;
+        this.emit({ type: "thinking", content: `No edit applied — nudging the model to use tools (attempt ${noEditNudges}/${MAX_NO_EDIT_NUDGES})...` });
         messages.push({ role: "assistant", content: responseText || "(no changes were made)" });
-        messages.push({
-          role: "user",
-          content: "You did NOT modify any files — describing the change or printing code does not count. Apply it now with a real tool call: read_file the target, then edit_file (copy old_string exactly) or write_file. Do not reply with code.",
-        });
+        messages.push({ role: "user", content: msg });
         continue;
       }
 

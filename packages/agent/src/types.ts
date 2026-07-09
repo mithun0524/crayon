@@ -33,10 +33,18 @@ export interface AgentConfig {
   googleApiKey?: string;
   maxSteps?: number;
   maxEvalRetries?: number;
+  /** Hard USD ceiling for one run's model spend (default 2.00; env CRAYON_MAX_COST). */
+  maxSessionCost?: number;
   permissionMode?: PermissionMode;
   onEvent?: (event: AgentEvent) => void;
   approveCommand?: (command: string) => Promise<boolean>;
   approveEdit?: (path: string, newContent: string) => Promise<boolean>;
+  /**
+   * Ask the user a question and return their answer. Should resolve with a
+   * sensible "proceed anyway" string on timeout rather than blocking forever.
+   * When unset, the ask_user tool falls back to stop-and-wait-for-next-turn.
+   */
+  askUser?: (question: string) => Promise<string>;
   mcpServers?: McpServerConfig[];
   /** When false, disables the `spawn_agent` tool. Defaults to true. Sub-agents set this to false. */
   allowSubagents?: boolean;
@@ -64,6 +72,7 @@ export interface ToolContext {
   onEvent?: (event: AgentEvent) => void;
   approveCommand?: (command: string) => Promise<boolean>;
   approveEdit?: (path: string, newContent: string) => Promise<boolean>;
+  askUser?: (question: string) => Promise<string>;
   fileState?: FileStateCache;
   transaction?: TransactionManager;
   signal?: AbortSignal;
