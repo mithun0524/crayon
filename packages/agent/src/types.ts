@@ -78,6 +78,7 @@ export interface ToolContext {
   transaction?: TransactionManager;
   signal?: AbortSignal;
   setActivePtyWrite?: (writeFn?: (data: string) => void) => void;
+  lspManager?: any;
   /**
    * Model/provider/API-key config carried through so `spawn_agent` can
    * construct a working sub-agent that inherits the parent's credentials.

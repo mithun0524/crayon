@@ -17,6 +17,7 @@ export interface ContextOptions {
   intelligence?: RepoIntelligence | null;
   currentFile?: string;
   selection?: string;
+  lspManager?: any;
 }
 
 export async function buildSystemPrompt(options: ContextOptions): Promise<string> {
@@ -137,6 +138,7 @@ export async function buildDynamicContext(options: ContextOptions): Promise<stri
     intelligence,
     currentFile,
     selection,
+    lspManager,
   } = options;
 
   const searchResults = mode === "chat" ? [] : await indexer.search(task, 15);
@@ -199,6 +201,28 @@ Package manager: ${intelligence.packageManager ?? "unknown"}
 Test runner: ${intelligence.testRunner ?? "unknown"}`
     : "Run crayon init if project metadata is missing.";
 
+  let passiveDiagnostics = "";
+  if (lspManager) {
+    const diags = lspManager.getDiagnostics();
+    if (diags.length > 0) {
+      const formatted = diags
+        .map((d: any) => {
+          const relativePath = path.relative(workspaceRoot, d.filePath);
+          const fileDiags = d.diagnostics
+            .map((diag: any) => {
+              const line = (diag.range?.start?.line ?? 0) + 1;
+              const col = (diag.range?.start?.character ?? 0) + 1;
+              const severity = diag.severity === 1 ? "ERROR" : diag.severity === 2 ? "WARNING" : "INFO";
+              return `  - [${severity}] Line ${line}, Col ${col}: ${diag.message}`;
+            })
+            .join("\n");
+          return `### ${relativePath}\n${fileDiags}`;
+        })
+        .join("\n\n");
+      passiveDiagnostics = `\n## Passive Diagnostics (Compiler Warnings/Errors)\n${formatted}\n`;
+    }
+  }
+
   return `Here is the current workspace environment and session context:
 
 ## Workspace
@@ -207,24 +231,18 @@ Root: ${workspaceRoot}
 ## Project Intelligence
 ${intelStr}
 
-## Current Task
-${task}
+${durableMemory ? `## Project Instructions (Durable Rules)\n${durableMemory}\n` : ""}${readmeExcerpt ? `## README (excerpt)\n${readmeExcerpt}\n` : ""}## Session Memory
+${semantic || "None."}
 
-${plan.length > 0 ? `## Execution Plan\n${plan.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n` : ""}
-## Relevant Files
-${fileContext || "No direct code matches for this query."}
-
-${readmeExcerpt ? `## README (excerpt)\n${readmeExcerpt}\n` : ""}
-
-${durableMemory ? `## Project Instructions (Durable Rules)\n${durableMemory}\n` : ""}
-${todoMemory}
 ## Relevant Past Sessions
 ${relevantEpisodes || "None."}
 
-## Session Memory
-${semantic || "None."}
+## Current Task
+${task}
 
-${currentFile ? `## Current File\n${currentFile}\n` : ""}${selection ? `## Selected Code\n\`\`\`\n${selection}\n\`\`\`\n` : ""}
-## Recent Tool Outputs
-${workingMemory.getRecentToolOutputs(5) || "None."}`;
+${plan.length > 0 ? `## Execution Plan\n${plan.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n` : ""}${todoMemory}## Relevant Files
+${fileContext || "No direct code matches for this query."}
+
+${currentFile ? `## Current File\n${currentFile}\n` : ""}${selection ? `## Selected Code\n\`\`\`\n${selection}\n\`\`\`\n` : ""}## Recent Tool Outputs
+${workingMemory.getRecentToolOutputs(5) || "None."}${passiveDiagnostics}`;
 }

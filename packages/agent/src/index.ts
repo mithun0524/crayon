@@ -16,6 +16,8 @@ import { autoCommitEdits } from "./services/autoCommit.js";
 import { microCompact, autoCompact, getCompactionLevel } from "./context/compaction.js";
 import { FileStateCache } from "./context/fileState.js";
 import { TransactionManager } from "./context/transaction.js";
+import { createLSPServerManager, type LSPServerManager } from "./services/lsp/LSPServerManager.js";
+import { createLSPTools } from "./tools/lsp.js";
 
 /** Tools that are safe to execute concurrently (read-only). Exported for consumer use. */
 export { CONCURRENT_SAFE_TOOLS };
@@ -35,6 +37,9 @@ const CONCURRENT_SAFE_TOOLS = new Set([
   "list_background",
   "read_background_output",
   "thinking",
+  "lsp_goto_definition",
+  "lsp_find_references",
+  "lsp_hover",
 ]);
 
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -88,9 +93,10 @@ export class CrayonAgent {
   private fileState = new FileStateCache();
   private transaction: TransactionManager;
   public activePtyWrite?: (data: string) => void;
+  public lspManager: LSPServerManager;
 
   public get tools() {
-    return createTools({
+    const standardTools = createTools({
       workspaceRoot: this.config.workspaceRoot,
       indexer: this.indexer,
       permissionMode: this.config.permissionMode,
@@ -101,7 +107,10 @@ export class CrayonAgent {
       transaction: this.transaction,
       modelConfig: this.subagentModelConfig(),
       allowSubagents: this.config.allowSubagents,
+      lspManager: this.lspManager,
     });
+    const lspTools = createLSPTools(this.lspManager);
+    return { ...standardTools, ...lspTools };
   }
 
   /** Config forwarded to sub-agents so they inherit model/provider/credentials. */
@@ -128,6 +137,7 @@ export class CrayonAgent {
       },
     });
     this.transaction = new TransactionManager(config.workspaceRoot);
+    this.lspManager = createLSPServerManager(config.workspaceRoot);
   }
 
   private emit(event: AgentEvent): void {
@@ -517,6 +527,7 @@ export class CrayonAgent {
       setActivePtyWrite: (writeFn?: (data: string) => void) => {
         this.activePtyWrite = writeFn;
       },
+      lspManager: this.lspManager,
     };
 
     this.emit({ type: "thinking", content: "Preparing context and tools..." });
@@ -561,7 +572,10 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
     // carry only their schema (no `execute`) — the SDK emits the tool call and
     // stops; we execute it ourselves. `execMap` holds the real executors,
     // keyed by the same name, and records read-only tools for safe parallelism.
-    const tools = createTools(toolCtx);
+    const tools = {
+      ...createTools(toolCtx),
+      ...createLSPTools(this.lspManager),
+    };
     const aiTools: Record<string, any> = {};
     const execMap = new Map<string, (args: unknown) => Promise<unknown>>();
 
@@ -670,6 +684,7 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
             intelligence,
             currentFile: options.currentFile,
             selection: options.selection,
+            lspManager: this.lspManager,
           });
         }
 
@@ -682,6 +697,16 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
           messages.splice(0, messages.length, ...compacted);
         } else if (compactionLevel === "micro") {
           messages.splice(0, messages.length, ...microCompact(messages));
+        }
+
+        // Attach cache control to the last user message for Anthropic prompt caching
+        const userMsgs = messages.filter((m) => m.role === "user");
+        if (userMsgs.length > 0) {
+          const lastUser = userMsgs[userMsgs.length - 1];
+          lastUser.experimental_providerMetadata = {
+            ...lastUser.experimental_providerMetadata,
+            anthropic: { cacheControl: { type: "ephemeral" } },
+          };
         }
 
         this.emit({ type: "thinking", content: "Thinking..." });
@@ -894,6 +919,7 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
     this.indexer.stopWatching?.();
     // Fire-and-forget async close — we don't need to await during cleanup
     this.mcpClient?.close?.().catch?.(() => {});
+    this.lspManager?.shutdown?.().catch?.(() => {});
   }
 }
 

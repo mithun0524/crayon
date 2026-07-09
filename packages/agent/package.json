@@ -40,6 +40,8 @@
     "shell-quote": "^1.8.4",
     "simple-git": "^3.27.0",
     "ts-morph": "^28.0.0",
+    "vscode-jsonrpc": "^9.0.1",
+    "vscode-languageserver-protocol": "^3.18.2",
     "zod": "^3.24.2"
   },
   "devDependencies": {

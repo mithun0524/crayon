@@ -236,6 +236,9 @@ export function createTools(ctx: ToolContext) {
         // Track that we read this file
         ctx.fileState?.markRead(filePath, content);
 
+        // Sync with LSP
+        ctx.lspManager?.openFile(absPath, content).catch(() => {});
+
         if (start_line !== undefined || end_line !== undefined) {
           const start = (start_line ?? 1) - 1;
           const end = end_line ?? lines.length;
@@ -308,6 +311,10 @@ export function createTools(ctx: ToolContext) {
         await writeFile(absPath, newContent, "utf-8");
 
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
+
+        // Sync with LSP
+        ctx.lspManager?.changeFile(absPath, newContent).catch(() => {});
+        ctx.lspManager?.saveFile(absPath).catch(() => {});
 
         const result: Record<string, unknown> = { success: true, path: filePath, diff };
         // A fuzzy match landed the edit despite an inexact old_string — surface
@@ -388,6 +395,10 @@ export function createTools(ctx: ToolContext) {
         await ctx.transaction?.snapshotFile(filePath);
         await writeFile(absPath, working, "utf-8");
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
+
+        // Sync with LSP
+        ctx.lspManager?.changeFile(absPath, working).catch(() => {});
+        ctx.lspManager?.saveFile(absPath).catch(() => {});
 
         const result: Record<string, unknown> = { success: true, path: filePath, diff, editsApplied: edits.length };
         const warnings = [
@@ -515,6 +526,11 @@ export function createTools(ctx: ToolContext) {
         await ctx.transaction?.snapshotFile(filePath);
         await writeFile(absPath, newContent, "utf-8");
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
+
+        // Sync with LSP
+        ctx.lspManager?.changeFile(absPath, newContent).catch(() => {});
+        ctx.lspManager?.saveFile(absPath).catch(() => {});
+
         return { success: true, path: filePath, diff };
       },
     },
@@ -547,6 +563,9 @@ export function createTools(ctx: ToolContext) {
 
         const diff = createTwoFilesPatch(filePath, filePath, "", content);
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
+
+        // Sync with LSP
+        ctx.lspManager?.openFile(absPath, content).catch(() => {});
 
         return { success: true, path: filePath, created: true };
       },
@@ -586,6 +605,11 @@ export function createTools(ctx: ToolContext) {
         await ctx.transaction?.snapshotFile(filePath);
         await writeFile(absPath, content, "utf-8");
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
+
+        // Sync with LSP
+        ctx.lspManager?.changeFile(absPath, content).catch(() => {});
+        ctx.lspManager?.saveFile(absPath).catch(() => {});
+
         const result: Record<string, unknown> = { success: true, path: filePath, overwritten: true, diff };
         if (notReadWarning) result.warning = notReadWarning.trim();
         return result;
