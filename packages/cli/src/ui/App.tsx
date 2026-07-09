@@ -92,6 +92,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   // We keep the state for triggering re-renders (used by getToolDisplay)
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
   const [activeToolArgs, setActiveToolArgs] = useState<any>(null);
+  const [activeTerminalOutput, setActiveTerminalOutput] = useState<string>("");
   // Tools in flight, keyed by tool-call id — supports parallel (read-only) tools
   // without one clobbering another's pending UI state.
   const activeToolsRef = useRef<Record<string, { name: string; args: any }>>({});
@@ -445,6 +446,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           setActiveToolArgs({ status: "Thinking..." });
           break;
         }
+        if (event.name === "terminal") {
+          setActiveTerminalOutput("");
+        }
         const id = event.id || `${event.name}:${Date.now()}`;
         activeToolsRef.current[id] = { name: event.name, args: event.args };
         // Show the just-started tool in the live progress line.
@@ -515,6 +519,23 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           return prev + (event.promptTokens * inputCostPerToken) + (event.completionTokens * outputCostPerToken);
         });
         break;
+      case "terminal_output":
+        setActiveTerminalOutput((prev) => {
+          const cleanIncoming = event.content.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, "");
+          const combinedClean = prev + cleanIncoming;
+          const lines = combinedClean.split(/\r?\n/);
+          for (let i = 0; i < lines.length; i++) {
+            const parts = lines[i].split("\r");
+            if (parts.length > 1) {
+              lines[i] = parts[parts.length - 1];
+            }
+          }
+          if (lines.length > 10) {
+            return lines.slice(-10).join("\n");
+          }
+          return lines.join("\n");
+        });
+        break;
       case "error":
         pushMessage({ sender: "system", text: `Error: ${event.message}` });
         break;
@@ -578,7 +599,25 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
 
     if (isExecuting && !approvalRequest) {
-      if (key.escape) handleAbort();
+      if (key.escape) {
+        handleAbort();
+        return;
+      }
+      if (activeToolName === "terminal") {
+        let data = input;
+        if (!data) {
+          if (key.return) data = "\r";
+          else if (key.backspace) data = "\x7f";
+          else if (key.tab) data = "\t";
+          else if (key.upArrow) data = "\u001b[A";
+          else if (key.downArrow) data = "\u001b[B";
+          else if (key.leftArrow) data = "\u001b[D";
+          else if (key.rightArrow) data = "\u001b[C";
+        }
+        if (data) {
+          agentRef.current?.handleTerminalInput(data);
+        }
+      }
       return;
     }
 
@@ -1320,11 +1359,18 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
             {/* Progress spinner only when no text is streaming yet */}
             {!streamingText && (
-              <AgentProgress
-                statusText={getToolDisplay()}
-                tokens={tokens}
-                startTime={executionStartTime.current}
-              />
+              <Box flexDirection="column" width="100%">
+                <AgentProgress
+                  statusText={getToolDisplay()}
+                  tokens={tokens}
+                  startTime={executionStartTime.current}
+                />
+                {activeToolName === "terminal" && activeTerminalOutput && (
+                  <Box flexDirection="column" marginTop={1} paddingLeft={2}>
+                    <Text color={theme.subtle} dimColor>{activeTerminalOutput}</Text>
+                  </Box>
+                )}
+              </Box>
             )}
           </Box>
         )}

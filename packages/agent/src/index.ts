@@ -87,6 +87,7 @@ export class CrayonAgent {
   private mcpClient: McpClient;
   private fileState = new FileStateCache();
   private transaction: TransactionManager;
+  public activePtyWrite?: (data: string) => void;
 
   public get tools() {
     return createTools({
@@ -158,6 +159,14 @@ export class CrayonAgent {
 
   setHistory(history: CoreMessage[]): void {
     this.history = history;
+  }
+
+  handleTerminalInput(data: string): boolean {
+    if (this.activePtyWrite) {
+      this.activePtyWrite(data);
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -505,6 +514,9 @@ export class CrayonAgent {
       signal: options.signal,
       modelConfig: this.subagentModelConfig(),
       allowSubagents: this.config.allowSubagents,
+      setActivePtyWrite: (writeFn?: (data: string) => void) => {
+        this.activePtyWrite = writeFn;
+      },
     };
 
     this.emit({ type: "thinking", content: "Preparing context and tools..." });

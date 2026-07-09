@@ -172,7 +172,8 @@ describe("file tools", () => {
 
   it("manages background processes: start, list, read output, kill", async () => {
     const tools = createTools(makeCtx(root));
-    const started: any = await tools.terminal.execute({ command: "echo bg-marker && sleep 30", background: true });
+    const cmd = process.platform === "win32" ? "(echo bg-marker & ping 127.0.0.1 -n 31 > nul)" : "echo bg-marker && sleep 30";
+    const started: any = await tools.terminal.execute({ command: cmd, background: true });
     expect(started.pid).toBeGreaterThan(0);
     try {
       const list: any = await tools.list_background.execute({});
@@ -181,8 +182,12 @@ describe("file tools", () => {
       expect(mine.running).toBe(true);
 
       // Give the echo a moment to flush to the log, then tail it.
-      await new Promise((r) => setTimeout(r, 400));
+      const waitTime = process.platform === "win32" ? 3000 : 400;
+      await new Promise((r) => setTimeout(r, waitTime));
       const out: any = await tools.read_background_output.execute({ pid: started.pid });
+      if (out.success === false) {
+        throw new Error(`read_background_output failed: ${out.error || JSON.stringify(out)}`);
+      }
       expect(out.output).toContain("bg-marker");
 
       const killed: any = await tools.kill_background.execute({ pid: started.pid });

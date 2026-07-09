@@ -16,7 +16,8 @@
   "packageManager": "pnpm@10.14.0",
   "pnpm": {
     "onlyBuiltDependencies": [
-      "esbuild"
+      "esbuild",
+      "node-pty"
     ],
     "overrides": {
       "jsondiffpatch": "^0.7.6",
