@@ -509,15 +509,20 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           setGitDirtyCount(git.dirtyCount);
         }, 0);
         break;
-      case "usage":
-        setTokens((prev) => prev + event.totalTokens);
+      case "usage": {
+        // Some providers (e.g. Ollama) omit token counts → guard against NaN.
+        const total = Number(event.totalTokens) || 0;
+        const prompt = Number(event.promptTokens) || 0;
+        const completion = Number(event.completionTokens) || 0;
+        setTokens((prev) => prev + total);
         setCost((prev) => {
           const pricing = getModelPricing(defaultModelRef.current);
           const inputCostPerToken = pricing.input / 1_000_000;
           const outputCostPerToken = pricing.output / 1_000_000;
-          return prev + (event.promptTokens * inputCostPerToken) + (event.completionTokens * outputCostPerToken);
+          return prev + prompt * inputCostPerToken + completion * outputCostPerToken;
         });
         break;
+      }
       case "error":
         pushMessage({ sender: "system", text: `Error: ${event.message}` });
         break;

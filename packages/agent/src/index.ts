@@ -236,7 +236,10 @@ export class CrayonAgent {
     toolCalls: Array<{ toolCallId: string; toolName: string; args: unknown }>;
     assistantMessages: CoreMessage[];
   }> {
-    const IDLE_TIMEOUT_MS = Number(process.env.CRAYON_STREAM_IDLE_MS) || 60_000;
+    // Local models (Ollama) can take longer than 60s to first token on a cold
+    // load or a heavy generation, so give them a bigger idle budget by default.
+    const idleDefault = this.config.provider === "ollama" ? 180_000 : 60_000;
+    const IDLE_TIMEOUT_MS = Number(process.env.CRAYON_STREAM_IDLE_MS) || idleDefault;
     const idleController = new AbortController();
     const combinedSignal = signal
       ? AbortSignal.any([signal, idleController.signal])
