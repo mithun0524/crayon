@@ -8,15 +8,23 @@ export function createAskUserTool(ctx: ToolContext) {
       question: z.string().describe("The question you want to ask the user"),
     }),
     execute: async ({ question }: { question: string }) => {
-      // Pause execution and ask the user
-      // In Crayon, we emit a question event and expect the CLI to handle it,
-      // but since the current Agent interface doesn't natively yield for prompt,
-      // we might need to rely on throwing a special error or returning a signal.
-      // For now, we will return a string instructing the agent to stop and wait.
+      // Interactive path: if the host provides an askUser callback, block for a
+      // real answer (the host applies a timeout that returns a "proceed anyway"
+      // string rather than hanging). This lets the agent CONTINUE in the same
+      // run with the answer, instead of ending the turn.
+      if (ctx.askUser) {
+        try {
+          const answer = await ctx.askUser(question);
+          return { status: "answered", answer };
+        } catch {
+          // Fall through to stop-and-wait if the host errored.
+        }
+      }
+      // Fallback (no interactive host): emit the question and stop for next turn.
       ctx.onEvent?.({ type: "text", content: `\n[Agent Question]: ${question}\n` });
-      return { 
+      return {
         status: "waiting_for_user",
-        message: "You have asked the user a question. Stop executing tools and wait for their reply in the next turn." 
+        message: "You have asked the user a question. Stop executing tools and wait for their reply in the next turn.",
       };
     },
   };

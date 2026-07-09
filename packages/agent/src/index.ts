@@ -499,6 +499,7 @@ export class CrayonAgent {
       onEvent: this.config.onEvent,
       approveCommand: this.config.approveCommand,
       approveEdit: this.config.approveEdit,
+      askUser: this.config.askUser,
       fileState: this.fileState,
       transaction: this.transaction,
       signal: options.signal,

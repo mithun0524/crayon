@@ -204,6 +204,20 @@ describe("file tools", () => {
     expect(res.error).toBe("PERMISSION_DENIED_BY_USER");
   });
 
+  it("ask_user uses the interactive callback and returns the answer", async () => {
+    const ctx = { ...makeCtx(root), askUser: async (q: string) => `answer to: ${q}` };
+    const tools = createTools(ctx as any);
+    const res: any = await tools.ask_user.execute({ question: "which db?" });
+    expect(res.status).toBe("answered");
+    expect(res.answer).toBe("answer to: which db?");
+  });
+
+  it("ask_user falls back to stop-and-wait when no callback is wired", async () => {
+    const tools = createTools(makeCtx(root));
+    const res: any = await tools.ask_user.execute({ question: "which db?" });
+    expect(res.status).toBe("waiting_for_user");
+  });
+
   it("disables spawn_agent when allowSubagents is false", () => {
     const withSub = createTools(makeCtx(root));
     expect("spawn_agent" in withSub).toBe(true);
