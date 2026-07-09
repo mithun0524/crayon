@@ -588,7 +588,8 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
 
     const maxEvalRetries = this.config.maxEvalRetries ?? 5;
     let evalRetries = 0;
-    let nudgedNoEdit = false; // one-shot corrective when a coding task makes no edits
+    let noEditNudges = 0; // escalating correctives when a coding task makes no edits
+    const MAX_NO_EDIT_NUDGES = 3;
     let summary = "";
     const edits: string[] = [];
     let totalSteps = 0;
@@ -758,15 +759,20 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
       // History push moved outside the while loop to avoid duplicates on eval retries
 
       // Coding task ended with no file changes — weaker models often "answer"
-      // with a code block or a text tool-call instead of editing. Nudge once to
-      // actually apply the change via tools, then retry.
-      if (mode === "coding" && !this.workingMemory.hasEdits() && !nudgedNoEdit) {
-        nudgedNoEdit = true;
+      // with a code block or a text tool-call instead of editing. Nudge with an
+      // escalating directive and retry, up to MAX_NO_EDIT_NUDGES times, before
+      // giving up. Each retry is firmer and more prescriptive than the last.
+      if (mode === "coding" && !this.workingMemory.hasEdits() && noEditNudges < MAX_NO_EDIT_NUDGES) {
+        const nudges = [
+          "You did NOT modify any files — describing the change or printing code does not count. Apply it now with a real tool call: read_file the target, then edit_file (copy old_string exactly) or write_file. Do not reply with code.",
+          "Still no file was changed. STOP explaining. Your NEXT action must be a single tool call — write_file for a new file, or edit_file with an old_string copied verbatim from the file you read. Emit only the tool call, no prose.",
+          "FINAL ATTEMPT. You have not edited anything. Call write_file or edit_file RIGHT NOW with the complete change. If the file exists, use edit_file (or overwrite_file with the full new contents). Do not output any text — only the tool call.",
+        ];
+        const msg = nudges[Math.min(noEditNudges, nudges.length - 1)];
+        noEditNudges++;
+        this.emit({ type: "thinking", content: `No edit applied — nudging the model to use tools (attempt ${noEditNudges}/${MAX_NO_EDIT_NUDGES})...` });
         messages.push({ role: "assistant", content: responseText || "(no changes were made)" });
-        messages.push({
-          role: "user",
-          content: "You did NOT modify any files — describing the change or printing code does not count. Apply it now with a real tool call: read_file the target, then edit_file (copy old_string exactly) or write_file. Do not reply with code.",
-        });
+        messages.push({ role: "user", content: msg });
         continue;
       }
 

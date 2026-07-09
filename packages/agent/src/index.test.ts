@@ -213,6 +213,41 @@ describe("CrayonAgent.run() — core loop", () => {
     expect(existsSync(path.join(root, "broken.ts"))).toBe(false);
   });
 
+  it("coding: escalating nudge recovers when the model stalls before editing", async () => {
+    ev.queue = [{ passed: true, command: "test", exitCode: 0, stdout: "ok", stderr: "" }];
+    // Model answers with prose twice (no edit), then finally writes the file.
+    const sm = scriptedModel([
+      [textPart("Here is the code you should add: ..."), finishPart("stop")],
+      [textPart("You could put this in the module: ..."), finishPart("stop")],
+      [toolCallPart("write_file", { path: "out.ts", content: "export const z = 1;\n" }), finishPart("tool-calls")],
+      [textPart("Done — created out.ts."), finishPart("stop")],
+    ]);
+    h.model = sm.model;
+    const agent = makeAgent(root, events);
+    const result = await agent.run("implement the out.ts module");
+    agent.close();
+
+    expect(existsSync(path.join(root, "out.ts"))).toBe(true);
+    // It must have been nudged at least twice before the edit landed.
+    expect(sm.calls()).toBeGreaterThanOrEqual(3);
+    expect(result.success).toBe(true);
+  });
+
+  it("coding: gives up cleanly after exhausting no-edit nudges (no infinite loop)", async () => {
+    // Model never edits — always answers with prose.
+    const sm = scriptedModel([[textPart("I described the change but won't edit."), finishPart("stop")]]);
+    h.model = sm.model;
+    const agent = makeAgent(root, events);
+    const result = await agent.run("implement a feature in the code");
+    agent.close();
+
+    // Terminates (does not hang) and reports no edits.
+    expect(result).toBeTruthy();
+    expect(result.edits.length).toBe(0);
+    // Bounded: 1 initial pass + at most MAX_NO_EDIT_NUDGES (3) retries.
+    expect(sm.calls()).toBeLessThanOrEqual(5);
+  });
+
   it("aborts when the signal is already aborted", async () => {
     h.model = scriptedModel([[textPart("should not run"), finishPart("stop")]]).model;
     const agent = makeAgent(root, events);
