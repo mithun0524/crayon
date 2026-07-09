@@ -19,6 +19,15 @@ function formatDuration(ms: number) {
 // never shifts. (The old dingbat frames ✢✳∗✻✽ had varying widths → jitter.)
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+// Whimsical present-continuous "working" verbs (Claude-Code idiom). Picked
+// once per turn (keyed off startTime) so it stays stable across re-renders
+// but varies run-to-run.
+const VERBS = [
+  "Brewing", "Cooking", "Churning", "Baking", "Sautéing", "Simmering",
+  "Percolating", "Whisking", "Marinating", "Crunching", "Noodling",
+  "Conjuring", "Untangling", "Wrangling", "Pondering", "Tinkering",
+];
+
 export const AgentProgress: React.FC<AgentProgressProps> = ({
   statusText,
   tokens = 0,
@@ -36,7 +45,9 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
   const spinnerColor = isStalled ? theme.warning : theme.brand;
 
   const kTokens = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
-  const label = statusText === "Thinking..." ? "Working" : statusText;
+  // Generic waiting → whimsical verb; a specific tool status stays as-is.
+  const verb = VERBS[Math.floor(startTime / 1000) % VERBS.length];
+  const label = statusText === "Thinking..." ? `${verb}…` : statusText;
 
   return (
     <Box flexDirection="row" marginTop={0}>
