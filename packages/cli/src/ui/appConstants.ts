@@ -11,6 +11,7 @@ export const AVAILABLE_COMMANDS = [
   { cmd: "/files", desc: "View modified files this session" },
   { cmd: "/compact", desc: "Compact conversation history" },
   { cmd: "/model", desc: "Change the AI model", usage: "[model-name]" },
+  { cmd: "/mcp", desc: "Show configured MCP servers and their tools" },
   { cmd: "/config", desc: "Change provider, model, or theme" },
   { cmd: "/color", desc: "Change the accent color", usage: "[name]" },
   { cmd: "/easel", desc: "View the active agent context (files read)" },

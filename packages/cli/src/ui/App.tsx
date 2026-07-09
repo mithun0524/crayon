@@ -121,6 +121,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [currentProvider, setCurrentProvider] = useState<"anthropic" | "openai" | "google" | "openrouter" | "ollama">("anthropic");
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
   const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
+  // /mcp interactive view: list of servers, and the drilled-into server.
+  const [mcpView, setMcpView] = useState<any[] | null>(null);
+  const [mcpDetail, setMcpDetail] = useState<any | null>(null);
   // Highlighted row in the inline "/…" command menu.
   const [cmdIndex, setCmdIndex] = useState(0);
   // Bumped after applyAccent() mutates the shared theme, to force a re-render.
@@ -571,6 +574,11 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
+    if (mcpView && key.escape) {
+      if (mcpDetail) setMcpDetail(null);
+      else setMcpView(null);
+      return;
+    }
     if ((isModelSelectorOpen || isColorPickerOpen) && key.escape) {
       setIsModelSelectorOpen(false);
       setIsColorPickerOpen(false);
@@ -634,7 +642,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
-    if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isColorPickerOpen) {
+    if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isColorPickerOpen && !mcpView) {
       if ((key.ctrl && input === "t") || input === "\u001b[Z" || (key.shift && (key.tab || input === "\t"))) {
         const modes = ["ask", "auto-edit", "plan", "auto", "bypass"];
         const currentIdx = modes.indexOf(agentMode);
@@ -927,6 +935,30 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             });
           }
           break;
+        case "/mcp": {
+          if (!agentRef.current) {
+            pushMessage({ sender: "system", text: "Agent not initialized." });
+            break;
+          }
+          pushMessage({ sender: "system", text: "Checking MCP servers…" });
+          try {
+            const info = await agentRef.current.getMcpInfo();
+            if (info.length === 0) {
+              pushMessage({
+                sender: "system",
+                text: "No MCP servers configured.\nAdd one with:  crayon mcp add <name> <command> [args...]\nor edit ~/.crayon/mcp.json",
+                isCommandOutput: true,
+              });
+            } else {
+              // Open the interactive server browser (list → detail).
+              setMcpDetail(null);
+              setMcpView(info);
+            }
+          } catch (e: any) {
+            pushMessage({ sender: "system", text: `MCP check failed: ${e?.message || String(e)}`, isCommandOutput: true });
+          }
+          break;
+        }
         case "/compact": {
           if (!agentRef.current) {
             pushMessage({ sender: "system", text: "Agent not initialized." });
@@ -1276,7 +1308,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const showCmdMenu =
     currentInput.startsWith("/") && !currentInput.includes(" ") &&
     cmdItems.length > 0 && !isExecuting &&
-    !isModelSelectorOpen && !isColorPickerOpen && !approvalRequest;
+    !isModelSelectorOpen && !isColorPickerOpen && !approvalRequest && !mcpView;
   // Sliding window so the highlight stays visible when arrowing past the fold.
   const CMD_MAX = 3;
   const cmdSel = Math.min(cmdIndex, Math.max(0, cmdItems.length - 1));
@@ -1515,16 +1547,78 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             </Box>
           )}
 
+          {/* /mcp — interactive server browser (list → detail). */}
+          {mcpView && !mcpDetail && (
+            <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
+              <Text color={theme.brand} bold>MCP servers <Text color={theme.subtle} dimColor>({mcpView.length})</Text></Text>
+              <SearchableSelect
+                items={mcpView.map((s: any) => ({
+                  label: `${s.connected ? "●" : "✕"} ${s.name}`,
+                  value: s.name,
+                  description: s.connected ? `${s.tools.length} tool${s.tools.length === 1 ? "" : "s"} · ${s.command}` : "not connected",
+                }))}
+                placeholder="server…"
+                onSelect={(name) => setMcpDetail(mcpView.find((s: any) => s.name === name) || null)}
+                onCancel={() => setMcpView(null)}
+              />
+              <Text color={theme.subtle} dimColor>{"  ↑↓ select · ⏎ open · esc close · add with: crayon mcp add"}</Text>
+            </Box>
+          )}
+
+          {mcpView && mcpDetail && (
+            <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
+              <Text color={theme.brand} bold>{mcpDetail.name} <Text color={mcpDetail.connected ? theme.success : theme.error}>{mcpDetail.connected ? "● connected" : "✕ not connected"}</Text></Text>
+              <Text color={theme.subtle}>  {mcpDetail.command} {(mcpDetail.args || []).join(" ")}</Text>
+              <Text color={theme.subtle} dimColor>  {mcpDetail.tools.length} tools{mcpDetail.tools.length ? ": " + mcpDetail.tools.slice(0, 8).join(", ") + (mcpDetail.tools.length > 8 ? "…" : "") : ""}</Text>
+              <Box marginTop={1}>
+                <SearchableSelect
+                  items={[
+                    { label: "View tools", value: "tools", description: `list all ${mcpDetail.tools.length} tools` },
+                    { label: "Reconnect", value: "reconnect", description: "re-run connection" },
+                    { label: "Remove", value: "remove", description: "delete from ~/.crayon/mcp.json" },
+                    { label: "Back", value: "back", description: "return to server list" },
+                  ]}
+                  onSelect={async (action) => {
+                    const name = mcpDetail.name;
+                    if (action === "back") { setMcpDetail(null); return; }
+                    if (action === "tools") {
+                      pushMessage({ sender: "system", text: `\x1b[1m${name} tools (${mcpDetail.tools.length})\x1b[22m\n${mcpDetail.tools.map((t: string) => "  - " + t).join("\n") || "  (none)"}`, isCommandOutput: true });
+                      setMcpView(null); setMcpDetail(null); return;
+                    }
+                    if (action === "reconnect") {
+                      try { const info = await agentRef.current!.getMcpInfo(); setMcpView(info); setMcpDetail(info.find((s: any) => s.name === name) || null); } catch {}
+                      return;
+                    }
+                    if (action === "remove") {
+                      try {
+                        const os = await import("node:os");
+                        const mcpPath = path.join(os.homedir(), ".crayon", "mcp.json");
+                        if (existsSync(mcpPath)) {
+                          const cfg = JSON.parse(await readFile(mcpPath, "utf-8"));
+                          if (cfg.mcpServers) { delete cfg.mcpServers[name]; await writeFile(mcpPath, JSON.stringify(cfg, null, 2)); }
+                        }
+                        pushMessage({ sender: "system", text: `Removed MCP server "${name}". Restart the session for it to take effect.` });
+                      } catch (e: any) { pushMessage({ sender: "system", text: `Failed to remove: ${e?.message || String(e)}` }); }
+                      setMcpView(null); setMcpDetail(null); return;
+                    }
+                  }}
+                  onCancel={() => setMcpDetail(null)}
+                />
+              </Box>
+              <Text color={theme.subtle} dimColor>{"  ↑↓ select · ⏎ choose · esc back"}</Text>
+            </Box>
+          )}
+
           {/* Hide the main prompt only while an overlay picker owns input, so
               there is only ever one input field on screen. */}
-          {!isModelSelectorOpen && !isColorPickerOpen && (
+          {!isModelSelectorOpen && !isColorPickerOpen && !mcpView && (
             <Box marginTop={0} flexDirection="column" paddingLeft={1}>
               <Box flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1}>
                 <Text bold color={isExecuting ? theme.subtle : theme.brand}>
                   crayon<Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
                 </Text>
                 <TextInput
-                  focus={!isModelSelectorOpen && !isColorPickerOpen}
+                  focus={!isModelSelectorOpen && !isColorPickerOpen && !mcpView}
                   value={currentInput}
                   onChange={(v) => {
                     if (Date.now() - modeSwitchTimeRef.current < 50 && v.endsWith("t")) {

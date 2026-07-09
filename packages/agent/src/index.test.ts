@@ -244,6 +244,9 @@ describe("CrayonAgent.run() — core loop", () => {
     // Terminates (does not hang) and reports no edits.
     expect(result).toBeTruthy();
     expect(result.edits.length).toBe(0);
+    // A coding task that changed nothing is NOT a success, and says so.
+    expect(result.success).toBe(false);
+    expect(result.summary).toMatch(/no files were changed/i);
     // Bounded: 1 initial pass + at most MAX_NO_EDIT_NUDGES (3) retries.
     expect(sm.calls()).toBeLessThanOrEqual(5);
   });

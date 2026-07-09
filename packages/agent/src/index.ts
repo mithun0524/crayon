@@ -814,7 +814,11 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
       }
     }
 
-    const success = evalRetries <= maxEvalRetries;
+    // A coding task that produced ZERO edits (after the nudges) is NOT a
+    // success — eval never runs without edits, so the old `evalRetries` check
+    // wrongly reported success. Plan mode legitimately makes no edits.
+    const madeNoEdits = mode === "coding" && !planningOnly && edits.length === 0;
+    const success = evalRetries <= maxEvalRetries && !madeNoEdits;
     let rollbackMsg = "";
     if (!success) {
       const restored = await this.transaction.rollbackTransaction();
@@ -833,11 +837,15 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
       }
     }
 
+    const noEditNote = madeNoEdits
+      ? "\n\n[System: No files were changed — the edit was never applied. Rephrase the request, or use a stronger model that reliably commits edits.]"
+      : "";
     const finalSummary =
-      summary + rollbackMsg ||
-      (mode === "advisory"
-        ? "I searched the codebase but couldn't generate a full answer. Try rephrasing your question."
-        : `Completed in ${totalSteps} steps. Edited: ${[...new Set(edits)].join(", ") || "none"}.${rollbackMsg}`);
+      (summary + rollbackMsg ||
+        (mode === "advisory"
+          ? "I searched the codebase but couldn't generate a full answer. Try rephrasing your question."
+          : `Completed in ${totalSteps} steps. Edited: ${[...new Set(edits)].join(", ") || "none"}.${rollbackMsg}`)) +
+      noEditNote;
 
     if (!summary && finalSummary) {
       this.emit({ type: "text", content: finalSummary });
@@ -869,6 +877,38 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
 
   getIndexer(): CodeIndexer {
     return this.indexer;
+  }
+
+  /**
+   * MCP status for UI surfaces (the /mcp command): every configured server,
+   * whether it connected, and the tools it exposes. Connects on demand.
+   */
+  async getMcpInfo(): Promise<{ name: string; connected: boolean; command: string; args: string[]; tools: string[] }[]> {
+    try {
+      await this.mcpClient.connectAll();
+    } catch {
+      /* connection errors surface per-server below */
+    }
+    let tools: Awaited<ReturnType<typeof this.mcpClient.listTools>> = [];
+    try {
+      tools = await this.mcpClient.listTools();
+    } catch {
+      /* ignore */
+    }
+    const connected = new Set(this.mcpClient.connectedServerNames());
+    const byServer = new Map<string, string[]>();
+    for (const { server, tool } of tools) {
+      if (!byServer.has(server)) byServer.set(server, []);
+      byServer.get(server)!.push(tool.name);
+    }
+    const configs = new Map((this.config.mcpServers ?? []).map((c) => [c.name, c]));
+    return this.mcpClient.configuredServerNames().map((name) => ({
+      name,
+      connected: connected.has(name),
+      command: configs.get(name)?.command ?? "",
+      args: configs.get(name)?.args ?? [],
+      tools: byServer.get(name) ?? [],
+    }));
   }
 
   setPermissionMode(mode: import("./types.js").PermissionMode): void {
