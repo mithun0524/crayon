@@ -257,6 +257,9 @@ describe("CrayonAgent.run() — core loop", () => {
     const controller = new AbortController();
     controller.abort();
     await expect(agent.run("do something big", { signal: controller.signal })).rejects.toThrow();
+    // The rejection is the single error path — the agent must NOT also emit an
+    // `error` event from its outer catch (that double-logged in the UI).
+    expect(events.some((e) => e.type === "error")).toBe(false);
     agent.close();
   });
 

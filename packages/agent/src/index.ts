@@ -873,7 +873,9 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
     };
     } catch (err: any) {
       await this.transaction.rollbackTransaction();
-      this.emit({ type: "error", message: err.message });
+      // Do NOT emit an `error` event here — we re-throw, and every caller
+      // (CLI run(), VS Code panel) surfaces the rejection itself. Emitting too
+      // would double-log the same error. Non-fatal errors mid-run still emit.
       throw err;
     }
   }
