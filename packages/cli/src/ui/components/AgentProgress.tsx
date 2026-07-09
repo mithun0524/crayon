@@ -34,12 +34,21 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
   const label = statusText === "Thinking..." ? `${verbForTurn(startTime).present}…` : statusText;
 
   return (
-    <Box flexDirection="row" marginTop={0}>
-      <Text color={spinnerColor} bold>{FRAMES[frame]} </Text>
-      <Text color={theme.text}>{label} </Text>
-      <Text color={theme.subtle} dimColor>
-        ({formatDuration(elapsedMs)} · {kTokens} tokens · esc to interrupt)
-      </Text>
+    <Box flexDirection="column" marginTop={0}>
+      <Box flexDirection="row">
+        <Text color={spinnerColor} bold>{FRAMES[frame]} </Text>
+        <Text color={theme.text}>{label} </Text>
+        <Text color={theme.subtle} dimColor>
+          ({formatDuration(elapsedMs)} · {kTokens} tokens · esc to interrupt)
+        </Text>
+      </Box>
+      {/* When the model has produced nothing for a while, say so — a silent
+          spinner reads as "frozen". Common with slow/overloaded local models. */}
+      {isStalled && (
+        <Text color={theme.warning} dimColor>
+          {"   model slow to respond — esc to interrupt, or /model to switch to a faster one"}
+        </Text>
+      )}
     </Box>
   );
 };
