@@ -126,6 +126,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [, setThemeTick] = useState(0);
   const [availableModels, setAvailableModels] = useState<SelectOption[]>([]);
   const [customCommands, setCustomCommands] = useState<CustomCommand[]>([]);
+  // Claude-Code-style next-action hints proposed after each chat answer.
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   const customCommandsRef = useRef<CustomCommand[]>([]);
   useEffect(() => { customCommandsRef.current = customCommands; }, [customCommands]);
   const [sessionId, setSessionId] = useState(() => {
@@ -368,6 +370,13 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       // produced a plan (result.planned) — never for advisory/chat answers.
       if (mode === "chat" && result.planned && result.summary.trim()) {
         setApprovalRequest({ type: "plan", plan: result.summary });
+      } else if (mode === "chat" && agentRef.current) {
+        // Propose next-action hints (Claude-Code-style). Fire-and-forget; the
+        // user can ignore, pick by number, or just type something else.
+        agentRef.current
+          .suggestFollowUps(3)
+          .then((s) => { if (!abortedRef.current) setSuggestions(s); })
+          .catch(() => {});
       }
 
       if (mode === "run") {
@@ -717,9 +726,16 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
   const handleSubmit = async (inputStr: string) => {
 
-    const trimmed = inputStr.trim();
+    let trimmed = inputStr.trim();
     if (!trimmed) return;
-    
+
+    // Pick a proposed next action by number ("1", "2", "3") while hints show.
+    if (suggestions.length > 0 && /^[1-9]$/.test(trimmed)) {
+      const pick = suggestions[Number(trimmed) - 1];
+      if (pick) trimmed = pick;
+    }
+    setSuggestions([]); // any submission clears the hints
+
     setInputHistory((prev) => [...prev, trimmed]);
     setInputHistoryIndex(-1);
     setCurrentInput("");
@@ -1380,6 +1396,21 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
       {!approvalRequest && mode === "chat" && (
         <Box flexDirection="column" flexShrink={0}>
+          {/* Next-action hints — proposed after an answer; pick with a number,
+              or just keep typing. Hidden while the command menu is open. */}
+          {suggestions.length > 0 && !showCmdMenu && !isExecuting && !isModelSelectorOpen && !isColorPickerOpen && !currentInput.trim() && (
+            <Box flexDirection="column" paddingLeft={2} marginBottom={1}>
+              <Text color={theme.subtle} dimColor>Next:</Text>
+              {suggestions.map((s, i) => (
+                <Box key={i} flexDirection="row">
+                  <Box width={4} marginRight={1}><Text color={theme.brand}>{`  ${i + 1}.`}</Text></Box>
+                  <Box flexGrow={1}><Text color={theme.subtle}>{s}</Text></Box>
+                </Box>
+              ))}
+              <Text color={theme.subtle} dimColor>{"  type a number to run · or keep typing"}</Text>
+            </Box>
+          )}
+
           {/* Inline command menu — filters as you type "/…", sits above the
               single main input (Claude Code-style). */}
           {showCmdMenu && (
