@@ -255,6 +255,10 @@ export class CrayonAgent {
           // We drive the loop; the SDK does exactly one generation per call.
           maxSteps: 1,
           maxRetries: 3,
+          // Stream tool-call construction so we can show the tool the model is
+          // building (e.g. "write_file src/index.html") LIVE, instead of dead
+          // air while it generates a large argument.
+          toolCallStreaming: true,
           abortSignal: combinedSignal,
         }),
       {
@@ -270,6 +274,8 @@ export class CrayonAgent {
     let responseText = "";
     let inThinking = false;
     let buffer = "";
+    let streamingToolName = "";
+    let streamingToolArgs = "";
 
     const streamIterator = streamResult.fullStream[Symbol.asyncIterator]();
     try {
@@ -289,6 +295,22 @@ export class CrayonAgent {
         const chunk = nextChunk.value;
         if (chunk.type === "reasoning") {
           this.emit({ type: "reasoning_delta", content: chunk.textDelta });
+          continue;
+        }
+        // Live transparency: the model has started building a tool call. Show
+        // it immediately (name + accumulating path/arg) rather than waiting for
+        // the whole — possibly large — argument to finish generating.
+        if (chunk.type === "tool-call-streaming-start") {
+          streamingToolName = (chunk as any).toolName;
+          streamingToolArgs = "";
+          this.emit({ type: "thinking", content: `${streamingToolName}…` });
+          continue;
+        }
+        if (chunk.type === "tool-call-delta") {
+          streamingToolArgs += (chunk as any).argsTextDelta ?? "";
+          // Surface the first path/command-like field as it appears.
+          const m = streamingToolArgs.match(/"(?:path|file|filePath|command|query)"\s*:\s*"([^"]{0,60})/);
+          this.emit({ type: "thinking", content: m ? `${streamingToolName} ${m[1]}…` : `${streamingToolName}…` });
           continue;
         }
         if (chunk.type === "text-delta") {
