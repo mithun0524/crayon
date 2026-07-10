@@ -1,5 +1,6 @@
 import { z } from "zod";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import type { LSPServerManager } from "../services/lsp/LSPServerManager.js";
 
@@ -19,6 +20,10 @@ export function createLSPTools(lspManager: LSPServerManager) {
           return { success: false, error: `No active language server found for file extension: ${path.extname(filePath)}` };
         }
 
+        // Tell the server about the document first — without didOpen,
+        // definition/references/hover run against a file the server never
+        // loaded and usually return empty. openFile is idempotent.
+        try { await lspManager.openFile(absPath, await readFile(absPath, "utf-8")); } catch { /* file gone / unreadable */ }
         const fileUri = pathToFileURL(absPath).href;
         try {
           const result: any = await server.sendRequest("textDocument/definition", {
@@ -71,6 +76,10 @@ export function createLSPTools(lspManager: LSPServerManager) {
           return { success: false, error: `No active language server found for file extension: ${path.extname(filePath)}` };
         }
 
+        // Tell the server about the document first — without didOpen,
+        // definition/references/hover run against a file the server never
+        // loaded and usually return empty. openFile is idempotent.
+        try { await lspManager.openFile(absPath, await readFile(absPath, "utf-8")); } catch { /* file gone / unreadable */ }
         const fileUri = pathToFileURL(absPath).href;
         try {
           const result: any = await server.sendRequest("textDocument/references", {
@@ -117,6 +126,10 @@ export function createLSPTools(lspManager: LSPServerManager) {
           return { success: false, error: `No active language server found for file extension: ${path.extname(filePath)}` };
         }
 
+        // Tell the server about the document first — without didOpen,
+        // definition/references/hover run against a file the server never
+        // loaded and usually return empty. openFile is idempotent.
+        try { await lspManager.openFile(absPath, await readFile(absPath, "utf-8")); } catch { /* file gone / unreadable */ }
         const fileUri = pathToFileURL(absPath).href;
         try {
           const result: any = await server.sendRequest("textDocument/hover", {
