@@ -129,12 +129,25 @@ export function formatToolResult(name: string, args: any, result: any, isError: 
   const VERBS: Record<string, string> = {
     read_file: "Read", list_directory: "List", terminal: "Bash", grep: "Search",
     search_codebase: "Search", find_usages: "Usages", write_file: "Write",
-    overwrite_file: "Write", edit_file: "Update", edit_ast: "Update", delete_file: "Delete",
-    rename_file: "Move", web_fetch: "Fetch", git_status: "Git", git_diff: "Git",
-    git_commit: "Commit", spawn_agent: "Agent", todo: "Todo", glob_search: "Glob",
+    overwrite_file: "Rewrite", edit_file: "Update", edit_ast: "Update", multi_edit: "Update",
+    delete_file: "Delete", rename_file: "Move", web_fetch: "Fetch", git_status: "Git",
+    git_diff: "Git", git_commit: "Commit", spawn_agent: "Agent", todo: "Todo", glob_search: "Glob",
+    explain_codebase: "Explain", web_search: "Web", list_background: "Jobs",
+    read_background_output: "Logs", kill_background: "Kill",
   };
-  const verb = VERBS[name] || name;
-  let target = clip(a.command || a.pattern || a.query || a.path || a.file_path || a.url || (a.old_path && a.new_path ? `${a.old_path} → ${a.new_path}` : "") || a.task || "");
+  // write_file that replaced an existing file reads better as "Rewrite".
+  const verb = name === "write_file" && r.created === false ? "Rewrite" : VERBS[name] || name;
+  // +N −M summary from a unified diff, for full-file writes.
+  const diffStat = (d?: string): string => {
+    if (!d) return "";
+    let add = 0, del = 0;
+    for (const l of d.split("\n")) {
+      if (l.startsWith("+") && !l.startsWith("+++")) add++;
+      else if (l.startsWith("-") && !l.startsWith("---")) del++;
+    }
+    return add || del ? `+${add} −${del}` : "";
+  };
+  let target = clip(a.command || a.pattern || a.query || a.path || a.file_path || a.url || (a.old_path && a.new_path ? `${a.old_path} → ${a.new_path}` : "") || "");
 
   let detail = "";
   if (isError) {
@@ -148,9 +161,12 @@ export function formatToolResult(name: string, args: any, result: any, isError: 
         detail = `${n} ${n === 1 ? "match" : "matches"}`; break;
       }
       case "terminal": detail = r.exitCode && r.exitCode !== 0 ? `exited ${r.exitCode}` : (r.background ? `pid ${r.pid}` : "done"); break;
-      case "write_file": detail = "created"; break;
-      case "overwrite_file": detail = "rewritten"; break;
-      case "edit_file": case "edit_ast": detail = ""; break; // diff shown below
+      case "write_file": { const s = diffStat(r.diff); detail = `${r.created === false ? "rewritten" : "created"}${s ? " " + s : ""}`; break; }
+      case "overwrite_file": { const s = diffStat(r.diff); detail = `rewritten${s ? " " + s : ""}`; break; }
+      case "edit_file": case "edit_ast": case "multi_edit": detail = ""; break; // diff shown below
+      case "todo": { const n = (String(a.content || "").match(/^[\s]*[-*]\s*\[/gm) || []).length; detail = n ? `${n} item${n === 1 ? "" : "s"}` : "updated"; break; }
+      case "explain_codebase": detail = "overview"; break;
+      case "web_search": { const n = r.results?.length ?? 0; detail = `${n} result${n === 1 ? "" : "s"}`; break; }
       case "delete_file": detail = "deleted"; break;
       case "rename_file": detail = "moved"; break;
       case "web_fetch": detail = r.status ? `HTTP ${r.status}` : "fetched"; break;

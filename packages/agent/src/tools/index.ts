@@ -520,34 +520,40 @@ export function createTools(ctx: ToolContext) {
 
     // concurrent: false | readonly: false | permission: ask
     write_file: {
-      description: "Create a new file. Cannot overwrite existing files — use edit_file or overwrite_file instead.",
+      description: "Create a file, or replace it entirely if it already exists. For small targeted changes to an existing file, prefer edit_file.",
       parameters: z.object({
-        path: z.string().describe("Relative path for the new file"),
-        content: z.string().describe("File content"),
+        path: z.string().describe("Relative path to the file"),
+        content: z.string().describe("Full file content"),
       }),
       execute: async ({ path: filePath, content }: { path: string; content: string }) => {
         const absPath = resolvePath(filePath);
-        if (existsSync(absPath)) {
-          // Warn if file exists but hasn't been read
-          const notReadWarning = ctx.fileState && !ctx.fileState.hasRead(filePath)
-            ? " Warning: You have not read this file yet. Read it first to avoid overwriting changes."
-            : "";
-          return { success: false, error: `File already exists: ${filePath}. Use edit_file for targeted edits or overwrite_file to replace the whole file.${notReadWarning}` };
-        }
+        const existed = existsSync(absPath);
+        // Replacing a file we never read is worth flagging, but is NOT an
+        // error — the model shouldn't have to dance through write→fail→
+        // overwrite. The transaction snapshot makes it reversible.
+        const notReadWarning = existed && ctx.fileState && !ctx.fileState.hasRead(filePath)
+          ? "Replaced an existing file you had not read — verify nothing was lost."
+          : "";
 
         const approved = await checkEditPermission(filePath, content);
         if (!approved) {
           return { success: false, error: "PERMISSION_DENIED_BY_USER" };
         }
 
+        let original = "";
+        if (existed) {
+          try { original = await readFile(absPath, "utf-8"); } catch { /* unreadable — treat as new */ }
+        }
         await mkdir(path.dirname(absPath), { recursive: true });
         await ctx.transaction?.snapshotFile(filePath);
         await writeFile(absPath, content, "utf-8");
 
-        const diff = createTwoFilesPatch(filePath, filePath, "", content);
+        const diff = createTwoFilesPatch(filePath, filePath, original, content);
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
 
-        return { success: true, path: filePath, created: true };
+        const result: Record<string, unknown> = { success: true, path: filePath, created: !existed };
+        if (notReadWarning) result.warning = notReadWarning;
+        return result;
       },
     },
 

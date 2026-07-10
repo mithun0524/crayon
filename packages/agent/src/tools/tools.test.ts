@@ -155,12 +155,22 @@ describe("file tools", () => {
     expect(await readFile(path.join(root, "f.ts"), "utf-8")).toBe("const a = 1;\nconst b = 2;\n");
   });
 
-  it("write_file refuses to overwrite an existing file", async () => {
+  it("write_file replaces an existing file instead of erroring (no churn)", async () => {
     await writeFile(path.join(root, "exists.ts"), "old", "utf-8");
     const tools = createTools(makeCtx(root));
     const res: any = await tools.write_file.execute({ path: "exists.ts", content: "new" });
-    expect(res.success).toBe(false);
-    expect(await readFile(path.join(root, "exists.ts"), "utf-8")).toBe("old");
+    expect(res.success).toBe(true); // was success:false → forced write→fail→overwrite churn
+    expect(res.created).toBe(false);
+    expect(await readFile(path.join(root, "exists.ts"), "utf-8")).toBe("new");
+  });
+
+  it("write_file warns when replacing an unread file (fileState present)", async () => {
+    await writeFile(path.join(root, "unread.ts"), "old", "utf-8");
+    const ctx = { ...makeCtx(root), fileState: { hasRead: () => false, markRead: () => {} } } as any;
+    const tools = createTools(ctx);
+    const res: any = await tools.write_file.execute({ path: "unread.ts", content: "new" });
+    expect(res.success).toBe(true);
+    expect(res.warning).toMatch(/existing file/i);
   });
 
   it("write_file creates a new file", async () => {

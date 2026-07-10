@@ -179,8 +179,10 @@ export class CrayonAgent {
       const { text } = await generateText({
         model: getExecutionModel(this.config),
         system:
-          `You suggest follow-up actions for a coding-assistant chat. Given the last exchange, ` +
-          `propose ${count} short (under 10 words), concrete, actionable next requests the user might click. ` +
+          `You propose the next actions for an autonomous coding agent that edits files and runs commands in THIS repo. ` +
+          `Given the last exchange, suggest ${count} short (under 8 words) actions the AGENT can DO next — imperative tasks like ` +
+          `"Open index.html in the browser", "Add a calculation history", "Write tests for script.js", "Fix the layout on mobile". ` +
+          `NOT tutorials, NOT questions, NOT "how to…" or "show me…" — the user clicks these to make the agent act. ` +
           `Respond with ONLY a JSON array of strings — no prose, no markdown.`,
         prompt: recent.join("\n\n"),
         maxTokens: 200,

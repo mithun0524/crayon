@@ -146,6 +146,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const apiDurationRef = useRef(0);
 
   const agentRef = useRef<CrayonAgent | null>(null);
+  const runningTaskRef = useRef<string | null>(null); // task currently executing (dedupe re-submits)
   const abortedRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const historyCountRef = useRef(0);
@@ -366,6 +367,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   };
 
   const runTask = async (agent: CrayonAgent, taskText: string) => {
+    runningTaskRef.current = taskText;
     setIsExecuting(true);
     resetStream();
     setStreamingReasoning("");
@@ -425,6 +427,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       }
     } finally {
       apiDurationRef.current += Math.round((Date.now() - start) / 1000);
+      runningTaskRef.current = null;
     }
   };
 
@@ -1070,7 +1073,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
 
     if (isExecuting) {
+      // Dedupe: ignore a re-submit of the task already running or queued
+      // (impatient double-enter was running the same task twice).
+      if (trimmed === runningTaskRef.current || queuedTasks.includes(trimmed)) {
+        pushMessage({ sender: "system", text: `Already ${trimmed === runningTaskRef.current ? "running" : "queued"} — ignored duplicate.` });
+        return;
+      }
       setQueuedTasks((prev) => [...prev, trimmed]);
+      pushMessage({ sender: "system", text: `Queued (${queuedTasks.length + 1}) — will run after the current task.` });
       return;
     }
 
@@ -1265,7 +1275,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                 <Text color={theme.border}>  ⎿ </Text>
                 <Box flexDirection="column" flexGrow={1}>
                   {detail ? <Text color={isError ? theme.error : theme.subtle} dimColor={!isError}>{detail}</Text> : null}
-                  {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
+                  {/* Show a diff for TARGETED edits only. Full-file writes are
+                      summarized by the +N −M stat in `detail` — dumping the
+                      whole file as a diff is just noise. */}
+                  {msg.diff && !["write_file", "overwrite_file"].includes(tc.name) && <DiffRenderer diff={msg.diff} maxLines={15} />}
                   {details}
                 </Box>
               </Box>
