@@ -2,7 +2,7 @@
   "name": "crayon-vscode",
   "displayName": "Crayon",
   "description": "Autonomous AI coding agent",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "private": true,
   "publisher": "crayon",
   "repository": {
@@ -80,7 +80,7 @@
         "crayon.anthropicApiKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Anthropic API key for Claude models. **Prefer `Crayon: Set API Key` (secure storage)** \u2014 this setting is kept as a fallback and syncs in plain text."
+          "markdownDescription": "Anthropic API key for Claude models. **Prefer `Crayon: Set API Key` (secure storage)** — this setting is kept as a fallback and syncs in plain text."
         },
         "crayon.openaiApiKey": {
           "type": "string",
