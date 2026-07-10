@@ -24,9 +24,9 @@ jobs:
       - name: Check tag matches package version
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          version=$(node -p "require('./package.json').version")
+          version=$(node -p "require('./packages/cli/package.json').version")
           if [ "$tag" != "$version" ]; then
-            echo "::error::Tag v$tag does not match package.json version $version"
+            echo "::error::Tag v$tag does not match packages/cli/package.json version $version"
             exit 1
           fi
       - run: pnpm -r run build
@@ -86,9 +86,9 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: pnpm --filter "crayon-cli..." run build
       - name: Publish
-        run: >-
+        run: >
           pnpm --filter crayon-indexer --filter crayon-agent --filter crayon-cli
-          publish --access public --no-git-checks --provenance
+          publish --no-git-checks --provenance --report-summary
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

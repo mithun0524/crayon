@@ -8,6 +8,9 @@
   "description": "Codebase indexing and semantic search package for Crayon Terminal AI assistant.",
   "author": "mithun0524",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/mithun0524/crayon"
