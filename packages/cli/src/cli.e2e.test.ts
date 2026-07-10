@@ -16,9 +16,14 @@ class CliSession {
   buf = "";
   exitCode: number | null = null;
   constructor(cwd: string, args: string[] = ["chat"]) {
+    // Ink (via ci-info) drops to NON-interactive rendering when $CI is set,
+    // so the dynamic `crayon ❯` prompt never flushes. We drive a REAL pty
+    // here and are explicitly testing interactive behavior, so strip CI (and
+    // related CI flags) from the child's env.
+    const { CI, CONTINUOUS_INTEGRATION, GITHUB_ACTIONS, BUILD_NUMBER, RUN_ID, ...cleanEnv } = process.env;
     this.pty = ptySpawn(process.execPath, [DIST, ...args], {
       name: "xterm-color", cols: 120, rows: 40, cwd,
-      env: { ...process.env, CRAYON_PROVIDER: "ollama", CRAYON_MODEL: "ollama/llama3.1:8b", CRAYON_DISABLE_TELEMETRY: "1" },
+      env: { ...cleanEnv, CRAYON_PROVIDER: "ollama", CRAYON_MODEL: "ollama/llama3.1:8b", CRAYON_DISABLE_TELEMETRY: "1" },
     });
     this.pty.onData((d) => { this.buf += d; });
     this.pty.onExit(({ exitCode }) => { this.exitCode = exitCode; });
