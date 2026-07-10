@@ -188,7 +188,12 @@ jobs:
     name: Auto Release
     runs-on: ubuntu-latest
     needs: ci-ok
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # `always()` is REQUIRED here: ci-ok runs via `if: always()` and its own
+    # needs are frequently skipped by change-detection. Without always(), that
+    # skip propagates and this job is skipped even though ci-ok SUCCEEDED and
+    # this is a push to main — which is exactly why no release ever fired.
+    # Gate explicitly on ci-ok's result instead of the implicit success().
+    if: ${{ always() && needs.ci-ok.result == 'success' && github.ref == 'refs/heads/main' && github.event_name == 'push' }}
     permissions:
       contents: write
       id-token: write # npm provenance
