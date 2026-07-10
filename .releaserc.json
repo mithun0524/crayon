@@ -1,0 +1,65 @@
+{
+  "branches": ["main"],
+  "tagFormat": "v${version}",
+  "plugins": [
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        "preset": "conventionalcommits",
+        "releaseRules": [
+          { "type": "feat",     "release": "minor" },
+          { "type": "fix",      "release": "patch" },
+          { "type": "perf",     "release": "patch" },
+          { "type": "refactor", "release": "patch" },
+          { "type": "chore",    "release": "patch" },
+          { "type": "docs",     "release": false    },
+          { "type": "test",     "release": false    },
+          { "type": "style",    "release": false    },
+          { "breaking": true,   "release": "major"  }
+        ]
+      }
+    ],
+    [
+      "@semantic-release/release-notes-generator",
+      {
+        "preset": "conventionalcommits",
+        "presetConfig": {
+          "types": [
+            { "type": "feat",     "section": "🚀 Features"      },
+            { "type": "fix",      "section": "🐛 Bug Fixes"     },
+            { "type": "perf",     "section": "⚡ Performance"   },
+            { "type": "refactor", "section": "♻️  Refactors"    },
+            { "type": "chore",    "section": "🔧 Chores"        }
+          ]
+        }
+      }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "node scripts/bump-version.mjs ${nextRelease.version} && pnpm build && pnpm --filter crayon-cli run build:binaries && pnpm --filter crayon-vscode run package",
+        "publishCmd": "pnpm --filter crayon-indexer --filter crayon-agent --filter crayon-cli publish --no-git-checks --provenance --report-summary"
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": [
+          "packages/cli/package.json",
+          "packages/agent/package.json",
+          "packages/indexer/package.json"
+        ],
+        "message": "chore(release): v${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "assets": [
+          { "path": "packages/cli/bin/*" },
+          { "path": "packages/vscode/*.vsix" }
+        ]
+      }
+    ]
+  ]
+}

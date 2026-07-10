@@ -22,10 +22,17 @@
     "overrides": {
       "jsondiffpatch": "^0.7.6",
       "diff": "^8.0.3",
-      "ai": "^4.3.2"
+      "ai": "^4.3.2",
+      "hono": "^4.12.26"
     }
   },
   "devDependencies": {
-    "@types/node": "^22.19.19"
+    "@types/node": "^22.19.19",
+    "semantic-release": "^24.2.0",
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/release-notes-generator": "^14.0.3",
+    "@semantic-release/exec": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^11.0.1"
   }
 }
