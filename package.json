@@ -22,7 +22,8 @@
     "overrides": {
       "jsondiffpatch": "^0.7.6",
       "diff": "^8.0.3",
-      "ai": "^4.3.2"
+      "ai": "^4.3.2",
+      "hono": "^4.12.26"
     }
   },
   "devDependencies": {
