@@ -1252,7 +1252,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         const hasBranch = !!(msg.diff || details || detail);
 
         return (
-          <Box key={msg.id} flexDirection="column">
+          <Box key={msg.id} flexDirection="column" marginBottom={1}>
             <Box flexDirection="row">
               <Text color={bulletColor}>⏺ </Text>
               <Box flexGrow={1}>
@@ -1261,7 +1261,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               </Box>
             </Box>
             {hasBranch && (
-              <Box flexDirection="row">
+              <Box flexDirection="row" marginTop={0}>
                 <Text color={theme.border}>  ⎿ </Text>
                 <Box flexDirection="column" flexGrow={1}>
                   {detail ? <Text color={isError ? theme.error : theme.subtle} dimColor={!isError}>{detail}</Text> : null}
