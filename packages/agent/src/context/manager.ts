@@ -73,7 +73,7 @@ ${modeInstructions}
   - To edit files, use \`edit_file\` instead of \`sed\`, \`awk\`, or \`echo\` redirection.
   - To search for files, use \`search_codebase\` or \`list_dir\` instead of \`find\` or \`ls\`.
   - To search content, use \`grep_search\` instead of \`grep\` or \`rg\`.
-- Reserve the \`terminal\` tool exclusively for build scripts, running test suites, or package management commands.
+- Use the \`terminal\` tool for everything else that a shell does: build scripts, tests, package managers, git, dev servers, AND opening files/URLs. You CAN open things for the user — e.g. \`open <file>\` (macOS), \`xdg-open <file>\` (Linux), \`start <file>\` (Windows). Never tell the user you "can't open a browser/file/app" — run the command. Only decline if it is genuinely destructive and not approved.
 
 ## Scratchpad & Planning
 - For complex tasks, use the \`todo\` tool to maintain an internal scratchpad at \`.crayon.todo\`.

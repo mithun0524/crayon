@@ -1,7 +1,19 @@
 import path from "node:path";
 import { mkdir, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { simpleGit, type SimpleGit } from "simple-git";
+
+/** Canonicalize a path (resolve symlinks) so it can be compared to the paths
+ *  git reports — git worktree list emits real paths, but a workspace under a
+ *  symlink (macOS /var→/private/var, /tmp, symlinked $HOME) means our joined
+ *  paths differ. Falls back to path.resolve when the path doesn't exist. */
+function canonical(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
 
 export interface WorktreeInfo {
   /** Absolute path to the worktree directory. */
@@ -63,7 +75,9 @@ export class WorktreeManager {
     // Create the new branch + worktree in one command.
     await this.git.raw(["worktree", "add", "-b", branch, worktreePath, "HEAD"]);
 
-    return { worktreePath, branch };
+    // Return the CANONICAL path (git reports canonical paths in `list`), so
+    // callers that pass this path back into diff/merge/remove match reliably.
+    return { worktreePath: canonical(worktreePath), branch };
   }
 
   /**
@@ -227,9 +241,9 @@ export class WorktreeManager {
   }
 
   private async findWorktree(worktreePath: string): Promise<WorktreeInfo | null> {
-    const abs = path.resolve(worktreePath);
+    const abs = canonical(worktreePath);
     const list = await this.list();
-    return list.find((wt) => path.resolve(wt.path) === abs) ?? null;
+    return list.find((wt) => canonical(wt.path) === abs) ?? null;
   }
 
   private async cleanup(

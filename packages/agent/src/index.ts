@@ -221,8 +221,10 @@ export class CrayonAgent {
       const { text } = await generateText({
         model: getExecutionModel(this.config),
         system:
-          `You suggest follow-up actions for a coding-assistant chat. Given the last exchange, ` +
-          `propose ${count} short (under 10 words), concrete, actionable next requests the user might click. ` +
+          `You propose the next actions for an autonomous coding agent that edits files and runs commands in THIS repo. ` +
+          `Given the last exchange, suggest ${count} short (under 8 words) actions the AGENT can DO next — imperative tasks like ` +
+          `"Open index.html in the browser", "Add a calculation history", "Write tests for script.js", "Fix the layout on mobile". ` +
+          `NOT tutorials, NOT questions, NOT "how to…" or "show me…" — the user clicks these to make the agent act. ` +
           `Respond with ONLY a JSON array of strings — no prose, no markdown.`,
         prompt: recent.join("\n\n"),
         maxTokens: 200,
@@ -278,7 +280,11 @@ export class CrayonAgent {
     toolCalls: Array<{ toolCallId: string; toolName: string; args: unknown }>;
     assistantMessages: CoreMessage[];
   }> {
-    const IDLE_TIMEOUT_MS = Number(process.env.CRAYON_STREAM_IDLE_MS) || 60_000;
+    // Local models (Ollama) can be slower to first token, but too long a
+    // budget makes a wedged endpoint look frozen. 90s balances slow-but-alive
+    // against fail-fast. Override with CRAYON_STREAM_IDLE_MS.
+    const idleDefault = this.config.provider === "ollama" ? 90_000 : 60_000;
+    const IDLE_TIMEOUT_MS = Number(process.env.CRAYON_STREAM_IDLE_MS) || idleDefault;
     const idleController = new AbortController();
     const combinedSignal = signal
       ? AbortSignal.any([signal, idleController.signal])
@@ -293,6 +299,10 @@ export class CrayonAgent {
           // We drive the loop; the SDK does exactly one generation per call.
           maxSteps: 1,
           maxRetries: 3,
+          // Stream tool-call construction so we can show the tool the model is
+          // building (e.g. "write_file src/index.html") LIVE, instead of dead
+          // air while it generates a large argument.
+          toolCallStreaming: true,
           abortSignal: combinedSignal,
         }),
       {
@@ -308,6 +318,8 @@ export class CrayonAgent {
     let responseText = "";
     let inThinking = false;
     let buffer = "";
+    let streamingToolName = "";
+    let streamingToolArgs = "";
 
     const streamIterator = streamResult.fullStream[Symbol.asyncIterator]();
     try {
@@ -327,6 +339,22 @@ export class CrayonAgent {
         const chunk = nextChunk.value;
         if (chunk.type === "reasoning") {
           this.emit({ type: "reasoning_delta", content: chunk.textDelta });
+          continue;
+        }
+        // Live transparency: the model has started building a tool call. Show
+        // it immediately (name + accumulating path/arg) rather than waiting for
+        // the whole — possibly large — argument to finish generating.
+        if (chunk.type === "tool-call-streaming-start") {
+          streamingToolName = (chunk as any).toolName;
+          streamingToolArgs = "";
+          this.emit({ type: "thinking", content: `${streamingToolName}…` });
+          continue;
+        }
+        if (chunk.type === "tool-call-delta") {
+          streamingToolArgs += (chunk as any).argsTextDelta ?? "";
+          // Surface the first path/command-like field as it appears.
+          const m = streamingToolArgs.match(/"(?:path|file|filePath|command|query)"\s*:\s*"([^"]{0,60})/);
+          this.emit({ type: "thinking", content: m ? `${streamingToolName} ${m[1]}…` : `${streamingToolName}…` });
           continue;
         }
         if (chunk.type === "text-delta") {
@@ -875,7 +903,11 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
       }
     }
 
-    const success = evalRetries <= maxEvalRetries;
+    // A coding task that produced ZERO edits (after the nudges) is NOT a
+    // success — eval never runs without edits, so the old `evalRetries` check
+    // wrongly reported success. Plan mode legitimately makes no edits.
+    const madeNoEdits = mode === "coding" && !planningOnly && edits.length === 0;
+    const success = evalRetries <= maxEvalRetries && !madeNoEdits;
     let rollbackMsg = "";
     if (!success) {
       const restored = await this.transaction.rollbackTransaction();
@@ -894,11 +926,15 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
       }
     }
 
+    const noEditNote = madeNoEdits
+      ? "\n\n[System: No files were changed — the edit was never applied. Rephrase the request, or use a stronger model that reliably commits edits.]"
+      : "";
     const finalSummary =
-      summary + rollbackMsg ||
-      (mode === "advisory"
-        ? "I searched the codebase but couldn't generate a full answer. Try rephrasing your question."
-        : `Completed in ${totalSteps} steps. Edited: ${[...new Set(edits)].join(", ") || "none"}.${rollbackMsg}`);
+      (summary + rollbackMsg ||
+        (mode === "advisory"
+          ? "I searched the codebase but couldn't generate a full answer. Try rephrasing your question."
+          : `Completed in ${totalSteps} steps. Edited: ${[...new Set(edits)].join(", ") || "none"}.${rollbackMsg}`)) +
+      noEditNote;
 
     if (!summary && finalSummary) {
       this.emit({ type: "text", content: finalSummary });
@@ -923,13 +959,47 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
     };
     } catch (err: any) {
       await this.transaction.rollbackTransaction();
-      this.emit({ type: "error", message: err.message });
+      // Do NOT emit an `error` event here — we re-throw, and every caller
+      // (CLI run(), VS Code panel) surfaces the rejection itself. Emitting too
+      // would double-log the same error. Non-fatal errors mid-run still emit.
       throw err;
     }
   }
 
   getIndexer(): CodeIndexer {
     return this.indexer;
+  }
+
+  /**
+   * MCP status for UI surfaces (the /mcp command): every configured server,
+   * whether it connected, and the tools it exposes. Connects on demand.
+   */
+  async getMcpInfo(): Promise<{ name: string; connected: boolean; command: string; args: string[]; tools: string[] }[]> {
+    try {
+      await this.mcpClient.connectAll();
+    } catch {
+      /* connection errors surface per-server below */
+    }
+    let tools: Awaited<ReturnType<typeof this.mcpClient.listTools>> = [];
+    try {
+      tools = await this.mcpClient.listTools();
+    } catch {
+      /* ignore */
+    }
+    const connected = new Set(this.mcpClient.connectedServerNames());
+    const byServer = new Map<string, string[]>();
+    for (const { server, tool } of tools) {
+      if (!byServer.has(server)) byServer.set(server, []);
+      byServer.get(server)!.push(tool.name);
+    }
+    const configs = new Map((this.config.mcpServers ?? []).map((c) => [c.name, c]));
+    return this.mcpClient.configuredServerNames().map((name) => ({
+      name,
+      connected: connected.has(name),
+      command: configs.get(name)?.command ?? "",
+      args: configs.get(name)?.args ?? [],
+      tools: byServer.get(name) ?? [],
+    }));
   }
 
   setPermissionMode(mode: import("./types.js").PermissionMode): void {

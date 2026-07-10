@@ -50,7 +50,10 @@ try {
 program
   .name("crayon")
   .description("Crayon — autonomous AI coding agent")
-  .version(pkgVersion);
+  .version(pkgVersion)
+  // Needed so `mcp add`'s passThroughOptions can capture flag-like operands
+  // (e.g. `npx -y @scope/pkg`) instead of erroring on unknown options.
+  .enablePositionalOptions();
 
 program
   .command("init")
@@ -341,10 +344,15 @@ async function runFallback(task: string) {
 
 const mcpCmd = program
   .command("mcp")
-  .description("Manage MCP (Model Context Protocol) servers");
+  .description("Manage MCP (Model Context Protocol) servers")
+  // Let subcommand args swallow flag-like tokens (e.g. `npx -y @scope/pkg`).
+  .enablePositionalOptions();
 
 mcpCmd
   .command("add")
+  // Everything after the command name is treated as operands, so `-y` and
+  // other flags land in [args...] instead of erroring as unknown options.
+  .passThroughOptions()
   .description("Add an MCP server")
   .argument("<name>", "Server name")
   .argument("<command>", "Execution command (e.g., node, npx, python)")
@@ -384,6 +392,29 @@ mcpCmd
     for (const [name, conf] of Object.entries<any>(mcpConfig.mcpServers)) {
       console.log(chalk.green(`- ${name}`) + `: ${conf.command} ${(conf.args || []).join(" ")}`);
     }
+  });
+
+mcpCmd
+  .command("remove")
+  .alias("rm")
+  .description("Remove an MCP server")
+  .argument("<name>", "Server name to remove")
+  .action(async (name) => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const mcpPath = path.join(os.homedir(), ".crayon", "mcp.json");
+    if (!existsSync(mcpPath)) {
+      console.log("No MCP servers configured.");
+      return;
+    }
+    const mcpConfig = JSON.parse(await fs.readFile(mcpPath, "utf-8"));
+    if (!mcpConfig.mcpServers || !(name in mcpConfig.mcpServers)) {
+      console.log(chalk.yellow(`No MCP server named "${name}". Run 'crayon mcp list' to see configured servers.`));
+      return;
+    }
+    delete mcpConfig.mcpServers[name];
+    await fs.writeFile(mcpPath, JSON.stringify(mcpConfig, null, 2));
+    console.log(chalk.green(`Removed MCP server: ${name}`));
   });
 
 program

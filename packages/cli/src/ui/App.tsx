@@ -122,6 +122,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [currentProvider, setCurrentProvider] = useState<"anthropic" | "openai" | "google" | "openrouter" | "ollama">("anthropic");
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
   const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
+  // /mcp interactive view: list of servers, and the drilled-into server.
+  const [mcpView, setMcpView] = useState<any[] | null>(null);
+  const [mcpDetail, setMcpDetail] = useState<any | null>(null);
   // Highlighted row in the inline "/…" command menu.
   const [cmdIndex, setCmdIndex] = useState(0);
   // Bumped after applyAccent() mutates the shared theme, to force a re-render.
@@ -144,6 +147,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const apiDurationRef = useRef(0);
 
   const agentRef = useRef<CrayonAgent | null>(null);
+  const runningTaskRef = useRef<string | null>(null); // task currently executing (dedupe re-submits)
   const abortedRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const historyCountRef = useRef(0);
@@ -374,6 +378,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   };
 
   const runTask = async (agent: CrayonAgent, taskText: string) => {
+    runningTaskRef.current = taskText;
     setIsExecuting(true);
     resetStream();
     setStreamingReasoning("");
@@ -433,6 +438,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       }
     } finally {
       apiDurationRef.current += Math.round((Date.now() - start) / 1000);
+      runningTaskRef.current = null;
     }
   };
 
@@ -520,15 +526,20 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           setGitDirtyCount(git.dirtyCount);
         }, 0);
         break;
-      case "usage":
-        setTokens((prev) => prev + event.totalTokens);
+      case "usage": {
+        // Some providers (e.g. Ollama) omit token counts → guard against NaN.
+        const total = Number(event.totalTokens) || 0;
+        const prompt = Number(event.promptTokens) || 0;
+        const completion = Number(event.completionTokens) || 0;
+        setTokens((prev) => prev + total);
         setCost((prev) => {
           const pricing = getModelPricing(defaultModelRef.current);
           const inputCostPerToken = pricing.input / 1_000_000;
           const outputCostPerToken = pricing.output / 1_000_000;
-          return prev + (event.promptTokens * inputCostPerToken) + (event.completionTokens * outputCostPerToken);
+          return prev + prompt * inputCostPerToken + completion * outputCostPerToken;
         });
         break;
+      }
       case "terminal_output":
         setActiveTerminalOutput((prev) => {
           const cleanIncoming = event.content.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, "");
@@ -602,6 +613,11 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
+    if (mcpView && key.escape) {
+      if (mcpDetail) setMcpDetail(null);
+      else setMcpView(null);
+      return;
+    }
     if ((isModelSelectorOpen || isColorPickerOpen) && key.escape) {
       setIsModelSelectorOpen(false);
       setIsColorPickerOpen(false);
@@ -683,7 +699,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
-    if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isColorPickerOpen) {
+    if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isColorPickerOpen && !mcpView) {
       if ((key.ctrl && input === "t") || input === "\u001b[Z" || (key.shift && (key.tab || input === "\t"))) {
         const modes = ["ask", "auto-edit", "plan", "auto", "bypass"];
         const currentIdx = modes.indexOf(agentMode);
@@ -976,6 +992,30 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             });
           }
           break;
+        case "/mcp": {
+          if (!agentRef.current) {
+            pushMessage({ sender: "system", text: "Agent not initialized." });
+            break;
+          }
+          pushMessage({ sender: "system", text: "Checking MCP servers…" });
+          try {
+            const info = await agentRef.current.getMcpInfo();
+            if (info.length === 0) {
+              pushMessage({
+                sender: "system",
+                text: "No MCP servers configured.\nAdd one with:  crayon mcp add <name> <command> [args...]\nor edit ~/.crayon/mcp.json",
+                isCommandOutput: true,
+              });
+            } else {
+              // Open the interactive server browser (list → detail).
+              setMcpDetail(null);
+              setMcpView(info);
+            }
+          } catch (e: any) {
+            pushMessage({ sender: "system", text: `MCP check failed: ${e?.message || String(e)}`, isCommandOutput: true });
+          }
+          break;
+        }
         case "/compact": {
           if (!agentRef.current) {
             pushMessage({ sender: "system", text: "Agent not initialized." });
@@ -1102,7 +1142,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     }
 
     if (isExecuting) {
+      // Dedupe: ignore a re-submit of the task already running or queued
+      // (impatient double-enter was running the same task twice).
+      if (trimmed === runningTaskRef.current || queuedTasks.includes(trimmed)) {
+        pushMessage({ sender: "system", text: `Already ${trimmed === runningTaskRef.current ? "running" : "queued"} — ignored duplicate.` });
+        return;
+      }
       setQueuedTasks((prev) => [...prev, trimmed]);
+      pushMessage({ sender: "system", text: `Queued (${queuedTasks.length + 1}) — will run after the current task.` });
       return;
     }
 
@@ -1284,7 +1331,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         const hasBranch = !!(msg.diff || details || detail);
 
         return (
-          <Box key={msg.id} flexDirection="column">
+          <Box key={msg.id} flexDirection="column" marginBottom={1}>
             <Box flexDirection="row">
               <Text color={bulletColor}>⏺ </Text>
               <Box flexGrow={1}>
@@ -1293,11 +1340,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               </Box>
             </Box>
             {hasBranch && (
-              <Box flexDirection="row">
+              <Box flexDirection="row" marginTop={0}>
                 <Text color={theme.border}>  ⎿ </Text>
                 <Box flexDirection="column" flexGrow={1}>
                   {detail ? <Text color={isError ? theme.error : theme.subtle} dimColor={!isError}>{detail}</Text> : null}
-                  {msg.diff && <DiffRenderer diff={msg.diff} maxLines={15} />}
+                  {/* Show a diff for TARGETED edits only. Full-file writes are
+                      summarized by the +N −M stat in `detail` — dumping the
+                      whole file as a diff is just noise. */}
+                  {msg.diff && !["write_file", "overwrite_file"].includes(tc.name) && <DiffRenderer diff={msg.diff} maxLines={15} />}
                   {details}
                 </Box>
               </Box>
@@ -1345,7 +1395,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const showCmdMenu =
     currentInput.startsWith("/") && !currentInput.includes(" ") &&
     cmdItems.length > 0 && !isExecuting &&
-    !isModelSelectorOpen && !isColorPickerOpen && !approvalRequest;
+    !isModelSelectorOpen && !isColorPickerOpen && !approvalRequest && !mcpView;
   // Sliding window so the highlight stays visible when arrowing past the fold.
   const CMD_MAX = 3;
   const cmdSel = Math.min(cmdIndex, Math.max(0, cmdItems.length - 1));
@@ -1591,16 +1641,78 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             </Box>
           )}
 
+          {/* /mcp — interactive server browser (list → detail). */}
+          {mcpView && !mcpDetail && (
+            <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
+              <Text color={theme.brand} bold>MCP servers <Text color={theme.subtle} dimColor>({mcpView.length})</Text></Text>
+              <SearchableSelect
+                items={mcpView.map((s: any) => ({
+                  label: `${s.connected ? "●" : "✕"} ${s.name}`,
+                  value: s.name,
+                  description: s.connected ? `${s.tools.length} tool${s.tools.length === 1 ? "" : "s"} · ${s.command}` : "not connected",
+                }))}
+                placeholder="server…"
+                onSelect={(name) => setMcpDetail(mcpView.find((s: any) => s.name === name) || null)}
+                onCancel={() => setMcpView(null)}
+              />
+              <Text color={theme.subtle} dimColor>{"  ↑↓ select · ⏎ open · esc close · add with: crayon mcp add"}</Text>
+            </Box>
+          )}
+
+          {mcpView && mcpDetail && (
+            <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
+              <Text color={theme.brand} bold>{mcpDetail.name} <Text color={mcpDetail.connected ? theme.success : theme.error}>{mcpDetail.connected ? "● connected" : "✕ not connected"}</Text></Text>
+              <Text color={theme.subtle}>  {mcpDetail.command} {(mcpDetail.args || []).join(" ")}</Text>
+              <Text color={theme.subtle} dimColor>  {mcpDetail.tools.length} tools{mcpDetail.tools.length ? ": " + mcpDetail.tools.slice(0, 8).join(", ") + (mcpDetail.tools.length > 8 ? "…" : "") : ""}</Text>
+              <Box marginTop={1}>
+                <SearchableSelect
+                  items={[
+                    { label: "View tools", value: "tools", description: `list all ${mcpDetail.tools.length} tools` },
+                    { label: "Reconnect", value: "reconnect", description: "re-run connection" },
+                    { label: "Remove", value: "remove", description: "delete from ~/.crayon/mcp.json" },
+                    { label: "Back", value: "back", description: "return to server list" },
+                  ]}
+                  onSelect={async (action) => {
+                    const name = mcpDetail.name;
+                    if (action === "back") { setMcpDetail(null); return; }
+                    if (action === "tools") {
+                      pushMessage({ sender: "system", text: `\x1b[1m${name} tools (${mcpDetail.tools.length})\x1b[22m\n${mcpDetail.tools.map((t: string) => "  - " + t).join("\n") || "  (none)"}`, isCommandOutput: true });
+                      setMcpView(null); setMcpDetail(null); return;
+                    }
+                    if (action === "reconnect") {
+                      try { const info = await agentRef.current!.getMcpInfo(); setMcpView(info); setMcpDetail(info.find((s: any) => s.name === name) || null); } catch {}
+                      return;
+                    }
+                    if (action === "remove") {
+                      try {
+                        const os = await import("node:os");
+                        const mcpPath = path.join(os.homedir(), ".crayon", "mcp.json");
+                        if (existsSync(mcpPath)) {
+                          const cfg = JSON.parse(await readFile(mcpPath, "utf-8"));
+                          if (cfg.mcpServers) { delete cfg.mcpServers[name]; await writeFile(mcpPath, JSON.stringify(cfg, null, 2)); }
+                        }
+                        pushMessage({ sender: "system", text: `Removed MCP server "${name}". Restart the session for it to take effect.` });
+                      } catch (e: any) { pushMessage({ sender: "system", text: `Failed to remove: ${e?.message || String(e)}` }); }
+                      setMcpView(null); setMcpDetail(null); return;
+                    }
+                  }}
+                  onCancel={() => setMcpDetail(null)}
+                />
+              </Box>
+              <Text color={theme.subtle} dimColor>{"  ↑↓ select · ⏎ choose · esc back"}</Text>
+            </Box>
+          )}
+
           {/* Hide the main prompt only while an overlay picker owns input, so
               there is only ever one input field on screen. */}
-          {!isModelSelectorOpen && !isColorPickerOpen && (
+          {!isModelSelectorOpen && !isColorPickerOpen && !mcpView && (
             <Box marginTop={0} flexDirection="column" paddingLeft={1}>
               <Box flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1}>
                 <Text bold color={isExecuting ? theme.subtle : theme.brand}>
                   crayon<Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
                 </Text>
                 <TextInput
-                  focus={!isModelSelectorOpen && !isColorPickerOpen}
+                  focus={!isModelSelectorOpen && !isColorPickerOpen && !mcpView}
                   value={currentInput}
                   onChange={(v) => {
                     if (Date.now() - modeSwitchTimeRef.current < 50 && v.endsWith("t")) {

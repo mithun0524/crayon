@@ -88,6 +88,16 @@ export class McpClient {
     }
   }
 
+  /** Names of every configured server (whether or not it connected). */
+  configuredServerNames(): string[] {
+    return this.serverConfigs.map((c) => c.name);
+  }
+
+  /** Names of servers that are currently connected. */
+  connectedServerNames(): string[] {
+    return [...this.servers.keys()];
+  }
+
   async listTools(): Promise<{ server: string; tool: McpTool }[]> {
     const allTools: { server: string; tool: McpTool }[] = [];
     
