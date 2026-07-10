@@ -47,7 +47,8 @@
         "assets": [
           "packages/cli/package.json",
           "packages/agent/package.json",
-          "packages/indexer/package.json"
+          "packages/indexer/package.json",
+          "packages/vscode/package.json"
         ],
         "message": "chore(release): v${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }
