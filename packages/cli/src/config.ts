@@ -15,6 +15,8 @@ export interface CrayonConfig {
   mcpServers?: any[];
   disableTelemetry?: boolean;
   accent?: string;
+  /** UI base theme: "dark" | "light" | "high-contrast". */
+  theme?: string;
   /** Post-edit verification command; "none" disables; unset auto-detects. */
   verifyCommand?: string;
   /** When true, commit each successful task's edits with a generated message. */
@@ -67,6 +69,7 @@ export async function loadConfig(): Promise<CrayonConfig> {
         updateMode: config.updateMode ?? file.updateMode,
         disableTelemetry: config.disableTelemetry ?? file.disableTelemetry,
         accent: process.env.CRAYON_ACCENT ?? file.accent,
+        theme: process.env.CRAYON_THEME ?? file.theme,
         verifyCommand: process.env.CRAYON_VERIFY_CMD ?? file.verifyCommand,
         autoCommit: process.env.CRAYON_AUTO_COMMIT === "1" || file.autoCommit,
       };

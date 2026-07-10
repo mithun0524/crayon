@@ -7,7 +7,8 @@ import os from "node:os";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { createTwoFilesPatch } from "diff";
+import { createTwoFilesPatch, structuredPatch, type StructuredPatch } from "diff";
+type Hunk = StructuredPatch["hunks"][number];
 import { CrayonAgent, type AgentEvent, autoCompact, getModelPricing } from "crayon-agent";
 import { highlight } from "cli-highlight";
 import { fileURLToPath } from "node:url";
@@ -19,9 +20,9 @@ import { getGitInfo } from "./gitHelper.js";
 import { PlanView } from "./PlanView.js";
 import { StatusBar } from "./StatusBar.js";
 import { DiffRenderer } from "./DiffRenderer.js";
-import { saveSession, loadSession } from "../session.js";
+import { saveSession, loadSession, listSessions, type SessionMeta } from "../session.js";
 import { loadCustomCommands, expandTemplate, type CustomCommand } from "../customCommands.js";
-import { theme, ACCENTS, applyAccent } from "./theme.js";
+import { theme, ACCENTS, applyAccent, THEMES, applyTheme } from "./theme.js";
 import { syntaxThemeDark } from "./syntaxTheme.js";
 import { AgentProgress } from "./components/AgentProgress.js";
 import { verbForTurn, formatDuration } from "./workingVerb.js";
@@ -35,6 +36,7 @@ import {
   POPULAR_MODELS,
   getToolCallCompletedText,
   formatToolResult,
+  computePartialEdit,
 } from "./appConstants.js";
 
 interface AppProps {
@@ -59,6 +61,30 @@ interface ChatMessage {
     status: "running" | "success" | "error";
     error?: string;
   };
+}
+
+/** The trailing "@…" token the user is typing, or null if not in one. */
+function atQuery(input: string): string | null {
+  const m = input.match(/(?:^|\s)@([\w./-]*)$/);
+  return m ? m[1] : null;
+}
+
+/** Rank workspace files against an @-query. Basename hits win over path hits. */
+function fileMatches(files: string[], q: string, limit = 8): string[] {
+  const query = q.toLowerCase();
+  if (!query) return files.slice(0, limit);
+  const scored: Array<[number, string]> = [];
+  for (const f of files) {
+    const lf = f.toLowerCase();
+    const base = lf.split("/").pop() || lf;
+    let score = -1;
+    if (base.startsWith(query)) score = 0;
+    else if (base.includes(query)) score = 1;
+    else if (lf.includes(query)) score = 2;
+    if (score >= 0) scored.push([score, f]);
+  }
+  scored.sort((a, b) => a[0] - b[0] || a[1].length - b[1].length);
+  return scored.slice(0, limit).map((s) => s[1]);
 }
 
 /** Commands whose name prefix-matches the current "/…" input (built-in + custom). */
@@ -105,9 +131,18 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [cost, setCost] = useState(0);
   const [isExecuting, setIsExecuting] = useState(false);
   const [currentInput, setCurrentInput] = useState("");
+  // Bumped to remount <TextInput> after a programmatic value change (Tab
+  // completion), so its internal cursor re-seats at the end of the new value
+  // instead of staying at the old offset and inserting mid-string.
+  const [inputEpoch, setInputEpoch] = useState(0);
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [inputHistoryIndex, setInputHistoryIndex] = useState(-1);
   const [approvalRequest, setApprovalRequest] = useState<any>(null);
+  // Per-hunk edit review (git add -p style): walk hunks one at a time.
+  const [hunkReview, setHunkReview] = useState<{
+    path: string; original: string; patch: StructuredPatch; hunks: Hunk[];
+    index: number; accepted: boolean[]; resolve: (v: boolean | string) => void;
+  } | null>(null);
   const [sessionFiles, setSessionFiles] = useState<string[]>([]);
   const [agentMode, setAgentMode] = useState<string>(permissionMode || "ask");
   const agentModeRef = useRef(agentMode);
@@ -117,16 +152,44 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   useEffect(() => {
     defaultModelRef.current = defaultModel;
   }, [defaultModel]);
-  // Reset command-menu highlight whenever the input changes.
-  useEffect(() => { setCmdIndex(0); }, [currentInput]);
+  // Reset menu highlights whenever the input changes; un-dismiss the @-menu.
+  useEffect(() => { setCmdIndex(0); setAtIndex(0); atDismissedRef.current = false; }, [currentInput]);
+  // Cache the tracked file list once for @-mention autocomplete (gitignore-aware).
+  useEffect(() => {
+    try {
+      const res = spawnSync("git", ["ls-files"], { cwd: workspaceRoot, encoding: "utf-8", maxBuffer: 16 * 1024 * 1024 });
+      if (res.status === 0 && res.stdout) setAllFiles(res.stdout.split("\n").filter(Boolean));
+    } catch { /* not a git repo — @-mentions still resolve, just no picker */ }
+  }, []);
   const [currentProvider, setCurrentProvider] = useState<"anthropic" | "openai" | "google" | "openrouter" | "ollama">("anthropic");
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
   const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
+  const [isThemePickerOpen, setIsThemePickerOpen] = useState(false);
+  const [showHelpOverlay, setShowHelpOverlay] = useState(false);
   // /mcp interactive view: list of servers, and the drilled-into server.
   const [mcpView, setMcpView] = useState<any[] | null>(null);
   const [mcpDetail, setMcpDetail] = useState<any | null>(null);
   // Highlighted row in the inline "/…" command menu.
   const [cmdIndex, setCmdIndex] = useState(0);
+  // Inline "@…" file-mention autocomplete.
+  const [allFiles, setAllFiles] = useState<string[]>([]);
+  const allFilesRef = useRef<string[]>([]);
+  useEffect(() => { allFilesRef.current = allFiles; }, [allFiles]);
+  const [atIndex, setAtIndex] = useState(0);
+  // Set when Esc dismisses the @-menu; cleared on the next input change.
+  const atDismissedRef = useRef(false);
+  // In-chat session picker (/resume).
+  const [sessionPicker, setSessionPicker] = useState<SessionMeta[] | null>(null);
+  // Bumped to remount <Static> when the whole transcript is replaced (e.g.
+  // /resume). Static only paints items appended past its last-rendered count,
+  // so a shrink/replace needs a fresh mount to redraw from scratch.
+  const [staticEpoch, setStaticEpoch] = useState(0);
+  // Fullscreen = the terminal's alternate screen buffer. Opt-in via /tui; the
+  // default normal buffer keeps native scrollback/copy. Ref mirror so the exit
+  // handler can restore the normal buffer even outside React's lifecycle.
+  const [fullscreen, setFullscreen] = useState(false);
+  const fullscreenRef = useRef(false);
+  useEffect(() => { fullscreenRef.current = fullscreen; }, [fullscreen]);
   // Bumped after applyAccent() mutates the shared theme, to force a re-render.
   const [, setThemeTick] = useState(0);
   const [availableModels, setAvailableModels] = useState<SelectOption[]>([]);
@@ -202,7 +265,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       loadCustomCommands(workspaceRoot, os.homedir()).then((cmds) => {
         if (active && cmds.length > 0) setCustomCommands(cmds);
       }).catch(() => {});
-      if (config.accent && applyAccent(config.accent)) setThemeTick((t) => t + 1);
+      let themeChanged = false;
+      if (config.theme && applyTheme(config.theme)) themeChanged = true;
+      if (config.accent && applyAccent(config.accent)) themeChanged = true;
+      if (themeChanged) setThemeTick((t) => t + 1);
       setDefaultModel(config.defaultModel || "");
       setCurrentProvider(config.provider as any);
       
@@ -355,6 +421,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
     return () => {
       active = false;
+      // Safety net: never leave the terminal stuck in the alternate buffer.
+      if (fullscreenRef.current) { try { process.stdout.write("\x1b[?1049l"); } catch {} }
       if (agentRef.current) {
         agentRef.current.close();
       }
@@ -566,6 +634,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   // Leave the transcript in scrollback on quit (don't wipe) so it can be
   // scrolled/copied afterward; index.ts prints a resume hint after exit.
   const cleanExit = () => {
+    // Leave the alternate screen first so the shell prompt returns to normal.
+    if (fullscreenRef.current) { try { process.stdout.write("\x1b[?1049l"); } catch {} fullscreenRef.current = false; }
     if (agentRef.current) agentRef.current.close();
     exit();
   };
@@ -593,6 +663,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       approvalRequest.resolve?.(false); // plan approvals have no resolver
       setApprovalRequest(null);
     }
+    if (hunkReview) {
+      hunkReview.resolve(false);
+      setHunkReview(null);
+    }
   };
 
   useInput((input, key) => {
@@ -618,9 +692,27 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       else setMcpView(null);
       return;
     }
-    if ((isModelSelectorOpen || isColorPickerOpen) && key.escape) {
+    if ((isModelSelectorOpen || isColorPickerOpen || isThemePickerOpen) && key.escape) {
       setIsModelSelectorOpen(false);
       setIsColorPickerOpen(false);
+      setIsThemePickerOpen(false);
+      return;
+    }
+
+    // Help overlay: any of esc / ? / enter dismisses it, and it swallows all
+    // other keys so nothing leaks to the input beneath.
+    if (showHelpOverlay) {
+      if (key.escape || input === "?" || key.return) setShowHelpOverlay(false);
+      return;
+    }
+
+    // Per-hunk edit review owns all keys while active.
+    if (hunkReview) {
+      const k = input.toLowerCase();
+      if (k === "y" || key.return) decideHunk("accept");
+      else if (k === "n" || k === "s") decideHunk("skip");
+      else if (k === "a") decideHunk("all");
+      else if (k === "q" || key.escape) decideHunk("cancel");
       return;
     }
 
@@ -699,7 +791,12 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
-    if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isColorPickerOpen && !mcpView) {
+    if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen && !sessionPicker && !mcpView) {
+      // "?" on an empty prompt opens the keybindings/help overlay.
+      if (input === "?" && !currentInput) {
+        setShowHelpOverlay(true);
+        return;
+      }
       if ((key.ctrl && input === "t") || input === "\u001b[Z" || (key.shift && (key.tab || input === "\t"))) {
         const modes = ["ask", "auto-edit", "plan", "auto", "bypass"];
         const currentIdx = modes.indexOf(agentMode);
@@ -739,8 +836,23 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         if (inCmdMenu) {
           if (key.upArrow) { setCmdIndex((i) => Math.max(0, i - 1)); return; }
           if (key.downArrow) { setCmdIndex((i) => Math.min(matches.length - 1, i + 1)); return; }
-          if (key.tab) { setCurrentInput(matches[Math.min(cmdIndex, matches.length - 1)].cmd + " "); return; }
+          if (key.tab) { setCurrentInput(matches[Math.min(cmdIndex, matches.length - 1)].cmd + " "); setInputEpoch((e) => e + 1); return; }
           if (key.escape) { setCurrentInput(""); return; }
+        }
+        // "@…" file-mention menu owns arrows/Tab/Esc while active. Tab completes
+        // the trailing token; Enter still submits (parseMentions resolves it).
+        const atQh = atQuery(currentInput);
+        const atM = atQh !== null && !atDismissedRef.current ? fileMatches(allFilesRef.current, atQh) : [];
+        if (atM.length > 0) {
+          if (key.upArrow) { setAtIndex((i) => Math.max(0, i - 1)); return; }
+          if (key.downArrow) { setAtIndex((i) => Math.min(atM.length - 1, i + 1)); return; }
+          if (key.tab && !key.shift) {
+            const pick = atM[Math.min(atIndex, atM.length - 1)];
+            setCurrentInput(currentInput.replace(/@([\w./-]*)$/, `@${pick} `));
+            setInputEpoch((e) => e + 1);
+            return;
+          }
+          if (key.escape) { atDismissedRef.current = true; setAtIndex(0); return; }
         }
         // History lives in the terminal's native scrollback — scroll with the
         // mouse/trackpad. Plain arrows recall previous prompts.
@@ -816,6 +928,148 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       configObj.accent = name;
       await writeFile(configPath, JSON.stringify(configObj, null, 2));
     } catch { /* non-fatal */ }
+  };
+
+  const updateTheme = async (name: string) => {
+    setIsThemePickerOpen(false);
+    const preset = THEMES.find((t) => t.name === name);
+    if (!applyTheme(name) || !preset) {
+      pushMessage({ sender: "system", text: `Unknown theme "${name}". Try: ${THEMES.map((t) => t.name).join(", ")}` });
+      return;
+    }
+    // Re-apply the saved accent — applyTheme resets brand/shimmer to the base.
+    let accentName: string | undefined;
+    try {
+      const configPath = path.join(os.homedir(), ".crayon", "config.json");
+      const configObj = existsSync(configPath)
+        ? JSON.parse(await readFile(configPath, "utf-8"))
+        : {};
+      accentName = configObj.accent;
+      if (accentName) applyAccent(accentName);
+      configObj.theme = name;
+      await writeFile(configPath, JSON.stringify(configObj, null, 2));
+    } catch { /* non-fatal */ }
+    setThemeTick((t) => t + 1); // force re-render so the mutated theme takes effect
+    pushMessage({ sender: "system", text: `Theme changed to ${preset.label}.` });
+  };
+
+  // Render a local image inline using the iTerm2 inline-image protocol
+  // (also supported by WezTerm). Returns a status string for the transcript.
+  const renderInlineImage = (relPath: string): string => {
+    const supported = /iterm/i.test(process.env.TERM_PROGRAM || "") || /wezterm/i.test(process.env.TERM_PROGRAM || "") || /iterm/i.test(process.env.LC_TERMINAL || "");
+    const abs = path.resolve(workspaceRoot, relPath);
+    if (!existsSync(abs)) return `⚠ No such file: ${relPath}`;
+    if (!supported) return `⚠ Inline images need iTerm2 or WezTerm (TERM_PROGRAM=${process.env.TERM_PROGRAM || "unset"}). File: ${relPath}`;
+    try {
+      const data = require("node:fs").readFileSync(abs);
+      const b64 = data.toString("base64");
+      const name = Buffer.from(path.basename(abs)).toString("base64");
+      // ESC ] 1337 ; File = [args] : <base64> BEL
+      process.stdout.write(`\x1b]1337;File=inline=1;preserveAspectRatio=1;name=${name};size=${data.length}:${b64}\x07\n`);
+      return `🖼  ${relPath} (${(data.length / 1024).toFixed(1)} KB)`;
+    } catch (e: any) {
+      return `⚠ Could not read ${relPath}: ${e?.message || String(e)}`;
+    }
+  };
+
+  // Toggle the alternate-screen (fullscreen) buffer. Remounting <Static> forces
+  // the whole transcript to repaint into the now-active buffer.
+  const setFullscreenMode = (on: boolean) => {
+    if (on === fullscreenRef.current) {
+      pushMessage({ sender: "system", text: `Already in ${on ? "fullscreen" : "default"} renderer.` });
+      return;
+    }
+    fullscreenRef.current = on;
+    setFullscreen(on);
+    try {
+      process.stdout.write(on ? "\x1b[?1049h\x1b[H" : "\x1b[?1049l");
+    } catch {}
+    setStaticEpoch((e) => e + 1);
+    pushMessage({
+      sender: "system",
+      text: on
+        ? "⛶ Fullscreen renderer on — own screen buffer, restored on exit. (No native scrollback here; /tui default to switch back.)"
+        : "Default renderer on — inline in normal buffer with native scrollback.",
+    });
+  };
+
+  // Finalize a per-hunk review: apply only accepted hunks and resolve the edit.
+  const finishHunks = (hr: NonNullable<typeof hunkReview>, accepted: boolean[]) => {
+    setHunkReview(null);
+    const chosenCount = accepted.filter(Boolean).length;
+    const outcome = computePartialEdit(hr.original, hr.patch, accepted);
+    hr.resolve(outcome);
+    if (outcome === true) {
+      pushMessage({ sender: "system", text: `All ${hr.hunks.length} hunks accepted for ${hr.path}.` });
+    } else if (outcome === false) {
+      pushMessage({
+        sender: "system",
+        text: chosenCount === 0
+          ? `No hunks accepted — edit to ${hr.path} rejected.`
+          : `Could not apply the selected hunks to ${hr.path} (conflict) — edit rejected.`,
+      });
+    } else {
+      pushMessage({ sender: "system", text: `Applied ${chosenCount}/${hr.hunks.length} hunks to ${hr.path}.` });
+    }
+  };
+
+  // Handle one keystroke while reviewing hunks.
+  const decideHunk = (choice: "accept" | "skip" | "all" | "cancel") => {
+    const hr = hunkReview;
+    if (!hr) return;
+    if (choice === "cancel") {
+      setHunkReview(null);
+      hr.resolve(false);
+      pushMessage({ sender: "system", text: `Hunk review cancelled — edit to ${hr.path} rejected.` });
+      return;
+    }
+    const accepted = hr.accepted.slice();
+    if (choice === "all") {
+      for (let i = hr.index; i < hr.hunks.length; i++) accepted[i] = true;
+      finishHunks(hr, accepted);
+      return;
+    }
+    accepted[hr.index] = choice === "accept";
+    const next = hr.index + 1;
+    if (next >= hr.hunks.length) finishHunks(hr, accepted);
+    else setHunkReview({ ...hr, index: next, accepted });
+  };
+
+  // Load a saved session into the running app (used by the /resume picker).
+  const resumeSessionById = async (id: string) => {
+    setSessionPicker(null);
+    if (!agentRef.current) return;
+    const session = await loadSession(workspaceRoot, id);
+    if (!session) {
+      pushMessage({ sender: "system", text: `⚠ Could not load session ${id}.` });
+      return;
+    }
+    setSessionId(session.id);
+    sessionIdRef.current = session.id;
+    agentRef.current.setHistory(session.history || []);
+    const restored = (session.chatLog || []).map((m: any, i: number) => ({ ...m, id: `restored-${i}` }));
+    // Wipe the screen and remount <Static> so the resumed transcript renders
+    // from a clean slate (Static won't repaint indices it already drew).
+    process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
+    setHistory(restored as any);
+    setStaticEpoch((e) => e + 1);
+    pushMessage({ sender: "system", text: `↺ Resumed session ${session.id}${session.title ? ` — ${session.title}` : ""}` });
+  };
+
+  // Copy text to the OS clipboard via the platform's native tool. Returns true
+  // on success. macOS: pbcopy · Windows: clip · Linux: wl-copy/xclip/xsel.
+  const copyToClipboard = (text: string): boolean => {
+    const candidates: Array<[string, string[]]> =
+      process.platform === "darwin" ? [["pbcopy", []]]
+      : process.platform === "win32" ? [["clip", []]]
+      : [["wl-copy", []], ["xclip", ["-selection", "clipboard"]], ["xsel", ["--clipboard", "--input"]]];
+    for (const [cmd, cmdArgs] of candidates) {
+      try {
+        const res = spawnSync(cmd, cmdArgs, { input: text });
+        if (res.status === 0) return true;
+      } catch { /* try next */ }
+    }
+    return false;
   };
 
   const handleSubmit = async (inputStr: string) => {
@@ -1079,6 +1333,66 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             setIsColorPickerOpen(true);
           }
           break;
+        case "/theme":
+          if (parts.length > 1) {
+            updateTheme(parts[1].toLowerCase());
+          } else {
+            setIsThemePickerOpen(true);
+          }
+          break;
+        case "/copy": {
+          const wantCode = (parts[1] || "").toLowerCase() === "code";
+          // Most recent assistant answer in the visible transcript.
+          const lastAnswer = [...history].reverse().find((m) => m.sender === "crayon" && m.text?.trim());
+          if (!lastAnswer) {
+            pushMessage({ sender: "system", text: "Nothing to copy yet." });
+            break;
+          }
+          let payload = lastAnswer.text;
+          if (wantCode) {
+            const blocks = [...lastAnswer.text.matchAll(/```[^\n]*\n([\s\S]*?)```/g)].map((m) => m[1].replace(/\n$/, ""));
+            if (blocks.length === 0) {
+              pushMessage({ sender: "system", text: "No code block found in the last answer." });
+              break;
+            }
+            payload = blocks[blocks.length - 1];
+          }
+          const ok = copyToClipboard(payload);
+          pushMessage({
+            sender: "system",
+            text: ok
+              ? `Copied ${wantCode ? "last code block" : "last answer"} to clipboard (${payload.length} chars).`
+              : "Could not access the clipboard (no pbcopy/clip/xclip/wl-copy found).",
+          });
+          break;
+        }
+        case "/img": {
+          const rel = parts.slice(1).join(" ").trim();
+          if (!rel) {
+            pushMessage({ sender: "system", text: "Usage: /img <path-to-image>" });
+            break;
+          }
+          const status = renderInlineImage(rel);
+          pushMessage({ sender: "system", text: status });
+          break;
+        }
+        case "/tui": {
+          const arg = (parts[1] || "").toLowerCase();
+          if (arg === "fullscreen") setFullscreenMode(true);
+          else if (arg === "default") setFullscreenMode(false);
+          else if (!arg) setFullscreenMode(!fullscreenRef.current);
+          else pushMessage({ sender: "system", text: `Usage: /tui <fullscreen|default>. Current: ${fullscreenRef.current ? "fullscreen" : "default"}.` });
+          break;
+        }
+        case "/resume": {
+          const list = await listSessions(workspaceRoot);
+          if (list.length === 0) {
+            pushMessage({ sender: "system", text: "📭 No saved sessions in this workspace yet." });
+          } else {
+            setSessionPicker(list);
+          }
+          break;
+        }
         case "/easel": {
           if (!agentRef.current) {
             pushMessage({ sender: "system", text: "Agent not initialized." });
@@ -1395,7 +1709,16 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const showCmdMenu =
     currentInput.startsWith("/") && !currentInput.includes(" ") &&
     cmdItems.length > 0 && !isExecuting &&
-    !isModelSelectorOpen && !isColorPickerOpen && !approvalRequest && !mcpView;
+    !isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen &&
+    !showHelpOverlay && !sessionPicker && !approvalRequest && !hunkReview && !mcpView;
+  // Inline "@…" file-mention menu (driven by the trailing token in the input).
+  const atQ = atQuery(currentInput);
+  const atItems = atQ !== null && !atDismissedRef.current ? fileMatches(allFiles, atQ) : [];
+  const showAtMenu =
+    atItems.length > 0 && !isExecuting && !showCmdMenu &&
+    !isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen &&
+    !showHelpOverlay && !sessionPicker && !approvalRequest && !hunkReview && !mcpView;
+  const atSel = Math.min(atIndex, Math.max(0, atItems.length - 1));
   // Sliding window so the highlight stays visible when arrowing past the fold.
   const CMD_MAX = 3;
   const cmdSel = Math.min(cmdIndex, Math.max(0, cmdItems.length - 1));
@@ -1408,7 +1731,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     <Box flexDirection="column" width="100%">
 
       {/* Committed history — rendered once each, lives in terminal scrollback */}
-      <Static items={history}>
+      <Static key={staticEpoch} items={history}>
         {(msg) => renderMsg(msg)}
       </Static>
 
@@ -1417,7 +1740,23 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           <PlanView steps={activePlan} currentStepIndex={currentStepIndex} isExecuting={isExecuting} />
         )}
 
-        {isExecuting && !approvalRequest && (
+        {hunkReview && (() => {
+          const h = hunkReview.hunks[hunkReview.index];
+          const hunkText =
+            `--- ${hunkReview.path}\n+++ ${hunkReview.path}\n` +
+            `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@\n` +
+            h.lines.join("\n");
+          const acceptedCount = hunkReview.accepted.filter(Boolean).length;
+          return (
+            <Box flexDirection="column" borderStyle="single" borderColor={theme.warning} paddingX={1} marginY={1} width="100%">
+              <Text color={theme.warning} bold>Review hunk {hunkReview.index + 1}/{hunkReview.hunks.length} · {hunkReview.path}</Text>
+              <DiffRenderer diff={hunkText} maxLines={20} />
+              <Text color={theme.subtle} dimColor>{`  (y) accept · (n) skip · (a) accept all rest · (q) cancel · ${acceptedCount} accepted so far`}</Text>
+            </Box>
+          );
+        })()}
+
+        {isExecuting && !approvalRequest && !hunkReview && (
           <Box flexDirection="column" width="100%">
             {streamingReasoning && !streamingText && (
               <ThinkingMessage thinking={streamingReasoning} />
@@ -1534,7 +1873,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                 <Box marginTop={1}>
                   <SearchableSelect
                     items={[
-                      { label: "Accept", value: "accept", description: "Apply these changes" },
+                      { label: "Accept", value: "accept", description: "Apply all these changes" },
+                      { label: "Review hunks", value: "hunks", description: "Accept or skip each hunk (git add -p style)" },
                       { label: "Reject", value: "reject", description: "Discard these changes" },
                       { label: "Edit Manually", value: "edit", description: "Open file in your terminal editor" }
                     ]}
@@ -1542,6 +1882,24 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                       if (val === "accept") {
                         approvalRequest.resolve(true);
                         setApprovalRequest(null);
+                      } else if (val === "hunks") {
+                        const sp = structuredPatch(
+                          approvalRequest.path, approvalRequest.path,
+                          approvalRequest.originalContent ?? "", approvalRequest.newContent ?? "",
+                        );
+                        const resolve = approvalRequest.resolve;
+                        setApprovalRequest(null);
+                        if (!sp.hunks || sp.hunks.length <= 1) {
+                          // Nothing to split — a single hunk is all-or-nothing.
+                          resolve(true);
+                          pushMessage({ sender: "system", text: "Only one hunk — applied in full." });
+                        } else {
+                          setHunkReview({
+                            path: approvalRequest.path,
+                            original: approvalRequest.originalContent ?? "",
+                            patch: sp, hunks: sp.hunks, index: 0, accepted: [], resolve,
+                          });
+                        }
                       } else if (val === "reject") {
                         approvalRequest.resolve(false);
                         setApprovalRequest(null);
@@ -1572,6 +1930,33 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
       {!approvalRequest && mode === "chat" && (
         <Box flexDirection="column" flexShrink={0}>
+          {showHelpOverlay && (
+            <Box flexDirection="column" borderStyle="round" borderColor={theme.brand} paddingX={1} marginBottom={1}>
+              <Text color={theme.brand} bold>Keyboard shortcuts</Text>
+              {[
+                ["Enter", "send message"],
+                ["↑ / ↓", "recall previous prompts"],
+                ["Shift+Tab / Ctrl+T", "cycle permission mode"],
+                ["Ctrl+E", "compose prompt in $EDITOR"],
+                ["Esc", "interrupt running task / close overlay"],
+                ["Ctrl+C ×2", "exit Crayon"],
+                ["?", "toggle this help"],
+              ].map(([k, d]) => (
+                <Box key={k} flexDirection="row">
+                  <Box width={22}><Text color={theme.text} bold>{k}</Text></Box>
+                  <Box flexGrow={1}><Text color={theme.subtle}>{d}</Text></Box>
+                </Box>
+              ))}
+              <Box marginTop={1}><Text color={theme.brand} bold>Commands</Text></Box>
+              {AVAILABLE_COMMANDS.map((c) => (
+                <Box key={c.cmd} flexDirection="row">
+                  <Box width={22}><Text color={theme.text}>{c.cmd}</Text></Box>
+                  <Box flexGrow={1}><Text color={theme.subtle}>{c.desc}</Text></Box>
+                </Box>
+              ))}
+              <Text color={theme.subtle} dimColor>{"  esc / ? / ⏎ to close"}</Text>
+            </Box>
+          )}
           {/* Next-action hints — proposed after an answer; pick with a number,
               or just keep typing. Hidden while the command menu is open. */}
           {suggestions.length > 0 && !showCmdMenu && !isExecuting && !isModelSelectorOpen && !isColorPickerOpen && !currentInput.trim() && (
@@ -1584,6 +1969,23 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                 </Box>
               ))}
               <Text color={theme.subtle} dimColor>{"  type a number to run · or keep typing"}</Text>
+            </Box>
+          )}
+
+          {/* Inline file-mention menu — filters as you type "@…". Tab completes
+              the highlighted path; ↑↓ navigate; esc dismisses. */}
+          {showAtMenu && (
+            <Box flexDirection="column" paddingLeft={2} marginBottom={1}>
+              {atItems.map((f, i) => {
+                const sel = i === atSel;
+                return (
+                  <Box key={f} flexDirection="row">
+                    <Box width={2}><Text color={theme.brand}>{sel ? "❯" : " "}</Text></Box>
+                    <Box flexGrow={1}><Text color={sel ? theme.brand : theme.text} bold={sel}>@{f}</Text></Box>
+                  </Box>
+                );
+              })}
+              <Text color={theme.subtle} dimColor>{"  ↑↓ select · tab complete · esc dismiss"}</Text>
             </Box>
           )}
 
@@ -1637,6 +2039,18 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                 placeholder="color…"
                 onSelect={(val) => updateAccent(val)}
                 onCancel={() => setIsColorPickerOpen(false)}
+              />
+            </Box>
+          )}
+
+          {isThemePickerOpen && (
+            <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
+              <Text color={theme.subtle} dimColor>ui theme</Text>
+              <SearchableSelect
+                items={THEMES.map((t) => ({ label: t.label, value: t.name, description: t.name }))}
+                placeholder="theme…"
+                onSelect={(val) => updateTheme(val)}
+                onCancel={() => setIsThemePickerOpen(false)}
               />
             </Box>
           )}
@@ -1703,16 +2117,34 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             </Box>
           )}
 
+          {sessionPicker && (
+            <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
+              <Text color={theme.brand} bold>Resume session <Text color={theme.subtle} dimColor>({sessionPicker.length})</Text></Text>
+              <SearchableSelect
+                items={sessionPicker.map((s) => ({
+                  label: s.title || s.id,
+                  value: s.id,
+                  description: `${s.id} · ${s.messageCount} msg${s.messageCount === 1 ? "" : "s"}${s.timestamp ? " · " + s.timestamp.slice(0, 10) : ""}`,
+                }))}
+                placeholder="session…"
+                onSelect={(id) => resumeSessionById(id)}
+                onCancel={() => setSessionPicker(null)}
+              />
+              <Text color={theme.subtle} dimColor>{"  ↑↓ select · ⏎ resume · esc cancel"}</Text>
+            </Box>
+          )}
+
           {/* Hide the main prompt only while an overlay picker owns input, so
               there is only ever one input field on screen. */}
-          {!isModelSelectorOpen && !isColorPickerOpen && !mcpView && (
+          {!isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen && !showHelpOverlay && !sessionPicker && !hunkReview && !mcpView && (
             <Box marginTop={0} flexDirection="column" paddingLeft={1}>
               <Box flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1}>
                 <Text bold color={isExecuting ? theme.subtle : theme.brand}>
                   crayon<Text color={isExecuting ? theme.subtle : theme.success}> ❯ </Text>
                 </Text>
                 <TextInput
-                  focus={!isModelSelectorOpen && !isColorPickerOpen && !mcpView}
+                  key={inputEpoch}
+                  focus={!isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen && !showHelpOverlay && !sessionPicker && !hunkReview && !mcpView}
                   value={currentInput}
                   onChange={(v) => {
                     if (Date.now() - modeSwitchTimeRef.current < 50 && v.endsWith("t")) {

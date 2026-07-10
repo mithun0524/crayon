@@ -175,11 +175,25 @@ export function createTools(ctx: ToolContext) {
       return resolved;
     };
 
+    // Resolve what content to actually write for an edit. Returns the string to
+    // persist, or null if the edit is rejected. A string return from approveEdit
+    // is honored verbatim (per-hunk partial accept), so it may differ from
+    // newContent. Auto modes write newContent unchanged.
+    const resolveEditContent = async (filePath: string, newContent: string): Promise<string | null> => {
+      if (ctx.permissionMode === "plan") return null;
+      if (ctx.permissionMode === "auto-edit" || ctx.permissionMode === "auto" || ctx.permissionMode === "bypass") return newContent;
+      if (ctx.approveEdit) {
+        const r = await ctx.approveEdit(filePath, newContent);
+        if (r === true) return newContent;
+        if (typeof r === "string") return r; // partial / edited content to apply
+        return null; // false or anything else = rejected
+      }
+      return null; // Default safe fallback
+    };
+
+    // Boolean gate for edits that write no content (delete / rename).
     const checkEditPermission = async (filePath: string, newContent: string) => {
-      if (ctx.permissionMode === "plan") return false;
-      if (ctx.permissionMode === "auto-edit" || ctx.permissionMode === "auto" || ctx.permissionMode === "bypass") return true;
-      if (ctx.approveEdit) return await ctx.approveEdit(filePath, newContent);
-      return false; // Default safe fallback
+      return (await resolveEditContent(filePath, newContent)) !== null;
     };
 
     const checkCommandPermission = async (command: string, isDangerous: boolean) => {
@@ -301,19 +315,19 @@ export function createTools(ctx: ToolContext) {
           fuzzyUsed = true;
         }
 
-        const approved = await checkEditPermission(filePath, newContent);
-        if (!approved) {
+        const approvedContent = await resolveEditContent(filePath, newContent);
+        if (approvedContent === null) {
           return { success: false, error: "PERMISSION_DENIED_BY_USER" };
         }
 
-        const diff = createTwoFilesPatch(filePath, filePath, content, newContent);
+        const diff = createTwoFilesPatch(filePath, filePath, content, approvedContent);
         await ctx.transaction?.snapshotFile(filePath);
-        await writeFile(absPath, newContent, "utf-8");
+        await writeFile(absPath, approvedContent, "utf-8");
 
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
 
         // Sync with LSP
-        ctx.lspManager?.changeFile(absPath, newContent).catch(() => {});
+        ctx.lspManager?.changeFile(absPath, approvedContent).catch(() => {});
         ctx.lspManager?.saveFile(absPath).catch(() => {});
 
         const result: Record<string, unknown> = { success: true, path: filePath, diff };
@@ -386,18 +400,18 @@ export function createTools(ctx: ToolContext) {
           return { success: false, error: "No changes — edits produced identical content." };
         }
 
-        const approved = await checkEditPermission(filePath, working);
-        if (!approved) {
+        const approvedContent = await resolveEditContent(filePath, working);
+        if (approvedContent === null) {
           return { success: false, error: "PERMISSION_DENIED_BY_USER" };
         }
 
-        const diff = createTwoFilesPatch(filePath, filePath, original, working);
+        const diff = createTwoFilesPatch(filePath, filePath, original, approvedContent);
         await ctx.transaction?.snapshotFile(filePath);
-        await writeFile(absPath, working, "utf-8");
+        await writeFile(absPath, approvedContent, "utf-8");
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
 
         // Sync with LSP
-        ctx.lspManager?.changeFile(absPath, working).catch(() => {});
+        ctx.lspManager?.changeFile(absPath, approvedContent).catch(() => {});
         ctx.lspManager?.saveFile(absPath).catch(() => {});
 
         const result: Record<string, unknown> = { success: true, path: filePath, diff, editsApplied: edits.length };
@@ -517,18 +531,18 @@ export function createTools(ctx: ToolContext) {
         targetNode.replaceWithText(new_content);
         const newContent = sourceFile.getFullText();
 
-        const approved = await checkEditPermission(filePath, newContent);
-        if (!approved) {
+        const approvedContent = await resolveEditContent(filePath, newContent);
+        if (approvedContent === null) {
           return { success: false, error: "PERMISSION_DENIED_BY_USER" };
         }
 
-        const diff = createTwoFilesPatch(filePath, filePath, content, newContent);
+        const diff = createTwoFilesPatch(filePath, filePath, content, approvedContent);
         await ctx.transaction?.snapshotFile(filePath);
-        await writeFile(absPath, newContent, "utf-8");
+        await writeFile(absPath, approvedContent, "utf-8");
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
 
         // Sync with LSP
-        ctx.lspManager?.changeFile(absPath, newContent).catch(() => {});
+        ctx.lspManager?.changeFile(absPath, approvedContent).catch(() => {});
         ctx.lspManager?.saveFile(absPath).catch(() => {});
 
         return { success: true, path: filePath, diff };
@@ -552,8 +566,8 @@ export function createTools(ctx: ToolContext) {
           ? "Replaced an existing file you had not read — verify nothing was lost."
           : "";
 
-        const approved = await checkEditPermission(filePath, content);
-        if (!approved) {
+        const approvedContent = await resolveEditContent(filePath, content);
+        if (approvedContent === null) {
           return { success: false, error: "PERMISSION_DENIED_BY_USER" };
         }
 
@@ -563,13 +577,13 @@ export function createTools(ctx: ToolContext) {
         }
         await mkdir(path.dirname(absPath), { recursive: true });
         await ctx.transaction?.snapshotFile(filePath);
-        await writeFile(absPath, content, "utf-8");
+        await writeFile(absPath, approvedContent, "utf-8");
 
-        const diff = createTwoFilesPatch(filePath, filePath, original, content);
+        const diff = createTwoFilesPatch(filePath, filePath, original, approvedContent);
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
 
         // Sync with LSP
-        ctx.lspManager?.openFile(absPath, content).catch(() => {});
+        ctx.lspManager?.openFile(absPath, approvedContent).catch(() => {});
 
         const result: Record<string, unknown> = { success: true, path: filePath, created: !existed };
         if (notReadWarning) result.warning = notReadWarning;
@@ -602,18 +616,18 @@ export function createTools(ctx: ToolContext) {
 
         const oldContent = await readFile(absPath, "utf-8");
 
-        const approved = await checkEditPermission(filePath, content);
-        if (!approved) {
+        const approvedContent = await resolveEditContent(filePath, content);
+        if (approvedContent === null) {
           return { success: false, error: "PERMISSION_DENIED_BY_USER" };
         }
 
-        const diff = createTwoFilesPatch(filePath, filePath, oldContent, content);
+        const diff = createTwoFilesPatch(filePath, filePath, oldContent, approvedContent);
         await ctx.transaction?.snapshotFile(filePath);
-        await writeFile(absPath, content, "utf-8");
+        await writeFile(absPath, approvedContent, "utf-8");
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
 
         // Sync with LSP
-        ctx.lspManager?.changeFile(absPath, content).catch(() => {});
+        ctx.lspManager?.changeFile(absPath, approvedContent).catch(() => {});
         ctx.lspManager?.saveFile(absPath).catch(() => {});
 
         const result: Record<string, unknown> = { success: true, path: filePath, overwritten: true, diff };
