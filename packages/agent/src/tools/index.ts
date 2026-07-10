@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir, readdir, unlink, rename, stat } from "node:
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import pty from "node-pty";
 import net from "node:net";
 import { lookup } from "node:dns/promises";
 import { createTwoFilesPatch } from "diff";
@@ -235,6 +236,9 @@ export function createTools(ctx: ToolContext) {
         // Track that we read this file
         ctx.fileState?.markRead(filePath, content);
 
+        // Sync with LSP
+        ctx.lspManager?.openFile(absPath, content).catch(() => {});
+
         if (start_line !== undefined || end_line !== undefined) {
           const start = (start_line ?? 1) - 1;
           const end = end_line ?? lines.length;
@@ -307,6 +311,10 @@ export function createTools(ctx: ToolContext) {
         await writeFile(absPath, newContent, "utf-8");
 
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
+
+        // Sync with LSP
+        ctx.lspManager?.changeFile(absPath, newContent).catch(() => {});
+        ctx.lspManager?.saveFile(absPath).catch(() => {});
 
         const result: Record<string, unknown> = { success: true, path: filePath, diff };
         // A fuzzy match landed the edit despite an inexact old_string — surface
@@ -387,6 +395,10 @@ export function createTools(ctx: ToolContext) {
         await ctx.transaction?.snapshotFile(filePath);
         await writeFile(absPath, working, "utf-8");
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
+
+        // Sync with LSP
+        ctx.lspManager?.changeFile(absPath, working).catch(() => {});
+        ctx.lspManager?.saveFile(absPath).catch(() => {});
 
         const result: Record<string, unknown> = { success: true, path: filePath, diff, editsApplied: edits.length };
         const warnings = [
@@ -514,6 +526,11 @@ export function createTools(ctx: ToolContext) {
         await ctx.transaction?.snapshotFile(filePath);
         await writeFile(absPath, newContent, "utf-8");
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
+
+        // Sync with LSP
+        ctx.lspManager?.changeFile(absPath, newContent).catch(() => {});
+        ctx.lspManager?.saveFile(absPath).catch(() => {});
+
         return { success: true, path: filePath, diff };
       },
     },
@@ -550,6 +567,9 @@ export function createTools(ctx: ToolContext) {
 
         const diff = createTwoFilesPatch(filePath, filePath, original, content);
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
+
+        // Sync with LSP
+        ctx.lspManager?.openFile(absPath, content).catch(() => {});
 
         const result: Record<string, unknown> = { success: true, path: filePath, created: !existed };
         if (notReadWarning) result.warning = notReadWarning;
@@ -591,6 +611,11 @@ export function createTools(ctx: ToolContext) {
         await ctx.transaction?.snapshotFile(filePath);
         await writeFile(absPath, content, "utf-8");
         ctx.onEvent?.({ type: "edit", path: filePath, diff });
+
+        // Sync with LSP
+        ctx.lspManager?.changeFile(absPath, content).catch(() => {});
+        ctx.lspManager?.saveFile(absPath).catch(() => {});
+
         const result: Record<string, unknown> = { success: true, path: filePath, overwritten: true, diff };
         if (notReadWarning) result.warning = notReadWarning.trim();
         return result;
@@ -883,7 +908,12 @@ export function createTools(ctx: ToolContext) {
         const approved = await checkCommandPermission(`kill ${pid} (${job.command})`, false);
         if (!approved) return { success: false, error: "PERMISSION_DENIED_BY_USER" };
         try {
-          process.kill(pid, "SIGTERM");
+          if (process.platform === "win32") {
+            const { execSync } = await import("node:child_process");
+            try { execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore" }); } catch {}
+          } else {
+            process.kill(pid, "SIGTERM");
+          }
           backgroundJobs.delete(pid);
           return { success: true, pid, command: job.command };
         } catch (e: any) {
@@ -1010,7 +1040,16 @@ export function createTools(ctx: ToolContext) {
         }
 
         const timeout = Math.min(timeout_ms ?? 30000, 120000);
-        const result = await runCommand(command, workDir, timeout, ctx.signal);
+        const result = await runCommand(
+          command,
+          workDir,
+          timeout,
+          ctx.signal,
+          ctx.setActivePtyWrite,
+          (data: string) => {
+            ctx.onEvent?.({ type: "terminal_output", content: data });
+          }
+        );
         return {
           ...result,
           stdout: capResult(result.stdout),
@@ -1219,69 +1258,141 @@ function isAlive(pid: number): boolean {
 }
 
 async function runBackground(command: string, cwd: string): Promise<{ pid: number; logFile: string }> {
-  const { open } = await import("node:fs/promises");
   const logDir = path.join(cwd, ".crayon", "logs");
   await mkdir(logDir, { recursive: true });
   const logFileAbs = path.join(logDir, `bg-${Date.now()}.log`);
-  const fh = await open(logFileAbs, "a");
   const isWin = process.platform === "win32";
-  const shell = isWin ? "powershell.exe" : "/bin/sh";
-  const shellFlag = isWin ? "-Command" : "-c";
-  const child = spawn(shell, [shellFlag, command], {
-    cwd,
-    env: process.env,
-    detached: true,
-    stdio: ["ignore", fh.fd, fh.fd],
-  });
-  child.unref();
-  await fh.close();
+
+  let child;
+  if (isWin) {
+    // On Windows, use cmd.exe and shell redirection because detached file descriptor stdio is not inherited/supported.
+    const safePath = logFileAbs.replace(/ /g, "^ ");
+    const cmdLine = `${command} > ${safePath} 2>&1`;
+    child = spawn("cmd.exe", ["/c", cmdLine], {
+      cwd,
+      env: process.env,
+      detached: true,
+      stdio: "ignore",
+    });
+  } else {
+    const { open } = await import("node:fs/promises");
+    const fh = await open(logFileAbs, "a");
+    child = spawn("/bin/sh", ["-c", command], {
+      cwd,
+      env: process.env,
+      detached: true,
+      stdio: ["ignore", fh.fd, fh.fd],
+    });
+    child.unref();
+    await fh.close();
+  }
+
   const pid = child.pid ?? -1;
   const logFile = path.relative(cwd, logFileAbs);
   if (pid > 0) backgroundJobs.set(pid, { pid, command, logFileAbs, logFile, startedAt: Date.now() });
   return { pid, logFile };
 }
 
-function runCommand(command: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {
+function runCommand(
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+  setActivePtyWrite?: (writeFn?: (data: string) => void) => void,
+  onOutput?: (data: string) => void
+): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      return resolve({ success: false, stdout: "", stderr: "Aborted", exitCode: -1 });
+    }
+
     const isWin = process.platform === "win32";
     const shell = isWin ? "powershell.exe" : "/bin/sh";
     const shellFlag = isWin ? "-Command" : "-c";
 
-    const proc = spawn(shell, [shellFlag, command], {
-      cwd,
-      env: process.env,
-      signal,
-    });
+    const cols = process.stdout.columns || 80;
+    const rows = process.stdout.rows || 24;
+
+    let ptyProcess: any;
+    try {
+      ptyProcess = pty.spawn(shell, [shellFlag, command], {
+        name: "xterm-color",
+        cols,
+        rows,
+        cwd,
+        env: process.env as Record<string, string>,
+      });
+    } catch (err: any) {
+      return resolve({ success: false, stdout: "", stderr: err.message || String(err), exitCode: -1 });
+    }
+
+    if (setActivePtyWrite) {
+      setActivePtyWrite((data: string) => {
+        try {
+          ptyProcess.write(data);
+        } catch {}
+      });
+    }
 
     let stdout = "";
     let stderr = "";
 
-    proc.stdout.on("data", (d: Buffer) => {
+    const onDataDisposable = ptyProcess.onData((data: string) => {
       if (stdout.length < 50000) {
-        stdout += d.toString();
-        if (stdout.length > 50000) stdout = stdout.slice(0, 50000) + "\n...[truncated]";
+        stdout += data;
+        if (stdout.length > 50000) {
+          stdout = stdout.slice(0, 50000) + "\n...[truncated]";
+        }
       }
-    });
-    proc.stderr.on("data", (d: Buffer) => {
-      if (stderr.length < 10000) {
-        stderr += d.toString();
-        if (stderr.length > 10000) stderr = stderr.slice(0, 10000) + "\n...[truncated]";
+      if (onOutput) {
+        onOutput(data);
       }
     });
 
     const timer = setTimeout(() => {
-      proc.kill();
+      try {
+        ptyProcess.kill();
+      } catch {}
+      cleanup();
       resolve({ success: false, stdout, stderr: stderr + "\n[timeout]", exitCode: -1 });
     }, timeoutMs);
 
-    proc.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ success: code === 0, stdout, stderr, exitCode: code ?? -1 });
-    });
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      try {
+        ptyProcess.kill();
+      } catch {}
+      cleanup();
+      resolve({ success: false, stdout, stderr: stderr + "\n[aborted]", exitCode: -1 });
+    };
 
-    proc.on("error", (err) => {
+    if (signal) {
+      signal.addEventListener("abort", onAbort);
+    }
+
+    function cleanup() {
       clearTimeout(timer);
-      resolve({ success: false, stdout, stderr: err.message, exitCode: -1 });
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      try {
+        onDataDisposable.dispose();
+      } catch {}
+      if (setActivePtyWrite) {
+        setActivePtyWrite(undefined);
+      }
+    }
+
+    ptyProcess.onExit(({ exitCode }: { exitCode: number; signal?: number }) => {
+      if (aborted) return;
+      cleanup();
+      resolve({
+        success: exitCode === 0,
+        stdout,
+        stderr,
+        exitCode: exitCode ?? -1,
+      });
     });
   });
 }

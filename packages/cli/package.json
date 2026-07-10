@@ -8,6 +8,9 @@
   "description": "An AI-powered terminal coding assistant that can search your codebase, create plans, and automatically execute them.",
   "author": "mithun0524",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/mithun0524/crayon"

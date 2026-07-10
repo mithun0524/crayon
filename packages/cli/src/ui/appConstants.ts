@@ -15,6 +15,7 @@ export const AVAILABLE_COMMANDS = [
   { cmd: "/config", desc: "Change provider, model, or theme" },
   { cmd: "/color", desc: "Change the accent color", usage: "[name]" },
   { cmd: "/easel", desc: "View the active agent context (files read)" },
+  { cmd: "/memory", desc: "Generate or refresh project memory (AGENTS.md)" },
   { cmd: "/exit", desc: "Exit Crayon" },
   { cmd: "/help", desc: "Show help information" }
 ];

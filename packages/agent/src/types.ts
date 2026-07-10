@@ -4,6 +4,7 @@ import type { z } from "zod";
 import type { McpServerConfig } from "./tools/mcp.js";
 import type { FileStateCache } from "./context/fileState.js";
 import type { TransactionManager } from "./context/transaction.js";
+import type { WorktreeManager } from "./services/WorktreeManager.js";
 
 export type AgentEvent =
   | { type: "thinking"; content: string }
@@ -19,6 +20,7 @@ export type AgentEvent =
   | { type: "done"; summary: string }
   | { type: "error"; message: string }
   | { type: "usage"; promptTokens: number; completionTokens: number; totalTokens: number }
+  | { type: "terminal_output"; content: string }
   | { type: "ask_user"; question: string };
 
 export type PermissionMode = "ask" | "auto-edit" | "plan" | "auto" | "bypass";
@@ -76,6 +78,9 @@ export interface ToolContext {
   fileState?: FileStateCache;
   transaction?: TransactionManager;
   signal?: AbortSignal;
+  setActivePtyWrite?: (writeFn?: (data: string) => void) => void;
+  lspManager?: any;
+  worktreeManager?: WorktreeManager;
   /**
    * Model/provider/API-key config carried through so `spawn_agent` can
    * construct a working sub-agent that inherits the parent's credentials.
