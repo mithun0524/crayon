@@ -11,6 +11,7 @@ const nativeModules = [
   "web-tree-sitter",
   "tree-sitter-wasms",
   "fsevents",
+  "node-pty",
   // Bundling @ai-sdk/google makes Gemini calls hang/retry for tens of seconds
   // (anthropic/openai bundle fine — google does not). Keep it external so it
   // runs from node_modules, where it responds in ~1s.

@@ -210,9 +210,12 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       setAvailableModels(baseModels);
 
       if (config.provider === "openrouter") {
-        fetch("https://openrouter.ai/api/v1/models")
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 1000);
+        fetch("https://openrouter.ai/api/v1/models", { signal: controller.signal })
           .then(res => res.json())
           .then((data: any) => {
+            clearTimeout(timeout);
             if (data && data.data && Array.isArray(data.data)) {
               const fetchedModels = data.data.map((m: any) => ({
                 label: m.name,
@@ -222,13 +225,18 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               setAvailableModels(fetchedModels);
             }
           })
-          .catch(() => {});
+          .catch(() => {
+            clearTimeout(timeout);
+          });
       }
 
       if (config.provider === "ollama") {
-        fetch("http://localhost:11434/api/tags")
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 1000);
+        fetch("http://localhost:11434/api/tags", { signal: controller.signal })
           .then(res => res.json())
           .then((data: any) => {
+            clearTimeout(timeout);
             if (data && data.models && Array.isArray(data.models)) {
               const fetchedModels = data.models.map((m: any) => ({
                 label: m.name,
@@ -238,7 +246,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               setAvailableModels(fetchedModels);
             }
           })
-          .catch(() => {});
+          .catch(() => {
+            clearTimeout(timeout);
+          });
       }
 
       const agent = new CrayonAgent({
