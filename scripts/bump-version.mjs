@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * Called by semantic-release's prepareCmd with the next version as argv[2].
- * Updates all three publishable packages to the same version.
+ * Keeps every package on the same version — the three npm packages plus the
+ * VS Code extension (which ships as a .vsix release asset, not to npm, but
+ * should still track the suite version instead of drifting).
  */
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -15,6 +17,7 @@ const packages = [
   "packages/cli/package.json",
   "packages/agent/package.json",
   "packages/indexer/package.json",
+  "packages/vscode/package.json",
 ];
 
 for (const pkgPath of packages) {
