@@ -79,8 +79,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-      # "...crayon-agent" = agent plus its workspace dependencies (indexer)
-      - run: pnpm --filter "...crayon-agent" run build
+      # Build the entire workspace to ensure all dependencies are compiled in order
+      - run: pnpm run build
       - run: pnpm --filter crayon-agent run typecheck
       - run: pnpm --filter crayon-agent run test
 
@@ -96,8 +96,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-      # e2e tests drive dist/index.js in a real PTY — build must come first
-      - run: pnpm --filter "...crayon-cli" run build
+      # Build the entire workspace to ensure all dependencies are compiled in order
+      - run: pnpm run build
       - run: pnpm --filter crayon-cli run typecheck
       - run: pnpm --filter crayon-cli run test
 
@@ -113,7 +113,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-      - run: pnpm --filter "...crayon-vscode" run build
+      # Build the entire workspace to ensure all dependencies are compiled in order
+      - run: pnpm run build
       - run: pnpm --filter crayon-vscode run typecheck
       - name: Package VSIX (staged, self-contained)
         run: pnpm --filter crayon-vscode run package
