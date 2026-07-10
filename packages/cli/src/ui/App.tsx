@@ -1065,6 +1065,26 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           });
           break;
         }
+        case "/memory": {
+          if (!agentRef.current) {
+            pushMessage({ sender: "system", text: "Agent not initialized." });
+            break;
+          }
+          if (isExecuting) {
+            setQueuedTasks((prev) => [
+              ...prev,
+              "Generate project memory and write it to AGENTS.md at the workspace root.",
+            ]);
+            pushMessage({ sender: "system", text: "Memory generation queued — will run after the current task." });
+          } else {
+            pushMessage({ sender: "system", text: "Scanning workspace and generating AGENTS.md..." });
+            runTask(
+              agentRef.current,
+              "Generate project memory and write it to AGENTS.md at the workspace root. Call the generate_project_memory tool."
+            );
+          }
+          break;
+        }
         default:
           pushMessage({ sender: "system", text: `Unknown command "${cmd}". Supported: ${AVAILABLE_COMMANDS.map(c => c.cmd).join(", ")}` });
       }

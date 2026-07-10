@@ -20,6 +20,7 @@ import { createLSPServerManager, type LSPServerManager } from "./services/lsp/LS
 import { createLSPTools } from "./tools/lsp.js";
 import { createWorktreeManager, type WorktreeManager } from "./services/WorktreeManager.js";
 import { createWorktreeTools } from "./tools/worktree.js";
+import { createMemoryTool } from "./tools/memory.js";
 
 /** Tools that are safe to execute concurrently (read-only). Exported for consumer use. */
 export { CONCURRENT_SAFE_TOOLS };
@@ -117,7 +118,21 @@ export class CrayonAgent {
     });
     const lspTools = createLSPTools(this.lspManager);
     const worktreeTools = createWorktreeTools(this.worktreeManager);
-    return { ...standardTools, ...lspTools, ...worktreeTools };
+    const memoryTool = createMemoryTool({
+      workspaceRoot: this.config.workspaceRoot,
+      indexer: this.indexer,
+      permissionMode: this.config.permissionMode,
+      onEvent: this.config.onEvent,
+      approveCommand: this.config.approveCommand,
+      approveEdit: this.config.approveEdit,
+      fileState: this.fileState,
+      transaction: this.transaction,
+      modelConfig: this.subagentModelConfig(),
+      allowSubagents: this.config.allowSubagents,
+      lspManager: this.lspManager,
+      worktreeManager: this.worktreeManager,
+    });
+    return { ...standardTools, ...lspTools, ...worktreeTools, ...memoryTool };
   }
 
   /** Config forwarded to sub-agents so they inherit model/provider/credentials. */
