@@ -52,8 +52,8 @@ export default function Navbar() {
             GitHub
           </Link>
           <ThemeToggle />
-          <Link href={SITE.demo} className="btn-primary px-4 py-1.5 text-sm">
-            Try the demo
+          <Link href={SITE.getStarted} className="btn-primary px-4 py-1.5 text-sm">
+            Get started
           </Link>
         </div>
 
@@ -97,8 +97,8 @@ export default function Navbar() {
             GitHub
           </Link>
         </div>
-        <Link href={SITE.demo} className="btn-primary mt-3 block w-full py-3 text-center text-sm" onClick={() => setOpen(false)}>
-          Try the demo
+        <Link href={SITE.getStarted} className="btn-primary mt-3 block w-full py-3 text-center text-sm" onClick={() => setOpen(false)}>
+          Get started
         </Link>
       </div>
     </header>

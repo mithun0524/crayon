@@ -7,10 +7,11 @@ export const SITE = {
   tagline: "The autonomous AI coding agent for your terminal.",
   install: "npm install -g crayon-cli",
   npx: "npx crayon-cli@latest chat",
+  url: "https://crayon-umber.vercel.app",
   repo: "https://github.com/mithun0524/crayon",
   npm: "https://www.npmjs.com/package/crayon-cli",
   vscode: "https://www.npmjs.com/package/crayon-vscode",
-  demo: "https://crayon-umber.vercel.app/",
+  getStarted: "/docs", // primary CTA → the getting-started guide
   license: "MIT",
 } as const;
 

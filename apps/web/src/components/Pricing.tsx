@@ -47,8 +47,8 @@ export default function Pricing() {
               <Link href={SITE.repo} className="btn-primary flex-1 py-3 text-center text-sm">
                 Get started on GitHub
               </Link>
-              <Link href={SITE.demo} className="btn-ghost flex-1 py-3 text-center text-sm">
-                Open the demo
+              <Link href={SITE.getStarted} className="btn-ghost flex-1 py-3 text-center text-sm">
+                Read the guide
               </Link>
             </div>
           </div>

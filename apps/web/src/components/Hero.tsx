@@ -45,8 +45,8 @@ export default function Hero() {
 
       <div className="fade-up d4 mt-11 flex flex-col items-center gap-4 sm:flex-row">
         <Magnetic strength={0.4}>
-          <Link href={SITE.demo} className="btn-primary flex items-center gap-2 px-7 py-3.5 text-sm">
-            Try the live demo
+          <Link href={SITE.getStarted} className="btn-primary flex items-center gap-2 px-7 py-3.5 text-sm">
+            Get started
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
               <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>

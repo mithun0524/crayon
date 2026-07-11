@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   title: "Crayon — The Autonomous Terminal AI",
   description:
     "Crayon is an autonomous AI coding agent that lives in your terminal. It reads your codebase, plans, executes, and self-heals until the job is done.",
-  metadataBase: new URL(SITE.demo),
+  metadataBase: new URL(SITE.url),
   openGraph: {
     title: "Crayon — The Autonomous Terminal AI",
     description: SITE.tagline,

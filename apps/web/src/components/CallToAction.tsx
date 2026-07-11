@@ -47,8 +47,8 @@ export default function CallToAction() {
               </span>
             </button>
             <div className="flex w-full flex-col gap-3 sm:flex-row">
-              <Link href={SITE.demo} className="btn-primary flex-1 py-3.5 text-sm">
-                Try the live demo
+              <Link href={SITE.getStarted} className="btn-primary flex-1 py-3.5 text-sm">
+                Get started
               </Link>
               <Link href="/docs" className="btn-ghost flex-1 py-3.5 text-sm">
                 Read the docs
