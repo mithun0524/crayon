@@ -1,165 +1,299 @@
 @import "tailwindcss";
 
+/* ============================================================
+   Crayon — "Terminal Atelier"
+   Near-black canvas · warm ivory ink · electric cyan signal ·
+   rare crayon-coral spark. Editorial serif + Geist + Geist Mono.
+   ============================================================ */
+
+/* ---- Shared tokens (theme-independent) ---- */
 :root {
-  --background: #09090B;
-  --foreground: #FAFAFA;
+  color-scheme: light dark;
+
+  --cyan: #22d3ee; /* the CLI signal color */
+  --cyan-soft: #67e8f9;
+  --coral: #fb7185; /* the "crayon" spark */
+
+  /* The crayon box — the 12 named accents shipped by the CLI (theme.ts).
+     These are the brand's real palette; the site leans on them boldly. */
+  --cr-teal: #22d3ee;
+  --cr-violet: #a855f7;
+  --cr-magenta: #ec4899;
+  --cr-coral: #fb7185;
+  --cr-rose: #f43f5e;
+  --cr-tangerine: #fb923c;
+  --cr-amber: #fbbf24;
+  --cr-lime: #a3e635;
+  --cr-emerald: #34d399;
+  --cr-sky: #38bdf8;
+  --cr-indigo: #818cf8;
+  --cr-clay: #d97757;
+
+  /* Live accent — swapped by the interactive palette section. */
+  --accent: var(--cyan);
+}
+
+/* ---- Light: "Sketchbook" — warm paper base, dark ink (default) ---- */
+:root,
+[data-theme='light'] {
+  --ink-950: #ece5d7; /* page — warm cream */
+  --ink-900: #f1ebe0; /* raised panels / nav */
+  --ink-850: #f7f2ea; /* cards */
+  --ink-800: #fdfaf3; /* hover — near white */
+  --line: rgba(28, 25, 23, 0.12);
+  --line-strong: rgba(28, 25, 23, 0.2);
+
+  --paper: #1c1917; /* warm near-black — primary "ink" */
+  --paper-dim: rgba(28, 25, 23, 0.62);
+  --paper-faint: rgba(28, 25, 23, 0.42);
+
+  /* Text-safe accent: darkened toward ink so bright crayons stay legible. */
+  --accent-ink: color-mix(in srgb, var(--accent) 56%, #1c1917);
+
+  --tooth: rgba(28, 25, 23, 0.05);
+  --tooth-blend: multiply;
+  --grain-blend: multiply;
+  --grain-opacity: 0.05;
+  --scroll-thumb: rgba(28, 25, 23, 0.2);
+  --scroll-thumb-hover: rgba(28, 25, 23, 0.32);
+}
+
+/* ---- Dark: "Terminal Atelier" — near-black canvas, ivory ink ---- */
+[data-theme='dark'] {
+  --ink-950: #08080a;
+  --ink-900: #0d0d10;
+  --ink-850: #131317;
+  --ink-800: #1b1b20;
+  --line: rgba(244, 241, 234, 0.08);
+  --line-strong: rgba(244, 241, 234, 0.16);
+
+  --paper: #f4f1ea; /* warm ivory */
+  --paper-dim: rgba(244, 241, 234, 0.58);
+  --paper-faint: rgba(244, 241, 234, 0.38);
+
+  /* On dark, accent text stays bright. */
+  --accent-ink: color-mix(in srgb, var(--accent) 88%, #ffffff);
+
+  --tooth: rgba(244, 241, 234, 0.04);
+  --tooth-blend: screen;
+  --grain-blend: screen;
+  --grain-opacity: 0.035;
+  --scroll-thumb: rgba(244, 241, 234, 0.12);
+  --scroll-thumb-hover: rgba(244, 241, 234, 0.22);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-inter);
-  --font-mono: var(--font-jetbrains-mono);
+  --color-ink-950: var(--ink-950);
+  --color-ink-900: var(--ink-900);
+  --color-ink-850: var(--ink-850);
+  --color-ink-800: var(--ink-800);
+  --color-paper: var(--paper);
+  --color-cyan: var(--cyan);
+  --color-coral: var(--coral);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-line: var(--line);
+  --color-cr-teal: var(--cr-teal);
+  --color-cr-violet: var(--cr-violet);
+  --color-cr-magenta: var(--cr-magenta);
+  --color-cr-coral: var(--cr-coral);
+  --color-cr-rose: var(--cr-rose);
+  --color-cr-tangerine: var(--cr-tangerine);
+  --color-cr-amber: var(--cr-amber);
+  --color-cr-lime: var(--cr-lime);
+  --color-cr-emerald: var(--cr-emerald);
+  --color-cr-sky: var(--cr-sky);
+  --color-cr-indigo: var(--cr-indigo);
+  --color-cr-clay: var(--cr-clay);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-display);
 }
 
-::selection {
-  background-color: rgba(0, 229, 255, 0.3);
-  color: #ffffff;
+* {
+  border-color: var(--line);
 }
 
-::-webkit-scrollbar {
-  width: 10px;
+/* Dark island — restores the terminal-era palette for a subtree (terminals,
+   dark CTA panel). Only redefines tokens; children's bg/text classes follow. */
+.on-dark {
+  --ink-950: #08080a;
+  --ink-900: #0d0d10;
+  --ink-850: #131317;
+  --ink-800: #1b1b20;
+  --line: rgba(244, 241, 234, 0.1);
+  --line-strong: rgba(244, 241, 234, 0.18);
+  --paper: #f4f1ea;
+  --paper-dim: rgba(244, 241, 234, 0.58);
+  --paper-faint: rgba(244, 241, 234, 0.4);
+  /* On dark, accent text should stay bright, not darkened. */
+  --accent-ink: color-mix(in srgb, var(--accent) 88%, #ffffff);
+  color: var(--paper);
 }
 
-::-webkit-scrollbar-track {
-  background: #09090B;
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 5px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+html {
+  background: var(--ink-950);
+  color: var(--paper);
+  -webkit-font-smoothing: antialiased;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-inter), sans-serif;
+  background: var(--ink-950);
+  color: var(--paper);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-feature-settings: "ss01", "cv01";
 }
 
-/* Typography Utility */
-.font-outfit {
-  font-family: var(--font-outfit), sans-serif;
-}
-.font-inter {
-  font-family: var(--font-inter), sans-serif;
+/* ---- Utility type classes ---- */
+.font-display { font-family: var(--font-display), Georgia, serif; }
+.font-mono { font-family: var(--font-mono), ui-monospace, monospace; }
+
+.kicker {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--paper-faint);
 }
 
-/* Minimalist Noise Background (Image-based for performance) */
-.noise-bg {
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
-  background-repeat: repeat;
-  opacity: 0.02;
-  mix-blend-mode: screen;
+.text-dim { color: var(--paper-dim); }
+.text-faint { color: var(--paper-faint); }
+
+/* ---- Selection & scrollbar ---- */
+::selection {
+  background: rgba(34, 211, 238, 0.25);
+  color: #ffffff;
+}
+::-webkit-scrollbar { width: 9px; }
+::-webkit-scrollbar-track { background: var(--ink-950); }
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
+
+/* ---- Atmosphere: film grain (fixed overlay) ---- */
+.grain {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 240 240' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: var(--grain-opacity);
+  mix-blend-mode: var(--grain-blend);
 }
 
-/* Glassmorphism - Greatly reduced blur for performance */
-.glass-panel {
-  background: rgba(255, 255, 255, 0.01);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+/* ---- Atmosphere: faint technical grid ---- */
+.grid-lines {
+  background-image:
+    linear-gradient(to right, rgba(244, 241, 234, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(244, 241, 234, 0.03) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: radial-gradient(ellipse 90% 60% at 50% 0%, #000 30%, transparent 80%);
 }
 
-.glass-card-hover {
-  transition: all 0.3s ease;
+/* ---- Atmosphere: waxy paper (warm tactile tooth + grain) ---- */
+.waxy {
+  background-image:
+    /* diagonal paper "tooth" — the drag texture of crayon on paper */
+    repeating-linear-gradient(
+      118deg,
+      var(--tooth) 0px,
+      var(--tooth) 1px,
+      transparent 1px,
+      transparent 5px
+    ),
+    /* fine tooth grain */
+    radial-gradient(var(--tooth) 0.5px, transparent 1.4px);
+  background-size: auto, 6px 6px;
+  mix-blend-mode: var(--tooth-blend);
+  opacity: 0.55;
 }
 
-.glass-card-hover:hover {
-  background: rgba(255, 255, 255, 0.03);
-  border-color: rgba(0, 229, 255, 0.3);
+/* ---- Glow helpers ---- */
+.glow-cyan { box-shadow: 0 0 60px -12px rgba(34, 211, 238, 0.35); }
+.text-glow { text-shadow: 0 0 44px color-mix(in srgb, var(--accent) 30%, transparent); }
+
+/* ---- Crayon color helpers ---- */
+.text-accent { color: var(--accent); }
+.bg-accent { background: var(--accent); }
+.accent-glow { text-shadow: 0 0 44px color-mix(in srgb, var(--accent) 32%, transparent); }
+
+/* Hand-drawn crayon underline: draws on when revealed (JS toggles .drawn). */
+.crayon-stroke path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.crayon-stroke.drawn path { stroke-dashoffset: 0; }
+
+/* ---- Card with hairline border ---- */
+.card {
+  position: relative;
+  background: var(--ink-850);
+  border: 1px solid var(--line);
+  border-radius: 1.25rem;
+  transition: border-color 0.4s ease, background 0.4s ease, transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.card:hover {
+  background: var(--ink-800);
+  border-color: var(--line-strong);
   transform: translateY(-4px);
 }
 
-/* Glow Text */
-.text-glow {
-  text-shadow: 0 0 40px rgba(0, 229, 255, 0.2);
-}
-
-/* Smooth Fade In */
-.fade-in-up {
-  animation: fadeInUp 0.8s ease-out forwards;
-  opacity: 0;
-  transform: translateY(15px);
-}
-
-.delay-100 { animation-delay: 100ms; }
-.delay-200 { animation-delay: 200ms; }
-.delay-300 { animation-delay: 300ms; }
-.delay-400 { animation-delay: 400ms; }
-.delay-500 { animation-delay: 500ms; }
-
-@keyframes fadeInUp {
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* Code Typing Cursor */
-.typing-cursor::after {
-  content: '█';
-  animation: blink 1s step-start infinite;
-  color: #00E5FF;
-  margin-left: 4px;
-}
-
-@keyframes blink {
-  50% { opacity: 0; }
-}
-
-/* Infinite Marquee */
-.animate-marquee {
-  animation: marquee 40s linear infinite;
-}
-
-.animate-marquee:hover {
-  animation-play-state: paused;
-}
-
+/* ---- Marquee ---- */
+.animate-marquee { animation: marquee 38s linear infinite; }
+.animate-marquee:hover { animation-play-state: paused; }
 @keyframes marquee {
-  0% { transform: translateX(0%); }
-  100% { transform: translateX(-50%); }
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
 }
 
-/* Global Interaction Utilities */
-button, a, [role="button"] {
-  cursor: pointer;
+/* ---- Terminal caret ---- */
+.caret::after {
+  content: "▋";
+  color: var(--cyan);
+  margin-left: 2px;
+  animation: blink 1.05s step-start infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ---- Buttons ---- */
+.btn-primary {
+  background: var(--paper);
+  color: var(--ink-950);
+  border-radius: 999px;
+  font-weight: 500;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s ease;
+}
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 40px -12px rgba(244, 241, 234, 0.4);
+}
+.btn-ghost {
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--paper);
+  transition: background 0.25s ease, border-color 0.25s ease;
+}
+.btn-ghost:hover {
+  background: rgba(244, 241, 234, 0.04);
+  border-color: var(--cyan);
 }
 
-button:active, a:active {
-  transform: scale(0.98);
-}
-
-.focus-ring {
+button, a, [role="button"] { cursor: pointer; }
+:focus-visible {
   outline: none;
+  box-shadow: 0 0 0 2px var(--ink-950), 0 0 0 4px var(--cyan);
+  border-radius: 6px;
 }
 
-.focus-ring:focus-visible {
-  box-shadow: 0 0 0 2px #000000, 0 0 0 4px #00E5FF;
-}
+/* ---- Entrance (above the fold) ---- */
+.fade-up { animation: fadeUp 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards; opacity: 0; }
+.d1 { animation-delay: 0.05s; }
+.d2 { animation-delay: 0.15s; }
+.d3 { animation-delay: 0.28s; }
+.d4 { animation-delay: 0.42s; }
+.d5 { animation-delay: 0.58s; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }
 
-/* Interactive Mouse Spotlight */
-.mouse-spotlight {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  pointer-events: none;
-  z-index: 0;
-  background: radial-gradient(
-    600px circle at var(--mouse-x, 50vw) var(--mouse-y, 50vh),
-    rgba(0, 229, 255, 0.05),
-    transparent 40%
-  );
-  transition: opacity 0.5s ease;
-}
-
-/* Accessibility: Reduced Motion */
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after {
     animation-duration: 0.01ms !important;
