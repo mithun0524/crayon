@@ -3,33 +3,28 @@
 Live at **https://crayon-umber.vercel.app** — Vercel project `crayon`
 (scope `mithun0524s-projects`).
 
-## CI/CD (primary) — GitHub Actions → Vercel
+## How it deploys — Vercel native Git integration
 
-The `deploy-web` job in `.github/workflows/ci.yml` deploys production
-automatically on every push to `main` that touches `apps/web` (or repo root),
-**after** the `ci-ok` gate passes. It builds `apps/web` as the Vercel CLI's
-working directory, so the monorepo deploys correctly regardless of the Vercel
-project's Root Directory setting.
+The GitHub repo is connected to the Vercel project (`vercel git connect`), so
+Vercel builds and deploys automatically:
 
-**One-time setup — add a single repo secret:**
+- **Push to `main`** → production deploy (aliased to `crayon-umber.vercel.app`)
+- **Open a PR** → unique preview deployment
 
-1. Vercel → Account Settings → **Tokens** → create a token.
-2. GitHub → repo → Settings → Secrets and variables → Actions → **New secret**:
-   - Name: `VERCEL_TOKEN`
-   - Value: the token from step 1
+No GitHub Actions job, no token, no workflow config for deploys.
 
-The project/org IDs are non-secret and already set as `env` in the workflow
-(`VERCEL_PROJECT_ID`, `VERCEL_ORG_ID`).
+### Required project setting (one-time, dashboard)
 
-> **Do not also enable Vercel's dashboard Git integration** for this repo — that
-> would double-deploy. This workflow is the single source of truth. (If Git
-> integration is currently connected, disconnect it: Vercel → `crayon` →
-> Settings → Git.)
+Vercel → `crayon` → Settings → Build & Deployment → **Root Directory = `apps/web`**
 
-## Manual deploy (fallback)
+This is essential: the Next app lives in `apps/web`, not the repo root. Without
+it, Vercel builds the monorepo root (no Next app) and the site never updates —
+that's exactly why the live site once sat ~40 days stale. It can't be set from
+the CLI; it must be set in the dashboard.
 
-`apps/web` is self-contained (own `package-lock.json`, no workspace deps), so it
-deploys standalone:
+## Manual deploy (break-glass fallback)
+
+`apps/web` is self-contained (own `package-lock.json`, no workspace deps):
 
 ```bash
 cd apps/web
@@ -37,13 +32,10 @@ vercel link --yes --project crayon --scope mithun0524s-projects   # first time o
 vercel deploy --prod --yes
 ```
 
-The `--prod` deploy is auto-aliased to `crayon-umber.vercel.app`.
-
 ## Notes
 
 - Build: `next build` (Next 16, Turbopack), ~30s. 17 routes, mostly static.
 - `.vercel/` is gitignored — never commit it.
-- History gotcha (2026-07): the project had Root Directory unset **and** no
-  working Git auto-deploy, so the live site sat ~40 days stale despite merges.
-  The Actions workflow above fixes this permanently; the manual command is the
-  break-glass fallback.
+- Deploys are **not** gated on this repo's CI (`ci.yml`). If you ever need
+  deploys to wait for green tests, enable Vercel → Settings → Git → "Only deploy
+  when checks pass", or switch to a CI-driven `vercel deploy --prebuilt` job.

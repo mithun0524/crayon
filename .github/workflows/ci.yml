@@ -211,40 +211,6 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-  # ── Deploy the marketing site to Vercel ───────────────────────────
-  # Runs only on a push to main, only when apps/web (or root) changed, and
-  # only after the CI gate is green. Builds apps/web as the CLI cwd so the
-  # monorepo works regardless of the project's Root Directory setting.
-  # Requires one repo secret: VERCEL_TOKEN (Vercel → Account → Tokens).
-  deploy-web:
-    name: Deploy web (Vercel prod)
-    runs-on: ubuntu-latest
-    needs: [changes, ci-ok]
-    if: >-
-      always() &&
-      needs.ci-ok.result == 'success' &&
-      github.ref == 'refs/heads/main' &&
-      github.event_name == 'push' &&
-      (needs.changes.outputs.web == 'true' || needs.changes.outputs.root == 'true')
-    env:
-      # Project identifiers are not secret; the token is.
-      VERCEL_ORG_ID: team_9iNUBYtKbWSDQA8RopreVPK1
-      VERCEL_PROJECT_ID: prj_Ftwsqh5LMPp2QhBu4UzqTdVPVz4U
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-    defaults:
-      run:
-        working-directory: apps/web
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Install Vercel CLI
-        run: npm install --global vercel@latest
-      - name: Pull Vercel project settings (production)
-        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
-      - name: Build
-        run: vercel build --prod --token="$VERCEL_TOKEN"
-      - name: Deploy prebuilt output to production
-        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+  # Web deploys are handled by Vercel's native Git integration (auto-deploy on
+  # push to main + PR previews), not by this workflow. See apps/web/DEPLOYING.md.
 
