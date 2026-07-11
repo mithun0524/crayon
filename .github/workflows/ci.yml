@@ -210,6 +210,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # VS Code Marketplace + Open VSX. If unset, publish-vscode.mjs skips
+          # those targets (release still succeeds).
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
 
   # Web deploys are handled by Vercel's native Git integration (auto-deploy on
   # push to main + PR previews), not by this workflow. See apps/web/DEPLOYING.md.

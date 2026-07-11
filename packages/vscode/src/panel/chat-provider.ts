@@ -166,8 +166,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     const config = vscode.workspace.getConfiguration("crayon");
     this.postToWebview({
       type: "config",
-      provider: config.get<string>("provider") || "openrouter",
-      model: config.get<string>("defaultModel") || "nvidia/nemotron-3-super-120b-a12b:free",
+      provider: config.get<string>("provider") || "anthropic",
+      model: config.get<string>("defaultModel") || "claude-sonnet-4-6",
+      mode:
+        config.get<string>("permissionMode") ||
+        ((config.get<boolean>("autoApplyEdits") ?? true) ? "auto-edit" : "ask"),
     });
   }
 
@@ -251,14 +254,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
     const config = vscode.workspace.getConfiguration("crayon");
     const keys = await this.getApiKeys();
-    const defaultModel = config.get<string>("defaultModel") || "nvidia/nemotron-3-super-120b-a12b:free";
-    const provider = config.get<"openrouter" | "anthropic" | "openai" | "google" | "ollama">("provider") || "openrouter";
-    const autoApplyEdits = config.get<boolean>("autoApplyEdits") ?? true;
+    const defaultModel = config.get<string>("defaultModel") || "claude-sonnet-4-6";
+    const provider = config.get<"openrouter" | "anthropic" | "openai" | "google" | "ollama">("provider") || "anthropic";
+    // Permission mode mirrors the terminal (/mode). Fall back to the legacy
+    // autoApplyEdits boolean when permissionMode is unset.
+    const permissionMode =
+      config.get<"ask" | "auto-edit" | "plan" | "auto" | "bypass">("permissionMode") ||
+      ((config.get<boolean>("autoApplyEdits") ?? true) ? "auto-edit" : "ask");
 
     this.agent = new CrayonAgent({
       workspaceRoot: folder,
       model: defaultModel,
       provider,
+      permissionMode,
       anthropicApiKey: keys.anthropicApiKey,
       openaiApiKey: keys.openaiApiKey,
       openrouterApiKey: keys.openrouterApiKey,
@@ -272,13 +280,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         );
         return choice === "Approve";
       },
-      approveEdit: autoApplyEdits
-        ? async () => true
-        : async (relPath, newContent) => {
-            const absPath = vscode.Uri.joinPath(vscode.Uri.file(folder), relPath);
-            const previewUri = vscode.Uri.parse(`crayon-diff:${absPath.fsPath}`);
-            return await vscode.commands.executeCommand<boolean>("crayon.previewEdit", absPath, previewUri, relPath, newContent) ?? false;
-          },
+      // Called only in "ask" mode (the agent gates the other modes itself):
+      // show a diff preview the user accepts or rejects.
+      approveEdit: async (relPath, newContent) => {
+        const absPath = vscode.Uri.joinPath(vscode.Uri.file(folder), relPath);
+        const previewUri = vscode.Uri.parse(`crayon-diff:${absPath.fsPath}`);
+        return await vscode.commands.executeCommand<boolean>("crayon.previewEdit", absPath, previewUri, relPath, newContent) ?? false;
+      },
     });
 
     this.agentWorkspaceRoot = folder;

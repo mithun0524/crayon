@@ -3,7 +3,7 @@
   "displayName": "Crayon",
   "description": "Autonomous AI coding agent",
   "version": "0.5.1",
-  "private": true,
+  "license": "MIT",
   "publisher": "crayon",
   "repository": {
     "type": "git",
@@ -106,18 +106,37 @@
             "google",
             "ollama"
           ],
-          "default": "openrouter",
+          "default": "anthropic",
           "description": "LLM provider. \"ollama\" talks to a local Ollama server (OLLAMA_BASE_URL or http://localhost:11434) and needs no API key."
         },
         "crayon.defaultModel": {
           "type": "string",
-          "default": "nvidia/nemotron-3-super-120b-a12b:free",
+          "default": "claude-sonnet-4-6",
           "description": "Default model for agent tasks"
+        },
+        "crayon.permissionMode": {
+          "type": "string",
+          "enum": [
+            "ask",
+            "auto-edit",
+            "plan",
+            "auto",
+            "bypass"
+          ],
+          "enumDescriptions": [
+            "Confirm every edit and command",
+            "Apply edits automatically; confirm commands",
+            "Plan only — never change files or run commands",
+            "Act freely; block dangerous commands",
+            "No prompts (use with care)"
+          ],
+          "default": "auto-edit",
+          "description": "How much Crayon can do on its own — mirrors the terminal's /mode."
         },
         "crayon.autoApplyEdits": {
           "type": "boolean",
           "default": true,
-          "description": "When true, file edits are applied immediately without a diff preview prompt. Set to false to review each change before it lands."
+          "description": "Deprecated — use crayon.permissionMode. Only used if permissionMode is unset."
         }
       }
     },
