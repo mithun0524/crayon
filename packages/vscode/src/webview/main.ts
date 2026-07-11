@@ -65,7 +65,9 @@ const statusTextEl = statusEl.querySelector(".status-text") as HTMLSpanElement;
 const input = document.getElementById("task-input") as HTMLTextAreaElement;
 const sendBtn = document.getElementById("send-btn") as HTMLButtonElement;
 const tokenCounterEl = document.getElementById("token-counter") as HTMLSpanElement;
-const modelBadgeEl = document.getElementById("model-badge") as HTMLSpanElement;
+const modelBadgeEl = document.getElementById("model-badge") as HTMLButtonElement;
+const modeBadgeEl = document.getElementById("mode-badge") as HTMLButtonElement;
+const pickerMenuEl = document.getElementById("picker-menu")!;
 
 const SEND_ICON =
   '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M1.72 1.05a.5.5 0 0 0-.71.55l1.4 5.4L9 8 2.41 9l-1.4 5.4a.5.5 0 0 0 .71.55l13-6.5a.5.5 0 0 0 0-.9l-13-6.5z"/></svg>';
@@ -79,6 +81,9 @@ let renderScheduled = false;
 let tokens = 0;
 let cost = 0;
 let modelId = "";
+let modelList: string[] = [];
+let modeList: string[] = ["ask", "auto-edit", "plan", "auto", "bypass"];
+let currentMode = "";
 // Open tool rows waiting for their result, keyed by id (fallback: name)
 const pendingTools = new Map<string, { row: HTMLDetailsElement; started: number }>();
 
@@ -439,8 +444,65 @@ const SLASH_COMMANDS: Array<{ cmd: string; desc: string; template?: string; acti
   { cmd: "/test", desc: "Write tests", template: "Write tests for the selected code." },
   { cmd: "/doc", desc: "Add documentation", template: "Add documentation comments to the selected code." },
   { cmd: "/refactor", desc: "Refactor for clarity", template: "Refactor the selected code for clarity and maintainability." },
+  { cmd: "/model", desc: "Switch the model", action: () => modelBadgeEl.click() },
+  { cmd: "/mode", desc: "Change permission mode", action: () => modeBadgeEl.click() },
+  { cmd: "/compact", desc: "Compact the conversation", action: () => vscode.postMessage({ type: "slash", name: "compact" }) },
+  { cmd: "/cost", desc: "Show token usage & cost", action: () => vscode.postMessage({ type: "slash", name: "cost" }) },
+  { cmd: "/diff", desc: "Show the git diff", action: () => vscode.postMessage({ type: "slash", name: "diff" }) },
+  { cmd: "/files", desc: "Files changed this session", action: () => vscode.postMessage({ type: "slash", name: "files" }) },
+  { cmd: "/easel", desc: "Show the active context", action: () => vscode.postMessage({ type: "slash", name: "easel" }) },
+  { cmd: "/mcp", desc: "List MCP servers", action: () => vscode.postMessage({ type: "slash", name: "mcp" }) },
+  { cmd: "/memory", desc: "Generate project memory", action: () => vscode.postMessage({ type: "slash", name: "memory" }) },
+  { cmd: "/undo", desc: "Undo the last turn", action: () => vscode.postMessage({ type: "slash", name: "undo" }) },
+  { cmd: "/help", desc: "Show all commands", action: () => showHelp() },
   { cmd: "/clear", desc: "Clear the conversation", action: () => vscode.postMessage({ type: "clear" }) },
 ];
+
+function showHelp(): void {
+  const md = "**Commands**\n\n" + SLASH_COMMANDS.map((c) => `- \`${c.cmd}\` — ${c.desc}`).join("\n");
+  addMsg(renderMarkdown(md), "agent");
+}
+
+// ── Generic dropdown picker (model / mode) ───────────────────────
+function openPicker(items: string[], current: string, onPick: (v: string) => void): void {
+  slashMenuEl.classList.remove("open");
+  if (!items.length) return;
+  let sel = Math.max(0, items.indexOf(current));
+  const render = () => {
+    pickerMenuEl.innerHTML = items
+      .map(
+        (it, i) =>
+          `<div class="sm-item${i === sel ? " sel" : ""}" data-i="${i}">` +
+          `<span class="sm-cmd">${it === current ? "● " : ""}${escapeHtml(it)}</span></div>`
+      )
+      .join("");
+  };
+  render();
+  pickerMenuEl.classList.add("open");
+  const close = () => {
+    pickerMenuEl.classList.remove("open");
+    document.removeEventListener("keydown", onKey, true);
+  };
+  function onKey(e: KeyboardEvent): void {
+    if (!pickerMenuEl.classList.contains("open")) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); sel = (sel + 1) % items.length; render(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); sel = (sel - 1 + items.length) % items.length; render(); }
+    else if (e.key === "Enter") { e.preventDefault(); onPick(items[sel]); close(); }
+    else if (e.key === "Escape") { e.preventDefault(); close(); }
+  }
+  document.addEventListener("keydown", onKey, true);
+  pickerMenuEl.onmousedown = (e) => {
+    const item = (e.target as HTMLElement).closest(".sm-item") as HTMLElement | null;
+    if (item) { e.preventDefault(); onPick(items[Number(item.dataset.i)]); close(); }
+  };
+}
+
+modeBadgeEl.addEventListener("click", () =>
+  openPicker(modeList, currentMode, (m) => vscode.postMessage({ type: "set_mode", mode: m }))
+);
+modelBadgeEl.addEventListener("click", () =>
+  openPicker(modelList, modelId, (m) => vscode.postMessage({ type: "set_model", model: m }))
+);
 let slashSel = 0;
 let slashMatches: typeof SLASH_COMMANDS = [];
 
@@ -761,6 +823,15 @@ window.addEventListener("message", (e) => {
     case "config":
       modelId = String(model ?? "");
       modelBadgeEl.textContent = provider ? `${provider} · ${modelId.replace(/^[^/]*\//, "")}` : modelId;
+      if (Array.isArray(e.data.models)) modelList = e.data.models as string[];
+      if (Array.isArray(e.data.modes)) modeList = e.data.modes as string[];
+      if (e.data.mode) {
+        currentMode = String(e.data.mode);
+        modeBadgeEl.textContent = "⏸ " + currentMode;
+      }
+      return;
+    case "notice_md":
+      addMsg(renderMarkdown(String(e.data.text ?? "")), "agent");
       return;
     case "cleared":
       messagesEl.innerHTML = "";

@@ -1,7 +1,22 @@
 import * as path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import * as vscode from "vscode";
-import { CrayonAgent, type AgentEvent } from "crayon-agent";
+import { CrayonAgent, autoCompact, getModelPricing, type AgentEvent } from "crayon-agent";
 import { getEditorContext } from "../bridge.js";
+
+const execFileAsync = promisify(execFile);
+
+/** Popular models per provider for the in-chat model picker. */
+const MODELS: Record<string, string[]> = {
+  anthropic: ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5-20251001", "claude-3-7-sonnet-latest"],
+  openai: ["gpt-4.5", "gpt-4o", "o3-mini", "o1"],
+  google: ["gemini-2.5-pro", "gemini-2.0-flash"],
+  openrouter: ["anthropic/claude-sonnet-4-6", "openai/gpt-4o", "google/gemini-2.5-pro"],
+  ollama: ["ollama/llama3.1:8b", "ollama/qwen2.5-coder:7b"],
+};
+
+const PERMISSION_MODES = ["ask", "auto-edit", "plan", "auto", "bypass"] as const;
 
 /** QuickPick label → SecretStorage key. Exported for the setApiKey command. */
 export const API_KEY_SECRETS = {
@@ -35,6 +50,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private runAbort?: AbortController;
   private running = false;
   private transcript: TranscriptEntry[];
+  // Session accounting for /cost and /files.
+  private promptTokens = 0;
+  private completionTokens = 0;
+  private touchedFiles = new Set<string>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -100,6 +119,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         case "copy":
           if (typeof msg.code === "string") await vscode.env.clipboard.writeText(msg.code);
           break;
+        case "set_mode":
+          if (typeof (msg as any).mode === "string") await this.setPermissionMode((msg as any).mode);
+          break;
+        case "set_model":
+          if (typeof (msg as any).model === "string") await this.setModel((msg as any).model);
+          break;
+        case "slash":
+          if (typeof (msg as any).name === "string") await this.handleSlash((msg as any).name);
+          break;
       }
     });
 
@@ -129,6 +157,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   clearChat(): void {
     this.agent?.clearHistory();
     this.transcript = [];
+    this.promptTokens = 0;
+    this.completionTokens = 0;
+    this.touchedFiles.clear();
     void this.persistTranscript();
     this.postToWebview({ type: "cleared" });
   }
@@ -140,6 +171,123 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     this.agent?.close();
     this.agent = undefined;
     this.agentWorkspaceRoot = undefined;
+  }
+
+  private async setPermissionMode(mode: string): Promise<void> {
+    if (!(PERMISSION_MODES as readonly string[]).includes(mode)) return;
+    await vscode.workspace
+      .getConfiguration("crayon")
+      .update("permissionMode", mode, vscode.ConfigurationTarget.Global);
+    this.agent?.setPermissionMode(mode as never);
+    this.postConfig();
+    this.postNotice(`Permission mode → **${mode}**`);
+  }
+
+  private async setModel(model: string): Promise<void> {
+    await vscode.workspace
+      .getConfiguration("crayon")
+      .update("defaultModel", model, vscode.ConfigurationTarget.Global);
+    this.agent?.setModel(model);
+    this.postConfig();
+    this.postNotice(`Model → **${model}**`);
+  }
+
+  /** Operational slash commands mirrored from the terminal. */
+  private async handleSlash(name: string): Promise<void> {
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const cfg = vscode.workspace.getConfiguration("crayon");
+    try {
+      switch (name) {
+        case "diff": {
+          if (!folder) return this.postNotice("Open a workspace folder first.");
+          const { stdout } = await execFileAsync("git", ["diff"], { cwd: folder, maxBuffer: 10 * 1024 * 1024 });
+          return this.postNotice(
+            stdout.trim() ? "**git diff**\n\n```diff\n" + stdout.slice(0, 20000) + "\n```" : "No uncommitted changes."
+          );
+        }
+        case "files": {
+          const files = [...this.touchedFiles];
+          return this.postNotice(
+            files.length
+              ? "**Files touched this session**\n\n" + files.map((f) => `- \`${f}\``).join("\n")
+              : "No files modified this session."
+          );
+        }
+        case "cost": {
+          const model = cfg.get<string>("defaultModel") || "claude-sonnet-4-6";
+          const pricing = getModelPricing(model);
+          const cost = (this.promptTokens * pricing.input + this.completionTokens * pricing.output) / 1_000_000;
+          const total = this.promptTokens + this.completionTokens;
+          return this.postNotice(
+            `**Session usage**\n\n- Tokens: ${total.toLocaleString()} (${this.promptTokens.toLocaleString()} in / ${this.completionTokens.toLocaleString()} out)\n- Est. cost: $${cost.toFixed(4)} · \`${model}\``
+          );
+        }
+        case "easel": {
+          if (!folder) return this.postNotice("Open a workspace folder first.");
+          const agent = await this.getOrCreateAgent(folder);
+          const files = ((agent as { getContextFiles?: () => string[] }).getContextFiles?.() ?? []).map((f) =>
+            path.relative(folder, f)
+          );
+          return this.postNotice(
+            files.length
+              ? "**Active context (files read)**\n\n" + files.map((f) => `- \`${f}\``).join("\n")
+              : "Context is empty."
+          );
+        }
+        case "mcp": {
+          if (!folder) return this.postNotice("Open a workspace folder first.");
+          const agent = await this.getOrCreateAgent(folder);
+          const info = (await (agent as { getMcpInfo?: () => Promise<any[]> }).getMcpInfo?.()) ?? [];
+          return this.postNotice(
+            info.length
+              ? "**MCP servers**\n\n" +
+                  info
+                    .map((s: any) => `- ${s.connected ? "●" : "✕"} **${s.name}** — ${s.connected ? `${s.tools.length} tools` : "not connected"}`)
+                    .join("\n")
+              : "No MCP servers configured. Add one in `~/.crayon/mcp.json`."
+          );
+        }
+        case "compact": {
+          if (!folder) return this.postNotice("Open a workspace folder first.");
+          const agent = await this.getOrCreateAgent(folder);
+          const keys = await this.getApiKeys();
+          const hist = agent.getHistory();
+          const compacted = await autoCompact(hist, {
+            model: cfg.get<string>("defaultModel"),
+            provider: cfg.get<string>("provider") as never,
+            anthropicApiKey: keys.anthropicApiKey,
+            openaiApiKey: keys.openaiApiKey,
+            openrouterApiKey: keys.openrouterApiKey,
+            googleApiKey: keys.googleApiKey,
+          });
+          agent.setHistory(compacted);
+          return this.postNotice(`Compacted ${hist.length} → ${compacted.length} messages.`);
+        }
+        case "undo": {
+          if (this.agent) {
+            const h = this.agent.getHistory();
+            const lastUser = [...h].reverse().findIndex((m: any) => m.role === "user");
+            if (lastUser !== -1) this.agent.setHistory(h.slice(0, h.length - 1 - lastUser));
+          }
+          const idx = [...this.transcript].reverse().findIndex((e) => e.kind === "user");
+          if (idx !== -1) {
+            this.transcript = this.transcript.slice(0, this.transcript.length - 1 - idx);
+            void this.persistTranscript();
+            this.replayTranscript();
+          }
+          return this.postNotice("Last turn undone.");
+        }
+        case "memory": {
+          return void this.handleRun(
+            "Generate project memory and write it to AGENTS.md at the workspace root. Call the generate_project_memory tool."
+          );
+        }
+        default:
+          return this.postNotice(`Unknown command: /${name}`);
+      }
+    } catch (err) {
+      this.postNotice(`Command failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private postEditorContext(): void {
@@ -164,23 +312,39 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private postConfig(): void {
     const config = vscode.workspace.getConfiguration("crayon");
+    const provider = config.get<string>("provider") || "anthropic";
     this.postToWebview({
       type: "config",
-      provider: config.get<string>("provider") || "anthropic",
+      provider,
       model: config.get<string>("defaultModel") || "claude-sonnet-4-6",
       mode:
         config.get<string>("permissionMode") ||
         ((config.get<boolean>("autoApplyEdits") ?? true) ? "auto-edit" : "ask"),
+      models: MODELS[provider] ?? [],
+      modes: PERMISSION_MODES,
     });
   }
 
   private postEvent(event: AgentEvent): void {
+    // Session accounting for /cost and /files.
+    const e = event as any;
+    if (e.type === "usage") {
+      this.promptTokens += Number(e.promptTokens) || 0;
+      this.completionTokens += Number(e.completionTokens) || 0;
+    } else if (e.type === "edit" && typeof e.path === "string") {
+      this.touchedFiles.add(e.path);
+    }
     // Deltas are streaming sugar — the final "text"/"reasoning" events carry
     // the full content, so deltas are not recorded for replay.
     if (event.type !== "text_delta" && event.type !== "reasoning_delta") {
       this.pushTranscript({ kind: "event", event });
     }
     this.postToWebview({ type: "event", event });
+  }
+
+  /** A markdown notice rendered in the transcript (command output). */
+  private postNotice(markdown: string): void {
+    this.postToWebview({ type: "notice_md", text: markdown });
   }
 
   private postToWebview(message: unknown): void {
@@ -746,8 +910,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       background: var(--vscode-sideBar-background);
     }
 
-    /* Slash-command intent menu */
-    #slash-menu {
+    /* Slash-command + picker menus */
+    #slash-menu, #picker-menu {
       display: none;
       position: absolute;
       bottom: 100%;
@@ -760,8 +924,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       box-shadow: 0 4px 16px rgba(0,0,0,0.35);
       overflow: hidden;
       z-index: 10;
+      max-height: 260px;
+      overflow-y: auto;
     }
-    #slash-menu.open { display: block; }
+    #slash-menu.open, #picker-menu.open { display: block; }
     .sm-item {
       display: flex;
       align-items: baseline;
@@ -849,12 +1015,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       padding: 0 2px;
       min-height: 13px;
     }
-    #model-badge {
+    .meta-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .badge-btn {
+      background: none;
+      border: 1px solid transparent;
+      color: var(--dim);
+      font-family: var(--vscode-editor-font-family);
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      cursor: pointer;
+      max-width: 46vw;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      font-family: var(--vscode-editor-font-family);
     }
+    .badge-btn:hover { border-color: var(--border); color: var(--vscode-foreground); background: var(--code-bg); }
+    #mode-badge { color: var(--accent); flex-shrink: 0; }
     #token-counter { flex-shrink: 0; }
   </style>
 </head>
@@ -867,6 +1044,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   </div><div id="status"><div class="spinner"></div><span class="status-text"></span></div></div>
   <div id="composer">
     <div id="slash-menu"></div>
+    <div id="picker-menu"></div>
     <div id="context-pills"></div>
     <div id="input-shell">
       <textarea id="task-input" placeholder="Ask Crayon to build, fix, or refactor…" rows="1"></textarea>
@@ -875,7 +1053,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       </button>
     </div>
     <div id="meta-line">
-      <span id="model-badge"></span>
+      <div class="meta-left">
+        <button id="mode-badge" class="badge-btn" title="Permission mode — click to change"></button>
+        <button id="model-badge" class="badge-btn" title="Model — click to change"></button>
+      </div>
       <span id="token-counter"></span>
     </div>
   </div>
