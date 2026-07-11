@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterEach } from "vitest";
 import { spawn as ptySpawn, type IPty } from "@lydell/node-pty";
 import { mkdtemp, rm } from "node:fs/promises";
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +15,7 @@ class CliSession {
   pty: IPty;
   buf = "";
   exitCode: number | null = null;
-  constructor(cwd: string, args: string[] = ["chat"]) {
+  constructor(cwd: string, args: string[] = ["chat"], extraEnv: Record<string, string> = {}) {
     // Ink (via ci-info) drops to NON-interactive rendering when $CI is set,
     // so the dynamic `crayon ❯` prompt never flushes. We drive a REAL pty
     // here and are explicitly testing interactive behavior, so strip CI (and
@@ -23,7 +23,7 @@ class CliSession {
     const { CI, CONTINUOUS_INTEGRATION, GITHUB_ACTIONS, BUILD_NUMBER, RUN_ID, ...cleanEnv } = process.env;
     this.pty = ptySpawn(process.execPath, [DIST, ...args], {
       name: "xterm-color", cols: 120, rows: 40, cwd,
-      env: { ...cleanEnv, CRAYON_PROVIDER: "ollama", CRAYON_MODEL: "ollama/llama3.1:8b", CRAYON_DISABLE_TELEMETRY: "1" },
+      env: { ...cleanEnv, CRAYON_PROVIDER: "ollama", CRAYON_MODEL: "ollama/llama3.1:8b", CRAYON_DISABLE_TELEMETRY: "1", ...extraEnv },
     });
     this.pty.onData((d) => { this.buf += d; });
     this.pty.onExit(({ exitCode }) => { this.exitCode = exitCode; });
@@ -114,6 +114,170 @@ describe("CLI e2e (real binary in a PTY)", () => {
     await sess.waitFor("ask mode on");
     sess.write("\x14"); // Ctrl+T → ask → auto-edit
     await sess.waitFor("auto-edit mode on");
+  }, 20000);
+
+  it("'?' opens the keyboard-shortcuts help overlay", async () => {
+    sess = new CliSession(await freshRepo());
+    await sess.ready();
+    sess.write("?");
+    await sess.waitFor("Keyboard shortcuts");
+    await sess.waitFor("recall previous prompts");
+    await sess.waitFor("Commands");
+  }, 20000);
+
+  it("/theme opens the theme picker", async () => {
+    sess = new CliSession(await freshRepo());
+    await sess.ready();
+    await sess.submit("/theme");
+    await sess.waitFor("ui theme");
+    await sess.waitFor("High Contrast");
+  }, 20000);
+
+  it("/theme <name> switches the theme and persists it", async () => {
+    // Isolate HOME so the switch writes to a throwaway ~/.crayon, not the user's.
+    const home = await mkdtemp(path.join(os.tmpdir(), "crayon-home-"));
+    try {
+      sess = new CliSession(await freshRepo(), ["chat"], { HOME: home, USERPROFILE: home });
+      await sess.ready();
+      await sess.submit("/theme light");
+      await sess.waitFor("Theme changed to Light");
+    } finally {
+      await rm(home, { recursive: true, force: true }).catch(() => {});
+    }
+  }, 20000);
+
+  it("/copy reports when there is nothing to copy", async () => {
+    sess = new CliSession(await freshRepo());
+    await sess.ready();
+    await sess.submit("/copy");
+    await sess.waitFor("Nothing to copy yet");
+  }, 20000);
+
+  it("typing '@' opens the file-mention autocomplete", async () => {
+    const dir = await freshRepo();
+    writeFileSync(path.join(dir, "hello.ts"), "export const x = 1;\n");
+    execSync("git add hello.ts", { cwd: dir });
+    sess = new CliSession(dir);
+    await sess.ready();
+    sess.write("@hel");
+    await sess.waitFor("@hello.ts");
+    await sess.waitFor("tab complete");
+  }, 20000);
+
+  it("Tab completes an '@' mention into the input", async () => {
+    const dir = await freshRepo();
+    writeFileSync(path.join(dir, "hello.ts"), "export const x = 1;\n");
+    execSync("git add hello.ts", { cwd: dir });
+    sess = new CliSession(dir);
+    await sess.ready();
+    sess.write("@hel");
+    await sess.waitFor("tab complete"); // menu is open
+    sess.write("\t");                   // complete the highlighted path
+    await new Promise((r) => setTimeout(r, 400)); // let the completion state flush
+    sess.write("done");                 // keep typing after the inserted "@hello.ts "
+    // Only reachable if Tab inserted the full "@hello.ts " token before "done".
+    await sess.waitFor("@hello.ts done");
+  }, 20000);
+
+  it("/theme picker applies the selected theme on Enter", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "crayon-home-"));
+    try {
+      sess = new CliSession(await freshRepo(), ["chat"], { HOME: home, USERPROFILE: home });
+      await sess.ready();
+      await sess.submit("/theme");
+      await sess.waitFor("ui theme"); // picker open, "Dark" highlighted first
+      sess.write("\r");               // select the highlighted theme
+      await sess.waitFor("Theme changed to Dark");
+    } finally {
+      await rm(home, { recursive: true, force: true }).catch(() => {});
+    }
+  }, 20000);
+
+  it("/resume loads the selected session's transcript on Enter", async () => {
+    const dir = await freshRepo();
+    const sdir = path.join(dir, ".crayon", "sessions");
+    mkdirSync(sdir, { recursive: true });
+    writeFileSync(
+      path.join(sdir, "ZZ990011.json"),
+      JSON.stringify({
+        id: "ZZ990011",
+        timestamp: "2026-07-02T00:00:00.000Z",
+        title: "Add retry logic",
+        history: [],
+        chatLog: [
+          { sender: "user", text: "Add retry logic" },
+          { sender: "crayon", text: "RETRIED_OK_MARKER done." },
+        ],
+      }),
+    );
+    sess = new CliSession(dir);
+    await sess.ready();
+    await sess.submit("/resume");
+    await sess.waitFor("Resume session");
+    sess.write("\r"); // resume the highlighted session
+    // Confirmation line + the restored assistant message (unique marker) prove
+    // the transcript was actually loaded, not just listed.
+    await sess.waitFor("Resumed session ZZ990011");
+    await sess.waitFor("RETRIED_OK_MARKER");
+  }, 20000);
+
+  it("/resume reports when there are no saved sessions", async () => {
+    sess = new CliSession(await freshRepo());
+    await sess.ready();
+    await sess.submit("/resume");
+    await sess.waitFor("No saved sessions");
+  }, 20000);
+
+  it("/resume lists saved sessions in a picker", async () => {
+    const dir = await freshRepo();
+    const sdir = path.join(dir, ".crayon", "sessions");
+    mkdirSync(sdir, { recursive: true });
+    writeFileSync(
+      path.join(sdir, "ABCD1234.json"),
+      JSON.stringify({
+        id: "ABCD1234",
+        timestamp: "2026-07-01T00:00:00.000Z",
+        title: "Fix the parser",
+        history: [],
+        chatLog: [{ sender: "user", text: "Fix the parser" }],
+      }),
+    );
+    sess = new CliSession(dir);
+    await sess.ready();
+    await sess.submit("/resume");
+    await sess.waitFor("Resume session");
+    await sess.waitFor("Fix the parser");
+  }, 20000);
+
+  it("/tui fullscreen enters the alternate screen and /tui default restores it", async () => {
+    sess = new CliSession(await freshRepo());
+    await sess.ready();
+    await sess.submit("/tui fullscreen");
+    await sess.waitFor("Fullscreen renderer on");
+    expect(sess.buf.includes("\x1b[?1049h")).toBe(true); // entered alt buffer
+    await sess.submit("/tui default");
+    await sess.waitFor("Default renderer on");
+    expect(sess.buf.includes("\x1b[?1049l")).toBe(true); // restored normal buffer
+  }, 20000);
+
+  it("/img emits the iTerm2 inline-image protocol when supported", async () => {
+    const dir = await freshRepo();
+    writeFileSync(path.join(dir, "pic.png"), Buffer.from("fake-png-bytes"));
+    sess = new CliSession(dir, ["chat"], { TERM_PROGRAM: "iTerm.app" });
+    await sess.ready();
+    await sess.submit("/img pic.png");
+    await sess.waitFor("KB)"); // status line printed only after the command runs
+    expect(sess.buf.includes("\x1b]1337;File=inline=1")).toBe(true);
+  }, 20000);
+
+  it("/img falls back gracefully on an unsupported terminal", async () => {
+    const dir = await freshRepo();
+    writeFileSync(path.join(dir, "pic.png"), Buffer.from("fake-png-bytes"));
+    sess = new CliSession(dir, ["chat"], { TERM_PROGRAM: "xterm", LC_TERMINAL: "" });
+    await sess.ready();
+    await sess.submit("/img pic.png");
+    await sess.waitFor("Inline images need iTerm2");
+    expect(sess.buf.includes("\x1b]1337;File=")).toBe(false);
   }, 20000);
 
   it("double Ctrl+C exits cleanly (interrupt-first, then quit)", async () => {

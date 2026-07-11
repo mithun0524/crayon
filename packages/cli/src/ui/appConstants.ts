@@ -1,6 +1,26 @@
 // Pure constants and presentation helpers extracted from App.tsx to keep the
 // main component focused on state and rendering. No React or side effects here.
 
+import { applyPatch, type StructuredPatch } from "diff";
+
+/**
+ * Resolve a per-hunk edit review to the value the edit approval should return:
+ *   true   → every hunk accepted (apply the full proposed content)
+ *   false  → nothing accepted, or the selected hunks don't apply cleanly
+ *   string → the file content with only the accepted hunks applied
+ */
+export function computePartialEdit(
+  original: string,
+  patch: StructuredPatch,
+  accepted: boolean[],
+): boolean | string {
+  const chosen = patch.hunks.filter((_, i) => accepted[i]);
+  if (chosen.length === 0) return false;
+  if (chosen.length === patch.hunks.length) return true;
+  const patched = applyPatch(original, { ...patch, hunks: chosen });
+  return patched === false ? false : patched;
+}
+
 export const AVAILABLE_COMMANDS = [
   { cmd: "/clear", desc: "Clear conversation history" },
   { cmd: "/undo", desc: "Rewind conversation by 1 turn" },
@@ -14,6 +34,11 @@ export const AVAILABLE_COMMANDS = [
   { cmd: "/mcp", desc: "Show configured MCP servers and their tools" },
   { cmd: "/config", desc: "Change provider, model, or theme" },
   { cmd: "/color", desc: "Change the accent color", usage: "[name]" },
+  { cmd: "/theme", desc: "Switch the UI theme", usage: "dark | light | high-contrast" },
+  { cmd: "/copy", desc: "Copy last answer to clipboard", usage: "[code]" },
+  { cmd: "/resume", desc: "Resume a previous session in this workspace" },
+  { cmd: "/tui", desc: "Switch the renderer", usage: "fullscreen | default" },
+  { cmd: "/img", desc: "Render a local image inline (iTerm2/WezTerm)", usage: "<path>" },
   { cmd: "/easel", desc: "View the active agent context (files read)" },
   { cmd: "/memory", desc: "Generate or refresh project memory (AGENTS.md)" },
   { cmd: "/exit", desc: "Exit Crayon" },

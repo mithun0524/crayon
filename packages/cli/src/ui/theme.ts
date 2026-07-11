@@ -59,7 +59,31 @@ function loadTheme(): Theme {
   return darkTheme;
 }
 
-export const theme = loadTheme();
+// A mutable COPY of the chosen base theme. Everything imports `theme` by
+// reference and reads its fields, so accent/theme switches mutate this object
+// in place (and callers bump a re-render tick). Copying keeps the base theme
+// objects (darkTheme/lightTheme/…) pristine so switching back is lossless.
+export const theme: Theme = { ...loadTheme() };
+
+/** Selectable base themes for the `/theme` command. */
+export interface ThemePreset { name: string; label: string; theme: Theme; }
+export const THEMES: ThemePreset[] = [
+  { name: "dark",          label: "Dark",          theme: darkTheme },
+  { name: "light",         label: "Light",         theme: lightTheme },
+  { name: "high-contrast", label: "High Contrast", theme: highContrastTheme },
+];
+
+/**
+ * Swap the whole base theme in place. Returns false for unknown names.
+ * Note: this resets brand/shimmer to the base — callers that want to keep a
+ * custom accent should re-run applyAccent() afterwards.
+ */
+export function applyTheme(name: string): boolean {
+  const t = THEMES.find((x) => x.name === name);
+  if (!t) return false;
+  Object.assign(theme, t.theme);
+  return true;
+}
 
 /** Selectable accent presets for the `/color` command. */
 export interface Accent { name: string; label: string; brand: string; shimmer: string; }

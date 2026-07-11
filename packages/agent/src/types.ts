@@ -40,7 +40,8 @@ export interface AgentConfig {
   permissionMode?: PermissionMode;
   onEvent?: (event: AgentEvent) => void;
   approveCommand?: (command: string) => Promise<boolean>;
-  approveEdit?: (path: string, newContent: string) => Promise<boolean>;
+  approveEdit?: (path: string, newContent: string) => Promise<boolean | string>;
+  // true = apply newContent · false = reject · string = apply that (possibly partial) content instead
   /**
    * Ask the user a question and return their answer. Should resolve with a
    * sensible "proceed anyway" string on timeout rather than blocking forever.
@@ -73,7 +74,8 @@ export interface ToolContext {
   permissionMode?: PermissionMode;
   onEvent?: (event: AgentEvent) => void;
   approveCommand?: (command: string) => Promise<boolean>;
-  approveEdit?: (path: string, newContent: string) => Promise<boolean>;
+  approveEdit?: (path: string, newContent: string) => Promise<boolean | string>;
+  // true = apply newContent · false = reject · string = apply that (possibly partial) content instead
   askUser?: (question: string) => Promise<string>;
   fileState?: FileStateCache;
   transaction?: TransactionManager;
