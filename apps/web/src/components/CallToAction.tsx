@@ -1,28 +1,62 @@
-import React from 'react';
+'use client';
+import Link from 'next/link';
+import { useState } from 'react';
+import Reveal from './motion/Reveal';
+import { SITE } from '../lib/site';
 
 export default function CallToAction() {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(SITE.install);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  };
+
   return (
-    <section className="py-32 px-6 w-full max-w-6xl mx-auto">
-      <div className="relative rounded-[3rem] overflow-hidden bg-[#121214] border border-white/10 p-12 md:p-24 text-center flex flex-col items-center">
-        {/* Glow effect */}
-        <div className="absolute inset-0 bg-[#00E5FF]/5 blur-3xl -z-10 pointer-events-none mix-blend-screen"></div>
-        
-        <h2 className="text-5xl md:text-7xl font-outfit font-bold text-white mb-8 tracking-tight text-glow">
-          Ready to automate <br className="hidden md:block"/> your terminal?
-        </h2>
-        <p className="text-xl text-white/60 font-inter max-w-2xl mx-auto mb-12 tracking-wide">
-          Join thousands of developers building software at the speed of thought. Start using Crayon today.
-        </p>
-        
-        <div className="flex flex-col sm:flex-row gap-4 w-full justify-center">
-          <button className="bg-white text-[#09090B] px-8 py-4 rounded-full font-inter font-medium hover:scale-105 transition-transform shadow-[0_0_30px_rgba(255,255,255,0.2)] focus-ring">
-            Start Building Free
-          </button>
-          <button className="bg-[#121214] px-8 py-4 rounded-full font-inter font-medium text-white hover:bg-white/5 transition-colors border border-white/20 focus-ring">
-            Read the Documentation
-          </button>
+    <section className="mx-auto w-full max-w-6xl px-6 py-28">
+      <Reveal>
+        <div className="on-dark relative overflow-hidden rounded-[2.5rem] border border-line bg-ink-900 px-8 py-20 text-center shadow-[0_40px_100px_-40px_rgba(28,25,23,0.5)] md:px-24 md:py-28">
+          <div className="pointer-events-none absolute -top-1/2 left-1/2 h-[120%] w-[70%] -translate-x-1/2 rounded-full bg-accent/[0.08] blur-[120px]" />
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-accent/40 to-transparent" />
+
+          <p className="kicker mb-6">Ready when you are</p>
+          <h2 className="mx-auto max-w-3xl text-balance text-4xl font-semibold leading-[1.05] tracking-tight text-paper sm:text-6xl">
+            Hand off the busywork.
+            <br />
+            <span className="font-display italic text-accent-ink text-glow">Keep the thinking.</span>
+          </h2>
+
+          <div className="mx-auto mt-10 flex max-w-md flex-col items-center gap-4">
+            <button
+              onClick={copy}
+              className="btn-ghost group flex w-full items-center justify-between gap-3 py-3 pl-6 pr-3 text-sm"
+              aria-label="Copy install command"
+            >
+              <code className="font-mono text-paper/85">{SITE.install}</code>
+              <span className="grid h-8 w-8 place-items-center rounded-full bg-paper/5 group-hover:bg-paper/10">
+                {copied ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                ) : (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                )}
+              </span>
+            </button>
+            <div className="flex w-full flex-col gap-3 sm:flex-row">
+              <Link href={SITE.demo} className="btn-primary flex-1 py-3.5 text-sm">
+                Try the live demo
+              </Link>
+              <Link href="/docs" className="btn-ghost flex-1 py-3.5 text-sm">
+                Read the docs
+              </Link>
+            </div>
+          </div>
         </div>
-      </div>
+      </Reveal>
     </section>
   );
 }
