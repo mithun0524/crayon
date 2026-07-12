@@ -10,6 +10,7 @@ const isWatch = process.argv.includes("--watch");
 const runtimeExternals = [
   "vscode",
   "@vscode/ripgrep", // native binary
+  "node-pty", // native pty.node — must resolve at runtime, not be bundled
   "@lancedb/lancedb", // native .node addon
   "web-tree-sitter", // loads its own .wasm
   "tree-sitter-wasms", // .wasm grammars resolved via require.resolve

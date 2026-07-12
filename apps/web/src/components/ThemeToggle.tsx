@@ -9,7 +9,10 @@ export default function ThemeToggle({ className }: { className?: string }) {
   const [theme, setTheme] = useState<Theme>('light');
 
   useEffect(() => {
+    // Sync the button to the theme the pre-paint script already applied to
+    // <html>. One-time read of external (DOM) state at mount — intentional.
     const t = (document.documentElement.getAttribute('data-theme') as Theme) || 'light';
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setTheme(t);
   }, []);
 

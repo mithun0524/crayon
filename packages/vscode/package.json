@@ -161,6 +161,7 @@
     "@ai-sdk/google": "^1.2.22",
     "@lancedb/lancedb": "^0.30.0",
     "@vscode/ripgrep": "^1.18.0",
+    "node-pty": "^1.1.0",
     "tree-sitter-wasms": "^0.1.13",
     "web-tree-sitter": "^0.22.6"
   },

@@ -53,6 +53,8 @@ export default function TerminalDemo() {
     if (!started) return;
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     if (reduce) {
+      // Reduced motion: reveal the whole script at once, no typing animation.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setVisible(SCRIPT.length);
       return;
     }
