@@ -154,7 +154,8 @@
     "build": "node esbuild.config.mjs",
     "watch": "node esbuild.config.mjs --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "package": "node scripts/package.cjs"
+    "package": "node scripts/package.cjs",
+    "test:e2e": "node esbuild.config.mjs && tsc -p tsconfig.test.json && vscode-test"
   },
   "dependencies": {
     "@ai-sdk/google": "^1.2.22",
@@ -164,8 +165,11 @@
     "web-tree-sitter": "^0.22.6"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^22.13.10",
     "@types/vscode": "^1.85.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
     "@vscode/vsce": "^3.3.0",
     "crayon-agent": "workspace:*",
     "crayon-indexer": "workspace:*",
@@ -173,6 +177,7 @@
     "esbuild": "^0.25.1",
     "highlight.js": "^11.11.1",
     "marked": "^18.0.4",
+    "mocha": "^11.7.6",
     "typescript": "^5.8.2"
   }
 }

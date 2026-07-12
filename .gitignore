@@ -18,3 +18,5 @@ coverage/
 packages/cli/bin/
 .vercel
 .env*
+out-test/
+.vscode-test/
