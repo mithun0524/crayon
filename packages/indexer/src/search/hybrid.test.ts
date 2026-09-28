@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { hybridSearch } from "./hybrid.js";
 import { DependencyGraph } from "../graph/dependency.js";
 import type { FileSymbols } from "../types.js";
@@ -20,13 +23,20 @@ describe("hybridSearch", () => {
       ],
     ]);
 
-    const graph = new DependencyGraph();
-    graph.build(files, "/tmp");
+    // An empty root of its own: hybridSearch also ripgreps the root, and the
+    // shared /tmp is full of other suites' temp repos (slow + nondeterministic).
+    const root = mkdtempSync(path.join(os.tmpdir(), "crayon-hybrid-"));
+    try {
+      const graph = new DependencyGraph();
+      graph.build(files, root);
 
-    const results = await hybridSearch("formatDate", "/tmp", files, graph, 10);
-    expect(results.length).toBeGreaterThan(0);
-    expect(results[0]?.path).toBe("src/utils.ts");
-    expect(results[0]?.symbol).toBe("formatDate");
+      const results = await hybridSearch("formatDate", root, files, graph, 10);
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]?.path).toBe("src/utils.ts");
+      expect(results[0]?.symbol).toBe("formatDate");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
