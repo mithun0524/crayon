@@ -7,6 +7,10 @@ interface AgentProgressProps {
   statusText: string;
   tokens?: number;
   startTime?: number;
+  /** Timestamp of the agent's most recent event. */
+  lastActivity?: number;
+  /** Waiting on the user or a running command — silence is expected, not a stall. */
+  paused?: boolean;
 }
 
 // Braille spinner — every frame is exactly one cell wide, so the text after it
@@ -17,6 +21,8 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
   statusText,
   tokens = 0,
   startTime = Date.now(),
+  lastActivity,
+  paused = false,
 }) => {
   const [frame, setFrame] = useState(0);
 
@@ -26,7 +32,7 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
   }, []);
 
   const elapsedMs = Date.now() - startTime;
-  const isStalled = elapsedMs > 30000;
+  const isStalled = !paused && Date.now() - (lastActivity ?? startTime) > 30000;
   const spinnerColor = isStalled ? theme.warning : theme.brand;
 
   const kTokens = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
@@ -39,7 +45,7 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
         <Text color={spinnerColor} bold>{FRAMES[frame]} </Text>
         <Text color={theme.text}>{label} </Text>
         <Text color={theme.subtle} dimColor>
-          ({formatDuration(elapsedMs)} · {kTokens} tokens · esc to interrupt)
+          ({formatDuration(elapsedMs)}{tokens > 0 ? ` · ${kTokens} tokens` : ""} · esc to interrupt)
         </Text>
       </Box>
       {/* When the model has produced nothing for a while, say so — a silent

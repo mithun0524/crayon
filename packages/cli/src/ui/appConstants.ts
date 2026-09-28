@@ -76,34 +76,31 @@ export function buildAsciiTree(paths: string[]): string {
 
 export const POPULAR_MODELS = {
   anthropic: [
-    { label: "Claude 4.6 Sonnet (Latest)", value: "claude-sonnet-4-6" },
-    { label: "Claude 4.8 Opus", value: "claude-opus-4-8" },
-    { label: "Claude 4.5 Haiku", value: "claude-haiku-4-5-20251001" },
-    { label: "Claude 3.7 Sonnet", value: "claude-3-7-sonnet-latest" }
+    { label: "Claude Sonnet 5 (Recommended)", value: "claude-sonnet-5" },
+    { label: "Claude Opus 5.5", value: "claude-opus-5-5" },
+    { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001" }
   ],
   openai: [
-    { label: "GPT-4.5", value: "gpt-4.5" },
-    { label: "GPT-4o (Latest)", value: "gpt-4o" },
-    { label: "o3 Mini", value: "o3-mini" },
-    { label: "o1", value: "o1" }
+    { label: "GPT-6 Sol (Coding)", value: "gpt-6-sol" },
+    { label: "GPT-6 Astra (Flagship)", value: "gpt-6-astra" },
+    { label: "GPT-6 Luna (Fast)", value: "gpt-6-luna" }
   ],
   google: [
-    { label: "Gemini 2.5 Pro", value: "gemini-2.5-pro" },
-    { label: "Gemini 2.0 Flash", value: "gemini-2.0-flash" }
+    { label: "Gemini 3.8 Flash", value: "gemini-3.8-flash" },
+    { label: "Gemini 3.1 Pro (Preview)", value: "gemini-3.1-pro-preview" },
+    { label: "Gemini 3.5 Flash-Lite", value: "gemini-3.5-flash-lite" }
   ],
   openrouter: [
-    { label: "Anthropic: Claude 4.6 Sonnet", value: "anthropic/claude-sonnet-4-6" },
-    { label: "OpenAI: GPT-4.5", value: "openai/gpt-4.5" },
-    { label: "OpenAI: o3 Mini", value: "openai/o3-mini" },
-    { label: "Google: Gemini 2.5 Pro", value: "google/gemini-2.5-pro" },
-    { label: "DeepSeek: R1", value: "deepseek/deepseek-r1" },
-    { label: "Meta: Llama 3.3 70B", value: "meta-llama/llama-3.3-70b-instruct" }
+    { label: "Anthropic: Claude Sonnet 5", value: "anthropic/claude-sonnet-5" },
+    { label: "OpenAI: GPT-6 Sol", value: "openai/gpt-6-sol" },
+    { label: "Google: Gemini 3.8 Flash", value: "google/gemini-3.8-flash" },
+    { label: "Qwen3 Coder 480B", value: "qwen/qwen3-coder" }
   ],
   ollama: [
-    { label: "Qwen 2.5 Coder (7B)", value: "qwen2.5-coder:7b" },
-    { label: "Llama 3 (8B)", value: "llama3:latest" },
-    { label: "Qwen 2.5 Coder (14B)", value: "qwen2.5-coder:14b" },
-    { label: "Llama 3.3 (70B)", value: "llama3.3:latest" }
+    { label: "Qwen3 Coder 480B (Cloud)", value: "qwen3-coder:480b-cloud" },
+    { label: "GPT-OSS 120B (Cloud)", value: "gpt-oss:120b-cloud" },
+    { label: "Qwen3 Coder 30B (Local)", value: "qwen3-coder:30b" },
+    { label: "GPT-OSS 20B (Local)", value: "gpt-oss:20b" }
   ]
 };
 
@@ -177,7 +174,10 @@ export function formatToolResult(name: string, args: any, result: any, isError: 
 
   let detail = "";
   if (isError) {
-    detail = clip(String(r.error || "failed"), 70);
+    if (r.error === "PERMISSION_DENIED_BY_USER") detail = "denied — not run";
+    else if (name === "terminal" && typeof r.exitCode === "number" && r.exitCode > 0) detail = `exit ${r.exitCode}`;
+    else if (name === "terminal" && r.stderr) detail = clip(String(r.stderr).trim().split("\n").pop() || "failed", 70);
+    else detail = clip(String(r.error || "failed"), 70);
   } else {
     switch (name) {
       case "read_file": detail = r.totalLines != null ? `${r.totalLines} lines` : "read"; break;
@@ -256,3 +256,30 @@ export const getToolCallCompletedText = (name: string, args: any, result: any, i
       return `${icon} Ran tool ${name}`;
   }
 };
+
+/** 0 investigate · 1 change · 2 verify — what a plan step needs as evidence. */
+export type StepPhase = 0 | 1 | 2;
+
+const INVESTIGATE = /\b(identify|analy[sz]|understand|investigat|explor|locat|inspect|review|read|find|reproduc|diagnos|debug|examin|search)/i;
+const VERIFY_LEAD = /^\s*(verify|test|run|re-?run|check|confirm|validate|ensure)\b/i;
+
+export function stepPhase(step: string): StepPhase {
+  if (INVESTIGATE.test(step)) return 0; // "Run the tests to identify failures" is still investigation
+  if (VERIFY_LEAD.test(step)) return 2;
+  return /^\s*(fix|apply|implement|edit|update|add|write|create|refactor|change|modify|remove|delete|rename|replace|move)\b/i.test(step) ? 1 : 0;
+}
+
+/**
+ * Where the plan cursor may sit given what has actually happened. Tool calls
+ * nudge it forward (`bump`), but it never enters a step of a later phase than
+ * the evidence supports: no edit → no "Apply fixes"; no post-edit run → no "Verify".
+ */
+export function planCursor(steps: string[], current: number, phase: StepPhase, bump: boolean): number {
+  if (steps.length === 0) return 0;
+  const phases = steps.map(stepPhase);
+  const floor = phases.findIndex((p) => p >= phase);
+  let next = Math.max(current + (bump ? 1 : 0), floor === -1 ? current : floor);
+  const higher = phases.findIndex((p, i) => i > current && p > phase);
+  const ceiling = higher === -1 ? steps.length - 1 : Math.max(current, higher - 1);
+  return Math.min(next, ceiling, steps.length - 1);
+}

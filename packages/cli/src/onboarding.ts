@@ -4,20 +4,22 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
+import { POPULAR_MODELS } from './ui/appConstants.js';
+import { ollamaHost, fetchOllamaModels, describeOllamaModel } from './ollama.js';
 
-async function fetchOllamaModels(): Promise<string[] | null> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000); // 2 second timeout
-    const res = await fetch("http://localhost:11434/api/tags", { signal: controller.signal });
-    clearTimeout(timeout);
-    if (!res.ok) return null;
-    const data = await res.json() as { models?: { name: string }[] };
-    if (data.models && data.models.length > 0) {
-      return data.models.map(m => m.name);
-    }
-  } catch {}
-  return null;
+const OTHER = "__other__";
+
+/** Pick from the curated list (single source: POPULAR_MODELS), or type any id. */
+async function pickModel(provider: keyof typeof POPULAR_MODELS): Promise<string> {
+  const choice = await select({
+    message: 'Which model would you like to use?',
+    choices: [
+      ...POPULAR_MODELS[provider].map(m => ({ name: m.label, value: m.value, description: m.value })),
+      { name: 'Other (type a model id)', value: OTHER },
+    ],
+  });
+  if (choice !== OTHER) return choice;
+  return input({ message: 'Model id:', validate: v => v.trim().length > 0 || 'Enter a model id' });
 }
 
 export async function runOnboardingFlow(): Promise<void> {
@@ -62,7 +64,7 @@ export async function runOnboardingFlow(): Promise<void> {
       { name: 'OpenAI', value: 'openai' },
       { name: 'Google (Gemini)', value: 'google' },
       { name: 'OpenRouter', value: 'openrouter' },
-      { name: 'Ollama (100% Local & Free)', value: 'ollama' },
+      { name: 'Ollama (Local or Ollama Cloud)', value: 'ollama' },
     ],
   });
 
@@ -70,42 +72,28 @@ export async function runOnboardingFlow(): Promise<void> {
   let apiKey = "";
 
   if (provider === "ollama") {
-    console.log(chalk.cyan("Connecting to local Ollama service..."));
+    console.log(chalk.cyan(`Connecting to Ollama at ${ollamaHost()}...`));
     const localModels = await fetchOllamaModels();
     if (localModels && localModels.length > 0) {
       model = await select({
         message: 'Select an installed Ollama model:',
-        choices: localModels.map(m => ({ name: m, value: m })),
+        choices: localModels.map(m => ({ name: m.name, value: m.name, description: describeOllamaModel(m) })),
       });
     } else {
-      console.log(chalk.yellow("\n⚠️ Could not detect a running Ollama service on http://localhost:11434."));
-      console.log(chalk.cyan("\nHow to install and run Ollama:"));
-      console.log("  1. Download Ollama:");
-      console.log(chalk.dim("     - Windows/macOS: Go to https://ollama.com"));
-      console.log(chalk.dim("     - Linux: Run 'curl -fsSL https://ollama.com/install.sh | sh'"));
-      console.log("  2. Pull a recommended coding model in your terminal:");
-      console.log(chalk.green("     ollama run qwen2.5-coder:7b"));
-      console.log("  3. Make sure the Ollama application is active and running.\n");
-      
-      model = await input({
-        message: 'Enter the name of the Ollama model you wish to use:',
-        default: 'qwen2.5-coder:7b',
-      });
+      console.log(chalk.yellow(`\n⚠️  No Ollama chat models found at ${ollamaHost()}.`));
+      console.log(chalk.cyan("\nTo get one:"));
+      console.log("  1. Install Ollama from " + chalk.dim("https://ollama.com") + " and start it");
+      console.log("  2. Pull a coding model, local or cloud:");
+      console.log(chalk.green("     ollama pull qwen3-coder:30b") + chalk.dim("          # local, ~19 GB"));
+      console.log(chalk.green("     ollama signin && ollama pull qwen3-coder:480b-cloud") + chalk.dim("  # cloud, no GPU"));
+      console.log(chalk.dim("  Remote server? Set OLLAMA_BASE_URL.\n"));
+      model = await pickModel("ollama");
     }
   } else {
-    let defaultModel = "";
-    if (provider === "anthropic") defaultModel = "claude-3-7-sonnet-latest";
-    else if (provider === "openai") defaultModel = "gpt-4o";
-    else if (provider === "google") defaultModel = "gemini-2.5-pro";
-    else if (provider === "openrouter") defaultModel = "anthropic/claude-3.7-sonnet";
-
-    model = await input({
-      message: 'Which model would you like to use?',
-      default: defaultModel,
-    });
-
+    model = await pickModel(provider);
+    const envVar = { anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", google: "GEMINI_API_KEY", openrouter: "OPENROUTER_API_KEY" }[provider];
     apiKey = await password({
-      message: `Enter your ${provider} API Key:`,
+      message: `Enter your ${provider} API key ${chalk.dim(`(or leave blank and set ${envVar})`)}:`,
       mask: '*',
     });
   }

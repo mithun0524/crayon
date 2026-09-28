@@ -11,9 +11,6 @@ import { createTwoFilesPatch, structuredPatch, type StructuredPatch } from "diff
 type Hunk = StructuredPatch["hunks"][number];
 import { CrayonAgent, type AgentEvent, autoCompact, getModelPricing } from "crayon-agent";
 import { highlight } from "cli-highlight";
-import { fileURLToPath } from "node:url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 import { loadConfig } from "../config.js";
 import { getGitInfo } from "./gitHelper.js";
@@ -26,10 +23,12 @@ import { theme, ACCENTS, applyAccent, THEMES, applyTheme } from "./theme.js";
 import { syntaxThemeDark } from "./syntaxTheme.js";
 import { AgentProgress } from "./components/AgentProgress.js";
 import { verbForTurn, formatDuration } from "./workingVerb.js";
-import { CrayonLogo } from "./components/CrayonLogo.js";
+import { WelcomeHeader } from "./components/WelcomeHeader.js";
 import { Markdown } from "./Markdown.js";
 import { useTerminalSize } from "./hooks/useTerminalSize.js";
 import { ThinkingMessage } from "./messages/ThinkingMessage.js";
+import { CRAYON_VERSION } from "../version.js";
+import { ollamaHost, fetchOllamaModels, describeOllamaModel } from "../ollama.js";
 import {
   AVAILABLE_COMMANDS,
   buildAsciiTree,
@@ -37,6 +36,8 @@ import {
   getToolCallCompletedText,
   formatToolResult,
   computePartialEdit,
+  planCursor,
+  type StepPhase,
 } from "./appConstants.js";
 
 interface AppProps {
@@ -96,7 +97,7 @@ function commandMatches(input: string, custom: Array<{ cmd: string; desc: string
 
 export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) => {
   const { exit } = useApp();
-  const { columns } = useTerminalSize();
+  const { columns, rows } = useTerminalSize();
 
   // Clear the terminal (screen + scrollback) once on start, then render inline
   // in the NORMAL buffer via <Static> — so native trackpad scroll, copy/paste,
@@ -113,6 +114,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [activePlan, setActivePlan] = useState<string[]>([]);
   const activePlanRef = useRef<string[]>([]);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  // Evidence-based plan progress: 0 investigating, 1 edited, 2 ran something after editing.
+  const planPhaseRef = useRef<StepPhase>(0);
+  const movePlan = (bump: boolean) =>
+    setCurrentStepIndex((prev) => planCursor(activePlanRef.current, prev, planPhaseRef.current, bump));
   const [streamingText, setStreamingText] = useState("");
   const [streamingReasoning, setStreamingReasoning] = useState("");
   // We keep the state for triggering re-renders (used by getToolDisplay)
@@ -138,6 +143,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [inputHistoryIndex, setInputHistoryIndex] = useState(-1);
   const [approvalRequest, setApprovalRequest] = useState<any>(null);
+  // Commands the user chose "always" for — exact string, this session only.
+  const allowedCommandsRef = useRef<Set<string>>(new Set());
   // Per-hunk edit review (git add -p style): walk hunks one at a time.
   const [hunkReview, setHunkReview] = useState<{
     path: string; original: string; patch: StructuredPatch; hunks: Hunk[];
@@ -165,6 +172,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
   const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
   const [isThemePickerOpen, setIsThemePickerOpen] = useState(false);
+  // Generic inline picker (/config, bare /mode): a title, choices, and what picking does.
+  const [menu, setMenu] = useState<{ title: string; items: { label: string; value: string; description?: string }[]; onSelect: (v: string) => void } | null>(null);
   const [showHelpOverlay, setShowHelpOverlay] = useState(false);
   // /mcp interactive view: list of servers, and the drilled-into server.
   const [mcpView, setMcpView] = useState<any[] | null>(null);
@@ -215,6 +224,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const abortControllerRef = useRef<AbortController | null>(null);
   const historyCountRef = useRef(0);
   const executionStartTime = useRef<number | undefined>(undefined);
+  // Last time the agent did anything (token, tool, status) — drives the stall hint.
+  const lastActivityRef = useRef<number>(Date.now());
 
   const modeSwitchTimeRef = useRef(0);
   const lastCtrlCRef = useRef(0); // timestamp of the last Ctrl+C, for double-tap-to-quit
@@ -237,20 +248,6 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     let active = true;
 
     async function initAgent() {
-      let version = "0.1.0";
-      try {
-        const pkgPath = path.resolve(__dirname, "../../package.json");
-        if (existsSync(pkgPath)) {
-          const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
-          version = pkg.version || "0.1.0";
-        }
-      } catch {}
-
-      pushMessage({
-        sender: "system",
-        text: `⬡ Crayon v${version} · Workspace: ${workspaceName}`
-      });
-
       const git = getGitInfo(workspaceRoot);
       if (active) {
         setGitBranch(git.branch);
@@ -271,6 +268,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       if (themeChanged) setThemeTick((t) => t + 1);
       setDefaultModel(config.defaultModel || "");
       setCurrentProvider(config.provider as any);
+      // After config: the static header renders once, so it needs the real
+      // theme, model and mode — not the pre-load defaults.
+      pushMessage({ sender: "system", text: `⬡ Crayon v${CRAYON_VERSION} · Workspace: ${workspaceName}` });
       
       let baseModels = POPULAR_MODELS[config.provider as keyof typeof POPULAR_MODELS] || POPULAR_MODELS.anthropic;
       setAvailableModels(baseModels);
@@ -297,24 +297,9 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       }
 
       if (config.provider === "ollama") {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 1000);
-        fetch("http://localhost:11434/api/tags", { signal: controller.signal })
-          .then(res => res.json())
-          .then((data: any) => {
-            clearTimeout(timeout);
-            if (data && data.models && Array.isArray(data.models)) {
-              const fetchedModels = data.models.map((m: any) => ({
-                label: m.name,
-                value: m.name,
-                description: m.size ? `${(m.size / (1024 * 1024 * 1024)).toFixed(2)} GB` : "Local model"
-              }));
-              setAvailableModels(fetchedModels);
-            }
-          })
-          .catch(() => {
-            clearTimeout(timeout);
-          });
+        fetchOllamaModels(1000).then((models) => {
+          if (active && models) setAvailableModels(models.map((m) => ({ label: m.name, value: m.name, description: describeOllamaModel(m) })));
+        });
       }
 
       const agent = new CrayonAgent({
@@ -331,10 +316,12 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     autoCommit: config.autoCommit,
         onEvent: (event: AgentEvent) => {
           if (!active || abortedRef.current) return;
+          lastActivityRef.current = Date.now();
           handleAgentEvent(event);
         },
         approveCommand: async (command) => {
           if (!active || abortedRef.current) return false;
+          if (allowedCommandsRef.current.has(command.trim())) return true;
           return new Promise<boolean>((resolve) => {
             setApprovalRequest({ type: "command", command, resolve });
           });
@@ -457,6 +444,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     abortedRef.current = false;
     abortControllerRef.current = new AbortController();
     executionStartTime.current = Date.now();
+    lastActivityRef.current = Date.now();
 
     const start = Date.now();
     try {
@@ -515,6 +503,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       case "plan":
         setActivePlan(event.steps);
         activePlanRef.current = event.steps;
+        planPhaseRef.current = 0;
         setCurrentStepIndex(0);
         break;
       case "thinking":
@@ -538,7 +527,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         // Show the just-started tool in the live progress line.
         setActiveToolName(event.name);
         setActiveToolArgs(event.args);
-        setCurrentStepIndex((prev) => Math.min(prev + 1, Math.max(0, activePlanRef.current.length - 1)));
+        if (event.name === "terminal" && planPhaseRef.current === 1) planPhaseRef.current = 2;
+        movePlan(true);
         break;
       }
       case "tool_result": {
@@ -587,6 +577,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       case "text":
         break;
       case "edit":
+        if (planPhaseRef.current < 1) planPhaseRef.current = 1;
+        movePlan(false);
         setSessionFiles((prev) => [...new Set([...prev, event.path])]);
         setTimeout(() => {
           const git = getGitInfo(workspaceRoot);
@@ -601,6 +593,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         const completion = Number(event.completionTokens) || 0;
         setTokens((prev) => prev + total);
         setCost((prev) => {
+          if (typeof event.cost === "number") return prev + event.cost;
           const pricing = getModelPricing(defaultModelRef.current);
           const inputCostPerToken = pricing.input / 1_000_000;
           const outputCostPerToken = pricing.output / 1_000_000;
@@ -791,7 +784,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
       return;
     }
 
-    if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen && !sessionPicker && !mcpView) {
+    if (!approvalRequest && mode === "chat" && !isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen && !menu && !sessionPicker && !mcpView) {
       // "?" on an empty prompt opens the keybindings/help overlay.
       if (input === "?" && !currentInput) {
         setShowHelpOverlay(true);
@@ -1115,14 +1108,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           setSessionFiles([]);
           setTokens(0);
           setCost(0);
-          let version = "0.1.0";
-          try {
-            const pkgPath = path.resolve(__dirname, "../../package.json");
-            if (existsSync(pkgPath)) {
-              const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
-              version = pkg.version || "0.1.0";
-            }
-          } catch {}
+          const version = CRAYON_VERSION;
           pushMessage({ sender: "system", text: `⬡ Crayon v${version} · Workspace: ${workspaceName}` });
           break;
         }
@@ -1168,14 +1154,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           break;
         }
         case "/status": {
-          let version = "0.1.0";
-          try {
-            const pkgPath = path.resolve(__dirname, "../../package.json");
-            if (existsSync(pkgPath)) {
-              const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
-              version = pkg.version || "0.1.0";
-            }
-          } catch {}
+          const version = CRAYON_VERSION;
 
           const text =
             `\x1b[1mVersion:\x1b[22m         ${version}\n` +
@@ -1205,6 +1184,18 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             setAgentMode(m);
             agentModeRef.current = m; // sync now; the effect only runs post-render
             pushMessage({ sender: "system", text: `🔒 Permission mode set to: ${m}` });
+          } else if (!m) {
+            setMenu({
+              title: "permission mode",
+              items: [
+                { label: "ask", value: "ask", description: "approve every command and edit" },
+                { label: "auto-edit", value: "auto-edit", description: "edits apply, commands ask" },
+                { label: "plan", value: "plan", description: "read-only: propose a plan first" },
+                { label: "auto", value: "auto", description: "edits + safe commands run; risky ones ask" },
+                { label: "bypass", value: "bypass", description: "no approvals at all" },
+              ],
+              onSelect: (v) => { setMenu(null); handleSubmit(`/mode ${v}`); },
+            });
           } else {
             pushMessage({ sender: "system", text: `Invalid mode. Use: ask, auto-edit, plan, auto, bypass` });
           }
@@ -1296,35 +1287,41 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
           } else {
             const config = await loadConfig();
             if (config.provider === "ollama") {
-              fetch("http://localhost:11434/api/tags")
-                .then(res => res.json())
-                .then((data: any) => {
-                  if (data && data.models && Array.isArray(data.models) && data.models.length > 0) {
-                    const fetchedModels = data.models.map((m: any) => ({
-                      label: m.name,
-                      value: m.name,
-                      description: m.size ? `${(m.size / (1024 * 1024 * 1024)).toFixed(2)} GB` : "Local model"
-                    }));
-                    setAvailableModels(fetchedModels);
-                  } else {
-                    pushMessage({
-                      sender: "system",
-                      text: "⚠️ Ollama is active on http://localhost:11434 but no local models were found. Run `ollama run qwen2.5-coder:7b` to pull a model."
-                    });
-                  }
-                })
-                .catch(() => {
+              fetchOllamaModels().then((models) => {
+                if (models && models.length > 0) {
+                  setAvailableModels(models.map((m) => ({ label: m.name, value: m.name, description: describeOllamaModel(m) })));
+                } else {
                   pushMessage({
                     sender: "system",
-                    text: "⚠️ Could not connect to Ollama. Make sure Ollama is running, or download it from https://ollama.com."
+                    text: models
+                      ? `Ollama is running at ${ollamaHost()} but has no chat models. Pull one: \`ollama pull qwen3-coder:30b\` (local) or \`ollama pull qwen3-coder:480b-cloud\` (cloud).`
+                      : `Could not reach Ollama at ${ollamaHost()}. Start it, or set OLLAMA_BASE_URL — download: https://ollama.com`,
                   });
-                });
+                }
+              });
             }
             setIsModelSelectorOpen(true);
           }
           break;
         case "/config":
-          pushMessage({ sender: "system", text: "[!] To change your AI provider, model, or UI theme, please exit the chat (Ctrl+C) and run `crayon config` in your terminal." });
+          setMenu({
+            title: "settings",
+            items: [
+              { label: "Model", value: "/model", description: defaultModel || "not set" },
+              { label: "Permission mode", value: "/mode", description: agentMode },
+              { label: "Theme", value: "/theme", description: "dark · light · high-contrast" },
+              { label: "Accent color", value: "/color", description: "prompt & highlight color" },
+              { label: "Provider & API key", value: "provider", description: "needs the setup wizard (restart)" },
+            ],
+            onSelect: (v) => {
+              setMenu(null);
+              if (v === "provider") {
+                pushMessage({ sender: "system", text: "Switching provider or API key runs the setup wizard: exit (Ctrl+C twice), run `crayon config`, then `crayon` again. Your session is saved: `crayon chat --resume`." });
+              } else {
+                handleSubmit(v);
+              }
+            },
+          });
           break;
         case "/color":
           if (parts.length > 1) {
@@ -1549,31 +1546,22 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   };
 
 
-  const renderTerminalOutput = (stdout?: string, stderr?: string) => {
-    if (!stdout && !stderr) return null;
-    const lines: string[] = [];
-    if (stdout) {
-      const clean = stdout.trim();
-      if (clean) lines.push(clean);
-    }
-    if (stderr) {
-      const clean = stderr.trim();
-      if (clean) lines.push(`Error Output:\n${clean}`);
-    }
-    if (lines.length === 0) return null;
+  const renderTerminalOutput = (stdout?: string, stderr?: string, failed = false) => {
+    // pty output carries colors, cursor moves and CRLFs — raw, they corrupt Ink's layout.
+    const clean = (s?: string) => (s ?? "").replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)|\r/g, "").trim();
+    const allLines = [clean(stdout), clean(stderr)].filter(Boolean).join("\n").split("\n");
+    if (allLines.length === 1 && !allLines[0]) return null;
 
-    const fullText = lines.join("\n");
-    const allLines = fullText.split("\n");
-    const limit = 15;
-    const truncated = allLines.slice(0, limit).join("\n");
-    const hasMore = allLines.length > limit;
+    // Success: the head is enough to confirm. Failure: the verdict is at the end.
+    const limit = failed ? 12 : 6;
+    const hidden = Math.max(0, allLines.length - limit);
+    const shown = failed ? allLines.slice(-limit) : allLines.slice(0, limit);
 
     return (
       <Box key="term-out" flexDirection="column">
-        <Text color={theme.subtle} dimColor>{truncated}</Text>
-        {hasMore && (
-          <Text color={theme.subtle} italic dimColor>… {allLines.length - limit} more lines</Text>
-        )}
+        {failed && hidden > 0 && <Text color={theme.subtle} italic dimColor>… {hidden} earlier lines</Text>}
+        <Text color={failed ? theme.text : theme.subtle} dimColor={!failed}>{shown.join("\n")}</Text>
+        {!failed && hidden > 0 && <Text color={theme.subtle} italic dimColor>… {hidden} more lines</Text>}
       </Box>
     );
   };
@@ -1603,14 +1591,17 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
     if (msg.text.startsWith("⬡ Crayon v")) {
       const hasUserMessages = history.some((m) => m.sender === "user");
       if (hasUserMessages) return null;
-      const versionMatch = msg.text.match(/v([0-9.]+)/);
-      const version = versionMatch ? versionMatch[1] : "0.1.0";
       return (
-        <Box key={msg.id} flexDirection="column" marginBottom={1}>
-          <CrayonLogo version={version} />
-          <Box marginTop={1} paddingLeft={1}>
-            <Text color={theme.subtle} dimColor>/help for commands · cwd: {workspaceRoot}</Text>
-          </Box>
+        <Box key={msg.id}>
+          <WelcomeHeader
+            version={CRAYON_VERSION}
+            model={defaultModel}
+            provider={currentProvider}
+            mode={agentMode}
+            cwd={workspaceRoot}
+            columns={columns || 80}
+            rows={rows || 24}
+          />
         </Box>
       );
     }
@@ -1638,9 +1629,10 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
         const { verb, target, detail } = formatToolResult(tc.name, tc.args, tc.result, isError);
 
         let details: React.ReactNode = null;
-        if (tc.result && !isError) {
-          if (tc.name === "terminal") details = renderTerminalOutput(tc.result.stdout, tc.result.stderr);
-          else if (tc.name === "grep" || tc.name === "search_codebase") details = renderMatches(tc.result.matches);
+        if (tc.result && tc.name === "terminal") {
+          details = renderTerminalOutput(tc.result.stdout, tc.result.stderr, isError);
+        } else if (tc.result && !isError) {
+          if (tc.name === "grep" || tc.name === "search_codebase") details = renderMatches(tc.result.matches);
         }
         const hasBranch = !!(msg.diff || details || detail);
 
@@ -1709,14 +1701,14 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
   const showCmdMenu =
     currentInput.startsWith("/") && !currentInput.includes(" ") &&
     cmdItems.length > 0 && !isExecuting &&
-    !isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen &&
+    !isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen && !menu &&
     !showHelpOverlay && !sessionPicker && !approvalRequest && !hunkReview && !mcpView;
   // Inline "@…" file-mention menu (driven by the trailing token in the input).
   const atQ = atQuery(currentInput);
   const atItems = atQ !== null && !atDismissedRef.current ? fileMatches(allFiles, atQ) : [];
   const showAtMenu =
     atItems.length > 0 && !isExecuting && !showCmdMenu &&
-    !isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen &&
+    !isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen && !menu &&
     !showHelpOverlay && !sessionPicker && !approvalRequest && !hunkReview && !mcpView;
   const atSel = Math.min(atIndex, Math.max(0, atItems.length - 1));
   // Sliding window so the highlight stays visible when arrowing past the fold.
@@ -1780,9 +1772,11 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             {!streamingText && (
               <Box flexDirection="column" width="100%">
                 <AgentProgress
-                  statusText={getToolDisplay()}
+                  statusText={approvalRequest ? "Waiting for your approval" : getToolDisplay()}
                   tokens={tokens}
                   startTime={executionStartTime.current}
+                  lastActivity={lastActivityRef.current}
+                  paused={!!approvalRequest || activeToolName === "terminal"}
                 />
                 {activeToolName === "terminal" && activeTerminalOutput && (
                   <Box flexDirection="column" marginTop={1} paddingLeft={2}>
@@ -1827,6 +1821,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                       { label: "Keep planning", value: "keep", description: "Stay in plan mode; refine with another message" },
                       { label: "Discard", value: "discard", description: "Do nothing" }
                     ]}
+                    searchable={false}
+                    hotkeys={{ y: "execute", k: "keep", n: "discard" }}
                     onSelect={(val) => {
                       const plan = approvalRequest.plan as string;
                       setApprovalRequest(null);
@@ -1846,16 +1842,20 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               </Box>
             ) : approvalRequest.type === "command" ? (
               <Box flexDirection="column">
-                <Text color={theme.warning} bold>⚠️ Approve terminal command?</Text>
-                <Text color={theme.text} italic>  {approvalRequest.command}</Text>
+                <Text color={theme.warning} bold>⚠ Run this command?</Text>
+                <Box marginTop={1} paddingLeft={2}><Text color={theme.brand}>$ </Text><Text color={theme.text}>{approvalRequest.command}</Text></Box>
                 <Box marginTop={1}>
                   <SearchableSelect
                     items={[
                       { label: "Accept", value: "accept", description: "Execute the command" },
+                      { label: "Always", value: "always", description: "Run this exact command without asking again this session" },
                       { label: "Reject", value: "reject", description: "Skip the command" }
                     ]}
+                    searchable={false}
+                    hotkeys={{ y: "accept", a: "always", n: "reject" }}
                     onSelect={(val) => {
-                      approvalRequest.resolve(val === "accept");
+                      if (val === "always") allowedCommandsRef.current.add(String(approvalRequest.command).trim());
+                      approvalRequest.resolve(val === "accept" || val === "always");
                       setApprovalRequest(null);
                     }}
                     onCancel={() => {
@@ -1867,7 +1867,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
               </Box>
             ) : (
               <Box flexDirection="column">
-                <Text color={theme.warning} bold>⚠️ Approve file edits in {approvalRequest.path}?</Text>
+                <Text color={theme.warning} bold>⚠ Apply these edits to <Text color={theme.text}>{approvalRequest.path}</Text>?</Text>
                 <DiffRenderer diff={approvalRequest.diff} maxLines={10} />
                 <Text color={theme.subtle} italic>(Press Ctrl+O to view diff full screen)</Text>
                 <Box marginTop={1}>
@@ -1878,6 +1878,8 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                       { label: "Reject", value: "reject", description: "Discard these changes" },
                       { label: "Edit Manually", value: "edit", description: "Open file in your terminal editor" }
                     ]}
+                    searchable={false}
+                    hotkeys={{ y: "accept", h: "hunks", n: "reject", e: "edit" }}
                     onSelect={(val) => {
                       if (val === "accept") {
                         approvalRequest.resolve(true);
@@ -2043,6 +2045,18 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
             </Box>
           )}
 
+          {menu && (
+            <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
+              <Text color={theme.subtle} dimColor>{menu.title}</Text>
+              <SearchableSelect
+                items={menu.items}
+                searchable={menu.items.length > 6}
+                onSelect={menu.onSelect}
+                onCancel={() => setMenu(null)}
+              />
+            </Box>
+          )}
+
           {isThemePickerOpen && (
             <Box flexDirection="column" marginTop={0} paddingLeft={1} marginBottom={1}>
               <Text color={theme.subtle} dimColor>ui theme</Text>
@@ -2136,7 +2150,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
 
           {/* Hide the main prompt only while an overlay picker owns input, so
               there is only ever one input field on screen. */}
-          {!isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen && !showHelpOverlay && !sessionPicker && !hunkReview && !mcpView && (
+          {!isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen && !menu && !showHelpOverlay && !sessionPicker && !hunkReview && !mcpView && (
             <Box marginTop={0} flexDirection="column" paddingLeft={1}>
               <Box flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1}>
                 <Text bold color={isExecuting ? theme.subtle : theme.brand}>
@@ -2144,7 +2158,7 @@ export const App: React.FC<AppProps> = ({ mode, task, resume, permissionMode }) 
                 </Text>
                 <TextInput
                   key={inputEpoch}
-                  focus={!isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen && !showHelpOverlay && !sessionPicker && !hunkReview && !mcpView}
+                  focus={!isModelSelectorOpen && !isColorPickerOpen && !isThemePickerOpen && !menu && !showHelpOverlay && !sessionPicker && !hunkReview && !mcpView}
                   value={currentInput}
                   onChange={(v) => {
                     if (Date.now() - modeSwitchTimeRef.current < 50 && v.endsWith("t")) {
