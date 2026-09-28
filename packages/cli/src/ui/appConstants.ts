@@ -32,7 +32,7 @@ export const AVAILABLE_COMMANDS = [
   { cmd: "/compact", desc: "Compact conversation history" },
   { cmd: "/model", desc: "Change the AI model", usage: "[model-name]" },
   { cmd: "/mcp", desc: "Show configured MCP servers and their tools" },
-  { cmd: "/config", desc: "Change provider, model, or theme" },
+  { cmd: "/config", desc: "Settings menu: model, mode, theme, accent" },
   { cmd: "/color", desc: "Change the accent color", usage: "[name]" },
   { cmd: "/theme", desc: "Switch the UI theme", usage: "dark | light | high-contrast" },
   { cmd: "/copy", desc: "Copy last answer to clipboard", usage: "[code]" },

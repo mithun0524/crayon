@@ -37,7 +37,8 @@
     "dev": "tsx src/index.ts",
     "start": "node ./dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepack": "node scripts/sync-readme.mjs"
   },
   "pkg": {
     "scripts": "dist/**/*.js"
