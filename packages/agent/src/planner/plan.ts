@@ -9,6 +9,12 @@ const GREETING =
 const ADVISORY =
   /^(?:how (?:do|can|should|would|to)|what (?:is|are|does|do|should)|why (?:is|are|do|does)|explain|tell me|can you explain|describe|where (?:is|are|do|does)|suggest)/i;
 
+// Imperatives the agent can act on right away, however short: "run the tests
+// again", or a picked follow-up chip like "Run npm test". ("build" stays out:
+// "build X" alone is ambiguous, see below.)
+const ACTION_LEAD =
+  /^(?:please\s+|can you\s+|now\s+)?(?:run|re-?run|test|execute|lint|format|install|commit|push|fix|add|create|write|update|remove|delete|rename|refactor|implement|open|start|stop|restart|check|verify|revert|undo|migrate|bump|upgrade|generate|clean ?up)\b/i;
+
 const CODING_INTENT =
   /\b(fix|implement|refactor|debug|install|commit|edit file|write tests|run tests|add (?:a |the )?(?:file|route|api|component|test|feature|endpoint)|create (?:a |the )?(?:file|route|api|component|test|feature|endpoint)|update (?:the )?(?:file|code|component)|remove (?:the )?(?:file|code)|delete (?:the )?(?:file|code))\b/i;
 
@@ -23,12 +29,24 @@ export function classifyTask(task: string): TaskMode {
   if (/[`/\\]|\.(ts|js|py|go|tsx|jsx|md|json)\b/.test(t)) return "coding";
   if (CODING_INTENT.test(t)) return "coding";
 
+  if (ACTION_LEAD.test(t)) return "coding";
+
   // "build X" alone is ambiguous — treat as advisory unless clearly in-repo
   if (/\bbuild\b/i.test(t) && t.split(/\s+/).length <= 10) return "advisory";
 
   if (t.split(/\s+/).length <= 6) return "chat";
 
   return "coding";
+}
+
+// Coding tasks whose job is to run or inspect, not to change files. Their
+// success must not hinge on an edit (and they must never be nudged into one).
+const NON_EDIT_LEAD =
+  /^(?:please\s+|can you\s+|now\s+)?(?:run|re-?run|test|execute|lint|install|commit|push|open|start|stop|restart|check|verify|revert|undo)\b/i;
+
+/** Whether a coding task is expected to produce file edits. */
+export function taskExpectsEdits(task: string): boolean {
+  return !NON_EDIT_LEAD.test(task.trim());
 }
 
 /** @deprecated use classifyTask */

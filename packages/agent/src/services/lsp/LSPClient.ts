@@ -1,3 +1,4 @@
+import { lspLog } from "./log.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import pkgJsonrpc from "vscode-jsonrpc";
 import { StreamMessageReader, StreamMessageWriter } from "vscode-jsonrpc/node";
@@ -104,7 +105,7 @@ export function createLSPClient(
           childProcess.stderr.on("data", (data: Buffer) => {
             const output = data.toString().trim();
             if (output) {
-              console.log(`[LSP SERVER ${serverName} STDERR] ${output}`);
+              lspLog(`[LSP SERVER ${serverName} STDERR] ${output}`);
             }
           });
         }
@@ -113,7 +114,7 @@ export function createLSPClient(
           if (!isStopping) {
             startFailed = true;
             startError = error;
-            console.error(`LSP server ${serverName} error: ${error.message}`);
+            lspLog(`LSP server ${serverName} error: ${error.message}`);
           }
         });
 
@@ -125,14 +126,14 @@ export function createLSPClient(
             const crashError = new Error(
               `LSP server ${serverName} crashed with exit code ${code}`
             );
-            console.error(crashError.message);
+            lspLog(crashError.message);
             onCrash?.(crashError);
           }
         });
 
         childProcess.stdin.on("error", (error: Error) => {
           if (!isStopping) {
-            console.warn(`LSP server ${serverName} stdin error: ${error.message}`);
+            lspLog(`LSP server ${serverName} stdin error: ${error.message}`);
           }
         });
 
@@ -144,14 +145,14 @@ export function createLSPClient(
           if (!isStopping) {
             startFailed = true;
             startError = error;
-            console.error(`LSP server ${serverName} connection error: ${error.message}`);
+            lspLog(`LSP server ${serverName} connection error: ${error.message}`);
           }
         });
 
         connection.onClose(() => {
           if (!isStopping) {
             isInitialized = false;
-            console.log(`LSP server ${serverName} connection closed`);
+            lspLog(`LSP server ${serverName} connection closed`);
           }
         });
 
@@ -167,10 +168,10 @@ export function createLSPClient(
         }
         pendingRequestHandlers.length = 0;
 
-        console.log(`LSP client started for ${serverName}`);
+        lspLog(`LSP client started for ${serverName}`);
       } catch (error) {
         const err = error as Error;
-        console.error(`LSP server ${serverName} failed to start: ${err.message}`);
+        lspLog(`LSP server ${serverName} failed to start: ${err.message}`);
         throw error;
       }
     },
@@ -186,11 +187,11 @@ export function createLSPClient(
         capabilities = result.capabilities;
         await connection.sendNotification("initialized", {});
         isInitialized = true;
-        console.log(`LSP server ${serverName} initialized`);
+        lspLog(`LSP server ${serverName} initialized`);
         return result;
       } catch (error) {
         const err = error as Error;
-        console.error(`LSP server ${serverName} initialize failed: ${err.message}`);
+        lspLog(`LSP server ${serverName} initialize failed: ${err.message}`);
         throw error;
       }
     },
@@ -211,7 +212,7 @@ export function createLSPClient(
         await connection.sendNotification(method, params);
       } catch (error) {
         const err = error as Error;
-        console.warn(`LSP server ${serverName} notification ${method} failed: ${err.message}`);
+        lspLog(`LSP server ${serverName} notification ${method} failed: ${err.message}`);
       }
     },
 
@@ -248,7 +249,7 @@ export function createLSPClient(
         }
       } catch (error) {
         const err = error as Error;
-        console.warn(`LSP server ${serverName} stop failed: ${err.message}`);
+        lspLog(`LSP server ${serverName} stop failed: ${err.message}`);
       } finally {
         if (connection) {
           try {
@@ -271,7 +272,7 @@ export function createLSPClient(
         isInitialized = false;
         capabilities = undefined;
         isStopping = false;
-        console.log(`LSP client stopped for ${serverName}`);
+        lspLog(`LSP client stopped for ${serverName}`);
       }
     },
   };

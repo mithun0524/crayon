@@ -4,9 +4,9 @@ import { CodeIndexer } from "crayon-indexer";
 import type { AgentConfig, AgentEvent, AgentResult } from "./types.js";
 import { WorkingMemory } from "./memory/working.js";
 import { EpisodicMemory } from "./memory/episodic.js";
-import { classifyTask, createPlan, type TaskMode } from "./planner/plan.js";
+import { classifyTask, createPlan, taskExpectsEdits, type TaskMode } from "./planner/plan.js";
 import { buildStaticSystemPrompt, buildDynamicContext } from "./context/manager.js";
-import { getExecutionModel } from "./models/router.js";
+import { getExecutionModel, resolveProvider } from "./models/router.js";
 import type { ModelConfig } from "./models/router.js";
 import { createTools } from "./tools/index.js";
 import { McpClient } from "./tools/mcp.js";
@@ -21,6 +21,8 @@ import { createLSPTools } from "./tools/lsp.js";
 import { createWorktreeManager, type WorktreeManager } from "./services/WorktreeManager.js";
 import { createWorktreeTools } from "./tools/worktree.js";
 import { createMemoryTool } from "./tools/memory.js";
+import { ensureCrayonDir } from "./services/crayonDir.js";
+import { listWorkspaceFiles, groundSuggestions } from "./services/suggestions.js";
 
 /** Tools that are safe to execute concurrently (read-only). Exported for consumer use. */
 export { CONCURRENT_SAFE_TOOLS };
@@ -60,7 +62,11 @@ const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   'default': { input: 3, output: 15 },
 };
 
-export function getModelPricing(modelName: string) {
+const FREE = { input: 0, output: 0 };
+
+/** USD per 1M tokens. Ollama (local or Cloud subscription) has no per-token price. */
+export function getModelPricing(modelName: string, provider?: string) {
+  if (provider === "ollama") return FREE;
   const lower = modelName.toLowerCase();
   for (const key in MODEL_PRICING) {
     if (key !== 'default' && lower.includes(key)) return MODEL_PRICING[key];
@@ -168,6 +174,7 @@ export class CrayonAgent {
   }
 
   async init(): Promise<void> {
+    await ensureCrayonDir(this.config.workspaceRoot).catch(() => {});
     await this.indexer.init();
     const stats = await this.indexer.index();
     const intel = await this.indexer.detectIntelligence();
@@ -216,6 +223,10 @@ export class CrayonAgent {
       return `${m.role}: ${content.slice(0, 1500)}`;
     });
     if (recent.length === 0) return [];
+    const files = listWorkspaceFiles(this.config.workspaceRoot);
+    const fileHint = files.length
+      ? `\n\nFiles in the repo (only reference these):\n${files.slice(0, 80).join("\n")}${files.length > 80 ? `\n… ${files.length - 80} more` : ""}`
+      : "";
 
     try {
       const { text } = await generateText({
@@ -226,7 +237,7 @@ export class CrayonAgent {
           `"Open index.html in the browser", "Add a calculation history", "Write tests for script.js", "Fix the layout on mobile". ` +
           `NOT tutorials, NOT questions, NOT "how to…" or "show me…" — the user clicks these to make the agent act. ` +
           `Respond with ONLY a JSON array of strings — no prose, no markdown.`,
-        prompt: recent.join("\n\n"),
+        prompt: recent.join("\n\n") + fileHint,
         maxTokens: 200,
         abortSignal: AbortSignal.timeout(15_000),
       });
@@ -234,15 +245,17 @@ export class CrayonAgent {
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
         if (Array.isArray(parsed)) {
-          return parsed.filter((s): s is string => typeof s === "string" && s.trim().length > 0).slice(0, count);
+          return groundSuggestions(parsed.filter((s): s is string => typeof s === "string" && s.trim().length > 0), files).slice(0, count);
         }
       }
       // Fallback: parse line-per-suggestion output
-      return text
-        .split("\n")
-        .map((l) => l.replace(/^[\s\d.\-*•"']+|["',]+$/g, "").trim())
-        .filter((l) => l.length > 4 && l.length < 90)
-        .slice(0, count);
+      return groundSuggestions(
+        text
+          .split("\n")
+          .map((l) => l.replace(/^[\s\d.\-*•"']+|["',]+$/g, "").trim())
+          .filter((l) => l.length > 4 && l.length < 90),
+        files,
+      ).slice(0, count);
     } catch {
       return [];
     }
@@ -707,7 +720,7 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
       // could not re-ground mid-sequence. We execute the requested tools
       // ourselves between turns (read-only ones concurrently).
       const model = getExecutionModel(modelConfig);
-      const pricing = getModelPricing(model.modelId || modelConfig.model || "");
+      const pricing = getModelPricing(model.modelId || modelConfig.model || "", resolveProvider(modelConfig, model.modelId || modelConfig.model || ""));
       let responseText = "";
       let lastFinishReason: string | undefined;
       let sawUsage = false;
@@ -769,15 +782,17 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
 
         if (turn.usage) {
           sawUsage = true;
+          const turnCost =
+            (turn.usage.promptTokens * pricing.input) / 1_000_000 +
+            (turn.usage.completionTokens * pricing.output) / 1_000_000;
           this.emit({
             type: "usage",
             promptTokens: turn.usage.promptTokens,
             completionTokens: turn.usage.completionTokens,
             totalTokens: turn.usage.totalTokens,
+            cost: turnCost,
           });
-          totalSessionCost +=
-            (turn.usage.promptTokens * pricing.input) / 1_000_000 +
-            (turn.usage.completionTokens * pricing.output) / 1_000_000;
+          totalSessionCost += turnCost;
           if (totalSessionCost > MAX_SESSION_COST) {
             throw new Error("Cost limit exceeded. Aborting to prevent runaway usage.");
           }
@@ -852,7 +867,7 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
       // with a code block or a text tool-call instead of editing. Nudge with an
       // escalating directive and retry, up to MAX_NO_EDIT_NUDGES times, before
       // giving up. Each retry is firmer and more prescriptive than the last.
-      if (mode === "coding" && !this.workingMemory.hasEdits() && noEditNudges < MAX_NO_EDIT_NUDGES) {
+      if (mode === "coding" && taskExpectsEdits(task) && !this.workingMemory.hasEdits() && noEditNudges < MAX_NO_EDIT_NUDGES) {
         const nudges = [
           "You did NOT modify any files — describing the change or printing code does not count. Apply it now with a real tool call: read_file the target, then edit_file (copy old_string exactly) or write_file. Do not reply with code.",
           "Still no file was changed. STOP explaining. Your NEXT action must be a single tool call — write_file for a new file, or edit_file with an old_string copied verbatim from the file you read. Emit only the tool call, no prose.",
@@ -906,7 +921,7 @@ You are in plan mode. Do NOT edit files or run commands that modify anything —
     // A coding task that produced ZERO edits (after the nudges) is NOT a
     // success — eval never runs without edits, so the old `evalRetries` check
     // wrongly reported success. Plan mode legitimately makes no edits.
-    const madeNoEdits = mode === "coding" && !planningOnly && edits.length === 0;
+    const madeNoEdits = mode === "coding" && !planningOnly && taskExpectsEdits(task) && edits.length === 0;
     const success = evalRetries <= maxEvalRetries && !madeNoEdits;
     let rollbackMsg = "";
     if (!success) {

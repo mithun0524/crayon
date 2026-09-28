@@ -1,5 +1,6 @@
 import { readFile, writeFile, mkdir, readdir, unlink, rename, stat } from "node:fs/promises";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync, chmodSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import pty from "node-pty";
@@ -45,6 +46,34 @@ const DANGEROUS_BINARIES = new Set([
   "git", "make", "kill", "killall", "find", "xargs", "tar", "truncate",
   "launchctl", "systemctl", "crontab", "at",
 ]);
+
+// Read-only / verification shapes of binaries that DANGEROUS_BINARIES blocks
+// outright, so `auto` mode can check its own work (run tests, inspect git)
+// without an approval. Chaining/redirection is still caught by
+// DANGEROUS_PATTERNS, and path tokens are still confined to the workspace.
+const SAFE_GIT_SUBCOMMANDS = new Set(["status", "diff", "log", "show", "rev-parse", "ls-files", "blame", "shortlog"]);
+const UNSAFE_GIT_FLAGS = /^--(output|ext-diff|textconv|exec|upload-pack|receive-pack|config-env)/;
+const UNSAFE_FIND_FLAGS = new Set(["-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"]);
+// --test-reporter loads an arbitrary module; the rest execute or preload code.
+const UNSAFE_NODE_FLAGS = /^(-e|-p|-r|-i|--eval|--print|--require|--import|--loader|--experimental-loader|--interactive|--inspect|--test-reporter|--env-file|--watch)/;
+
+export function isSafeInvocation(argv: string[]): boolean {
+  const [bin, ...args] = argv;
+  switch (bin) {
+    case "git":
+      return SAFE_GIT_SUBCOMMANDS.has(args[0] ?? "") && !args.some((a) => UNSAFE_GIT_FLAGS.test(a));
+    case "node":
+      // `node --test [files]` runs the repo's own tests: same trust as `npm test`.
+      if (args.length === 1 && (args[0] === "--version" || args[0] === "-v")) return true;
+      return args[0] === "--test" && !args.slice(1).some((a) => UNSAFE_NODE_FLAGS.test(a));
+    case "make":
+      return args.length === 1 && ["test", "check", "lint"].includes(args[0]);
+    case "find":
+      return !args.some((a) => UNSAFE_FIND_FLAGS.has(a.toLowerCase()));
+    default:
+      return false;
+  }
+}
 
 function capResult(result: string, maxChars: number = 50000): string {
   if (result.length <= maxChars) return result;
@@ -1004,11 +1033,12 @@ export function createTools(ctx: ToolContext) {
         if (!isDangerous) {
           try {
             const parsed = shellParse(command);
+            const safeShape = isSafeInvocation(parsed.filter((t): t is string => typeof t === "string"));
             for (const token of parsed) {
               if (typeof token === "string") {
                 const lower = token.toLowerCase();
                 const base = lower.split("/").pop() || lower; // handle /usr/bin/python3
-                if (DANGEROUS_BINARIES.has(lower) || DANGEROUS_BINARIES.has(base)) {
+                if (!safeShape && (DANGEROUS_BINARIES.has(lower) || DANGEROUS_BINARIES.has(base))) {
                   isDangerous = true;
                   break;
                 }
@@ -1307,6 +1337,56 @@ async function runBackground(command: string, cwd: string): Promise<{ pid: numbe
   return { pid, logFile };
 }
 
+let spawnHelperChecked = false;
+
+/**
+ * node-pty 1.1.0 publishes its macOS `prebuilds/darwin-*\/spawn-helper` as 0644
+ * (microsoft/node-pty#850). Its postinstall chmod is skipped whenever install
+ * scripts are blocked (npm 11 default, pnpm), and then every pty.spawn dies with
+ * "posix_spawnp failed". Repair the bit once, before the first spawn.
+ */
+function ensureSpawnHelperExecutable(): void {
+  if (spawnHelperChecked || process.platform !== "darwin") return;
+  spawnHelperChecked = true;
+  try {
+    const ptyRoot = path.dirname(path.dirname(createRequire(import.meta.url).resolve("node-pty")));
+    for (const dir of ["prebuilds/darwin-arm64", "prebuilds/darwin-x64", "build/Release"]) {
+      const helper = path.join(ptyRoot, dir, "spawn-helper");
+      try {
+        const { mode } = statSync(helper);
+        if ((mode & 0o111) === 0) chmodSync(helper, mode | 0o755);
+      } catch {}
+    }
+  } catch {}
+}
+
+/** Plain pipes, no TTY — used only when the pty can't be spawned at all. */
+function runCommandPiped(
+  command: string, cwd: string, timeoutMs: number, signal?: AbortSignal, onOutput?: (data: string) => void
+): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve) => {
+    const isWin = process.platform === "win32";
+    const child = spawn(isWin ? "powershell.exe" : "/bin/sh", [isWin ? "-Command" : "-c", command], { cwd, env: { ...process.env, GIT_PAGER: "cat", PAGER: "cat" } });
+    let stdout = "", stderr = "", settled = false;
+    const finish = (r: { success: boolean; stdout: string; stderr: string; exitCode: number }) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); signal?.removeEventListener("abort", onAbort); resolve(r);
+    };
+    const collect = (which: "out" | "err") => (buf: Buffer) => {
+      const s = buf.toString();
+      if (which === "out") { if (stdout.length < 50000) stdout += s; } else if (stderr.length < 50000) stderr += s;
+      onOutput?.(s);
+    };
+    child.stdout?.on("data", collect("out"));
+    child.stderr?.on("data", collect("err"));
+    const timer = setTimeout(() => { child.kill(); finish({ success: false, stdout, stderr: stderr + "\n[timeout]", exitCode: -1 }); }, timeoutMs);
+    const onAbort = () => { child.kill(); finish({ success: false, stdout, stderr: stderr + "\n[aborted]", exitCode: -1 }); };
+    signal?.addEventListener("abort", onAbort);
+    child.on("error", (err) => finish({ success: false, stdout, stderr: err.message, exitCode: -1 }));
+    child.on("close", (code) => finish({ success: code === 0, stdout, stderr, exitCode: code ?? -1 }));
+  });
+}
+
 function runCommand(
   command: string,
   cwd: string,
@@ -1327,6 +1407,7 @@ function runCommand(
     const cols = process.stdout.columns || 80;
     const rows = process.stdout.rows || 24;
 
+    ensureSpawnHelperExecutable();
     let ptyProcess: any;
     try {
       ptyProcess = pty.spawn(shell, [shellFlag, command], {
@@ -1334,10 +1415,13 @@ function runCommand(
         cols,
         rows,
         cwd,
-        env: process.env as Record<string, string>,
+        // Nobody is at a pager in an agent run — `git log` would hang to timeout.
+        env: { ...process.env, GIT_PAGER: "cat", PAGER: "cat" } as Record<string, string>,
       });
-    } catch (err: any) {
-      return resolve({ success: false, stdout: "", stderr: err.message || String(err), exitCode: -1 });
+    } catch {
+      // No pty (broken native module, sandbox, unsupported platform): still run
+      // the command — losing interactive stdin beats failing every command.
+      return resolve(runCommandPiped(command, cwd, timeoutMs, signal, onOutput));
     }
 
     if (setActivePtyWrite) {
