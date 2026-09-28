@@ -15,6 +15,7 @@ import { initTelemetry, trackEvent, flushTelemetry } from "./telemetry.js";
 import { runOnboardingFlow } from "./onboarding.js";
 import { handleUpdateOnBoot, showPassiveNotification, runInternalUpdateCheck, spawnBackgroundUpdateCheck } from "./updater.js";
 import { enableTerminalSync } from "./terminal-sync.js";
+import { CRAYON_VERSION } from "./version.js";
 
 // Enable DEC 2026 synchronous updates to prevent terminal tearing on resize
 enableTerminalSync();
@@ -34,18 +35,7 @@ if (process.argv.includes("--internal-check-update")) {
   process.exit(0);
 }
 
-import { fileURLToPath } from "node:url";
-import { readFile } from "node:fs/promises";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-let pkgVersion = "0.1.0";
-try {
-  const pkgPath = path.resolve(__dirname, "../../package.json");
-  if (existsSync(pkgPath)) {
-    const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
-    pkgVersion = pkg.version || "0.1.0";
-  }
-} catch {}
+const pkgVersion = CRAYON_VERSION;
 
 program
   .name("crayon")
@@ -144,8 +134,8 @@ program
   });
 
 program
-  .command("chat")
-  .description("Interactive agent session")
+  .command("chat", { isDefault: true })
+  .description("Interactive agent session (default when no command is given)")
   .option("-r, --resume [id]", "Resume the most recent session, or a specific session id")
   .option("-m, --mode <mode>", "Permission mode (ask, auto-edit, plan, auto, bypass)")
   .action(async (options) => {

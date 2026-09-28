@@ -20,20 +20,23 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   isExecuting,
   modelName,
 }) => {
-  const dirtyStr = gitDirtyCount > 0 ? `*` : "";
   const kTokens = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
+  // Local/free models cost nothing — "$0.0000" is noise, not information.
+  const costStr = cost <= 0 ? "" : cost < 0.01 ? "<$0.01" : `$${cost.toFixed(2)}`;
   const sep = <Text color={theme.subtle} dimColor>  ·  </Text>;
 
   return (
     <Box paddingLeft={1} flexDirection="row" flexShrink={0}>
-      <Text color={theme.brand}>{modelName || "default"}</Text>
-      {sep}
-      <Text color={theme.subtle}>⎇ {gitBranch || "none"}</Text>
-      <Text color={theme.warning}>{dirtyStr}</Text>
-      {sep}
-      <Text color={theme.subtle}>{kTokens} tokens</Text>
-      {sep}
-      <Text color={theme.success}>${cost.toFixed(4)}</Text>
+      <Text color={theme.brand}>{modelName || "loading…"}</Text>
+      {gitBranch ? (
+        <>
+          {sep}
+          <Text color={theme.subtle}>⎇ {gitBranch}</Text>
+          {gitDirtyCount > 0 ? <Text color={theme.warning}> ±{gitDirtyCount}</Text> : null}
+        </>
+      ) : null}
+      {tokens > 0 ? <>{sep}<Text color={theme.subtle}>{kTokens} tokens</Text></> : null}
+      {costStr ? <>{sep}<Text color={theme.success}>{costStr}</Text></> : null}
       {sep}
       {isExecuting ? (
         <Text color={theme.error} bold>esc to stop</Text>

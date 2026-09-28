@@ -15,6 +15,11 @@ interface SearchableSelectProps {
   onCancel?: () => void;
   placeholder?: string;
   maxVisible?: number;
+  /** false: a fixed choice list (approvals). Typed keys then pick via `hotkeys`
+   *  instead of silently filling a search box the user didn't ask for. */
+  searchable?: boolean;
+  /** Single-key shortcuts, e.g. { y: "accept", n: "reject" }. */
+  hotkeys?: Record<string, string>;
 }
 
 export const SearchableSelect: React.FC<SearchableSelectProps> = ({
@@ -22,7 +27,9 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   onSelect,
   onCancel,
   placeholder = "Search...",
-  maxVisible = 5
+  maxVisible = 5,
+  searchable = true,
+  hotkeys,
 }) => {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -38,7 +45,14 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
     setSelectedIndex(0);
   }, [query]);
 
-  useInput((_, key) => {
+  const keyFor = (value: string) =>
+    hotkeys ? Object.keys(hotkeys).find((k) => hotkeys[k] === value) : undefined;
+
+  useInput((input, key) => {
+    if (!searchable && hotkeys && input && hotkeys[input.toLowerCase()]) {
+      onSelect(hotkeys[input.toLowerCase()]);
+      return;
+    }
     if (key.escape) {
       onCancel?.();
       return;
@@ -55,6 +69,13 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
     }
   });
 
+  // One label column for the whole list, so descriptions line up even when a
+  // label ("Provider & API key") is wider than the old fixed 14 columns.
+  const labelWidth = Math.min(
+    32,
+    Math.max(14, ...items.map((i) => i.label.length + (keyFor(i.value) ? 4 : 0))),
+  );
+
   let startIdx = 0;
   if (selectedIndex >= maxVisible) {
     startIdx = selectedIndex - maxVisible + 1;
@@ -64,10 +85,12 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   return (
     <Box flexDirection="column">
       {/* Slim borderless list that hangs above the prompt (Claude Code-style). */}
-      <Box flexDirection="row">
-        <Text color={theme.subtle} dimColor>› </Text>
-        <TextInput value={query} onChange={setQuery} placeholder={placeholder} />
-      </Box>
+      {searchable && (
+        <Box flexDirection="row">
+          <Text color={theme.subtle} dimColor>› </Text>
+          <TextInput value={query} onChange={setQuery} placeholder={placeholder} />
+        </Box>
+      )}
 
       {filteredItems.length === 0 ? (
         <Text color={theme.subtle} dimColor>  no matches</Text>
@@ -85,10 +108,11 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
                 <Box width={2}>
                   <Text color={theme.brand}>{isSelected ? "❯" : " "}</Text>
                 </Box>
-                <Box minWidth={14} marginRight={2}>
+                <Box width={labelWidth} marginRight={2} flexShrink={0}>
                   <Text color={isSelected ? theme.brand : theme.text} bold={isSelected}>
                     {item.label}
                   </Text>
+                  {keyFor(item.value) ? <Text color={theme.subtle} dimColor> ({keyFor(item.value)})</Text> : null}
                 </Box>
                 <Box>
                   <Text color={theme.subtle} dimColor={!isSelected}>

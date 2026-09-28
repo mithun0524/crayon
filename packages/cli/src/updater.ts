@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { execSync, spawn } from "node:child_process";
@@ -87,6 +87,19 @@ function isNewerVersion(latest: string, current: string): boolean {
   return false;
 }
 
+/**
+ * `npm install -g` only replaces the global install. Running from anywhere else
+ * (a dev checkout, npx, a project-local dependency) must never trigger it.
+ */
+function isGlobalInstall(): boolean {
+  try {
+    const globalRoot = realpathSync(execSync("npm root -g", { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim());
+    return realpathSync(__dirname).startsWith(globalRoot + path.sep);
+  } catch {
+    return false;
+  }
+}
+
 export async function handleUpdateOnBoot(config: CrayonConfig): Promise<void> {
   if (!existsSync(CACHE_FILE)) return;
 
@@ -95,7 +108,7 @@ export async function handleUpdateOnBoot(config: CrayonConfig): Promise<void> {
     const pkgJson = JSON.parse(await fs.readFile(path.join(__dirname, "../package.json"), "utf-8"));
     const currentVersion = pkgJson.version;
 
-    if (cache.latestVersion && isNewerVersion(cache.latestVersion, currentVersion)) {
+    if (cache.latestVersion && isNewerVersion(cache.latestVersion, currentVersion) && isGlobalInstall()) {
       const mode = config.updateMode || "prompt";
       
       if (mode === "auto") {
