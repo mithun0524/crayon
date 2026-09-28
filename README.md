@@ -33,11 +33,11 @@
 ## ⚡ Features
 
 - **🧠 Autonomous ReAct Loop**: Crayon thinks, plans, and executes. If a test fails or a build breaks, it intercepts the error and fixes it autonomously.
-- **🛡️ Secure by Design**: Fine-grained permission modes (`Ask`, `Auto-Edit`, `Auto (God Mode)`). Built-in safety guards against path traversal, oversized file reads, destructive bash commands, and SSRF on outbound fetches.
+- **🛡️ Secure by Design**: Five permission modes (`ask`, `auto-edit`, `plan`, `auto`, `bypass`) — even `auto` still asks before anything risky. Built-in safety guards against path traversal, oversized file reads, destructive or chained shell commands, and SSRF on outbound fetches.
 - **✨ Beautiful CLI Interface**: Built with React for the Terminal (`ink`). Features predictive autocomplete for slash commands, an interactive onboarding setup wizard, and dynamic native markdown rendering.
 - **🧩 First-Class VS Code Extension**: A transparency-first chat panel with live reasoning, a "Read N files" progress accordion, tool cards with status + timing, inline `path:line` citations that jump to source, code blocks with Copy / Insert-at-cursor, slash commands, context pills, and follow-up suggestion chips.
 - **🎨 Interactive Model Swapping**: Hot-swap between Anthropic, OpenAI, Google, OpenRouter, and local **Ollama** models directly in chat—without ever leaving your flow.
-- **🔒 Local & Private**: Point Crayon at a local Ollama server for fully offline, zero-cost runs with no API key required.
+- **🔒 Local & Private**: Point Crayon at a local Ollama server for fully offline, zero-cost runs with no API key required — or use **Ollama Cloud** models (`qwen3-coder:480b-cloud`, `gpt-oss:120b-cloud`) with no GPU.
 - **🚀 Advanced Local Indexer**: Rapid semantic codebase search and dependency graph resolution via a blazing-fast local SQLite and Tree-sitter backbone.
 - **🗺️ Codebase-Aware Q&A**: The `explain_codebase` tool gives the agent an instant structured overview—stack, README, layout, scripts, and dependency hub files—so broad questions get grounded answers instead of guesses.
 - **💾 Auto-Context Compaction**: Keep token burn low with intelligent conversation history compaction (`/compact`) and real-time session cost tracking (`/cost`).
@@ -57,7 +57,7 @@ npm install -g crayon-cli@latest
 pnpm add -g crayon-cli@latest
 ```
 
-*(Alternatively, try it instantly without installing: `npx crayon-cli@latest chat`)*
+*(Alternatively, try it instantly without installing: `npx crayon-cli@latest`)*
 
 ### 2. Launch the Agent
 
@@ -65,10 +65,18 @@ Navigate to any local codebase and start a session:
 
 ```bash
 cd your-project
-crayon chat
+crayon
 ```
 
-**First Boot Experience:** Crayon will launch a beautiful interactive setup wizard to securely configure your API key, preferred models, and permission boundaries. All secrets are stored safely in `~/.crayon/config.json`.
+**First Boot Experience:** Crayon launches a short setup wizard: pick a provider and model (it lists the models installed on your Ollama server, local and cloud), paste an API key or leave it blank to use the environment variable, and choose a default permission mode. Settings are stored in `~/.crayon/config.json`.
+
+**No API key? Use Ollama:**
+
+```bash
+ollama pull qwen3-coder:30b                          # local, ~19 GB
+ollama signin && ollama pull qwen3-coder:480b-cloud  # Ollama Cloud, no GPU
+crayon                                               # pick "Ollama" in the wizard
+```
 
 ---
 
@@ -76,20 +84,50 @@ crayon chat
 
 | Command | Description |
 |---------|-------------|
-| `crayon init` | Initialize the local `.crayon/` config and force-index the repository |
+| `crayon` | Launch an interactive agent session (same as `crayon chat`) |
+| `crayon chat --resume [id]` | Resume the most recent session, or a specific one |
+| `crayon run "<task>"` | Execute a one-shot autonomous task |
+| `crayon run --json "<task>"` | Headless mode for scripts/CI: prints one JSON result (summary, edits, tool calls, tokens) |
+| `crayon sessions` | List saved chat sessions for this workspace |
+| `crayon init` | Initialize the local `.crayon/` folder and index the repository |
 | `crayon index` | Force a fresh semantic re-index of the current workspace |
-| `crayon chat` | Launch a continuous, interactive agent session |
-| `crayon run "<task>"` | Execute a one-shot autonomous background task |
+| `crayon config` | Re-run the setup wizard (provider, model, API key) |
+| `crayon mcp add\|list\|remove` | Manage MCP servers |
+| `crayon serve` | Expose Crayon itself as an MCP server on stdio |
+| `crayon update` | Update to the latest version |
+
+`chat` and `run` both take `-m, --mode <mode>` to override the permission mode for that session.
+
+### Permission Modes
+| Mode | File edits | Shell commands |
+|------|-----------|----------------|
+| `ask` | ask | ask |
+| `auto-edit` | apply | ask |
+| `plan` | none — proposes a plan, then offers to execute it | none |
+| `auto` | apply | run safe ones (tests, `git status`/`diff`/`log`, …); ask for anything risky, chained, or outside the workspace |
+| `bypass` | apply | run everything |
+
+Cycle modes with **Shift+Tab** (or Ctrl+T). In an approval prompt: **y** accept · **a** always allow that exact command this session · **n** reject. For file edits, **h** reviews hunk by hunk.
 
 ### In-Chat Slash Commands
 Once inside the interactive `chat` interface, use the `/` prefix to access predictive commands (navigate with arrow keys & `<Tab>` to autocomplete):
-- `/mode` - Hot-swap permission levels (`ask`, `auto-edit`, `plan`, `auto`, `bypass`)
-- `/model` - Hot-swap AI models via an inline interactive dropdown or direct argument
-- `/config` - Interactive setup wizard to change providers, models, or theme settings
-- `/cost` - View real-time token burn and session cost
-- `/files` - View files modified during the current session
-- `/clear` - Purge the conversation history buffer
-- `/compact` - Compress the context window to save tokens
+- `/model [name]` - Switch models via an inline picker or direct argument
+- `/mode [mode]` - Switch permission mode (picker when no argument)
+- `/config` - Settings menu: model, mode, theme, accent color
+- `/theme`, `/color` - UI theme (`dark`, `light`, `high-contrast`) and accent color
+- `/cost` - Token usage, duration, and cost for the session
+- `/files`, `/diff`, `/status` - Files changed this session, git diff, git status
+- `/undo` - Rewind the conversation by one turn
+- `/clear`, `/compact` - Clear history, or compress it to save tokens
+- `/resume` - Pick up a previous session in this workspace
+- `/memory` - Generate or refresh project memory (`AGENTS.md`)
+- `/copy [code]` - Copy the last answer (or its code block) to the clipboard
+- `/mcp` - Browse configured MCP servers and their tools
+- `/easel` - See which files are in the agent's context
+- `/tui`, `/img <path>` - Switch renderer; render an image inline (iTerm2/WezTerm)
+- `/help`, `/exit`
+
+Type `@` to mention a file, `?` for keyboard shortcuts. Project-specific commands live in `.crayon/commands/*.md`.
 
 ---
 
@@ -163,7 +201,11 @@ We welcome contributions to make Crayon the absolute best open-source AI agent!
 
 ## 🔐 Configuration & Security
 
-**CLI:** configuration is stored in `~/.crayon/config.json`, preventing accidental commits of API keys. Override keys via standard environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`. Point at a local Ollama server with `OLLAMA_BASE_URL` (defaults to `http://localhost:11434`).
+**CLI:** configuration is stored in `~/.crayon/config.json`, preventing accidental commits of API keys. Override keys via standard environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`. Point at an Ollama server with `OLLAMA_BASE_URL` (defaults to `http://localhost:11434`).
+
+Other overrides: `CRAYON_PROVIDER`, `CRAYON_MODEL`, `CRAYON_THEME`, `CRAYON_ACCENT`, `CRAYON_VERIFY_CMD` (post-edit check, `none` to disable), `CRAYON_AUTO_COMMIT=1`, `CRAYON_DISABLE_TELEMETRY=1`, and `CRAYON_DEBUG=1` for diagnostics (e.g. language-server logs).
+
+**Per-project state** (index, sessions, backups, the agent's scratchpad) lives in `<repo>/.crayon/`, which git-ignores itself — only `.crayon/commands/` is meant to be committed.
 
 **VS Code:** run `Crayon: Set API Key` to store credentials in the editor's encrypted SecretStorage (never synced in plain text); `crayon.*` settings and environment variables act as fallbacks.
 
