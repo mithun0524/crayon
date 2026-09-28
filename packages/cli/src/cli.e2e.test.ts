@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterEach } from "vitest";
 import { spawn as ptySpawn, type IPty } from "@lydell/node-pty";
 import { mkdtemp, rm } from "node:fs/promises";
 import { execSync } from "node:child_process";
-import { existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,7 @@ const strip = (s: string) => s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "").replace(/\
 class CliSession {
   pty: IPty;
   buf = "";
+  home: string;
   exitCode: number | null = null;
   constructor(cwd: string, args: string[] = ["chat"], extraEnv: Record<string, string> = {}) {
     // Ink (via ci-info) drops to NON-interactive rendering when $CI is set,
@@ -21,9 +22,12 @@ class CliSession {
     // here and are explicitly testing interactive behavior, so strip CI (and
     // related CI flags) from the child's env.
     const { CI, CONTINUOUS_INTEGRATION, GITHUB_ACTIONS, BUILD_NUMBER, RUN_ID, ...cleanEnv } = process.env;
+    // Never boot against the developer's real ~/.crayon: its updateMode/update
+    // cache can trigger a real `npm install -g` and its theme/sessions leak in.
+    this.home = mkdtempSync(path.join(os.tmpdir(), "crayon-home-"));
     this.pty = ptySpawn(process.execPath, [DIST, ...args], {
       name: "xterm-color", cols: 120, rows: 40, cwd,
-      env: { ...cleanEnv, CRAYON_PROVIDER: "ollama", CRAYON_MODEL: "ollama/llama3.1:8b", CRAYON_DISABLE_TELEMETRY: "1", ...extraEnv },
+      env: { ...cleanEnv, HOME: this.home, USERPROFILE: this.home, CRAYON_PROVIDER: "ollama", CRAYON_MODEL: "ollama/llama3.1:8b", CRAYON_DISABLE_TELEMETRY: "1", ...extraEnv },
     });
     this.pty.onData((d) => { this.buf += d; });
     this.pty.onExit(({ exitCode }) => { this.exitCode = exitCode; });
@@ -33,8 +37,15 @@ class CliSession {
   /** Type text, then send Enter separately — a single chunk with a trailing CR
    *  isn't submitted by ink-text-input (only matters for automated input). */
   async submit(s: string) {
+    // Wait for the input to echo what we typed before pressing Enter: a fixed
+    // delay loses the race under CPU load (parallel suites) and submits early.
+    const from = this.text.length;
     this.pty.write(s);
-    await new Promise((r) => setTimeout(r, 250));
+    const start = Date.now();
+    while (!this.text.slice(from).includes(s) && Date.now() - start < 5000) {
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    await new Promise((r) => setTimeout(r, 100));
     this.pty.write("\r");
   }
   async waitFor(sub: string, ms = 8000): Promise<void> {
@@ -58,7 +69,10 @@ class CliSession {
     }
     throw new Error("process did not exit in time");
   }
-  kill() { try { this.pty.kill(); } catch { /* already dead */ } }
+  kill() {
+    try { this.pty.kill(); } catch { /* already dead */ }
+    rmSync(this.home, { recursive: true, force: true });
+  }
 }
 
 describe("CLI e2e (real binary in a PTY)", () => {
