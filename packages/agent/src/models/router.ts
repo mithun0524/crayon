@@ -17,7 +17,7 @@ export interface ModelConfig {
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEFAULT_OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 
-function resolveProvider(config: ModelConfig, modelId: string): ModelProvider {
+export function resolveProvider(config: ModelConfig, modelId: string): ModelProvider {
   if (config.provider) return config.provider as ModelProvider;
   if (modelId.startsWith("ollama/")) return "ollama";
 
@@ -59,7 +59,7 @@ export function resolveModel(config: ModelConfig): LanguageModel {
     process.env.CRAYON_MODEL ??
     (resolveProvider(config, "") === "openrouter"
       ? DEFAULT_OPENROUTER_MODEL
-      : "claude-sonnet-4-20250514");
+      : "claude-sonnet-5");
 
   // Trim: a stray leading/trailing space in the model id produces a malformed
   // request URL that some providers (Gemini) hang on forever instead of erroring.
@@ -72,6 +72,9 @@ export function resolveModel(config: ModelConfig): LanguageModel {
       const ollama = createOpenAI({
         baseURL: process.env.OLLAMA_BASE_URL ?? "http://localhost:11434/v1",
         apiKey: "ollama",
+        // "strict" sends stream_options.include_usage — without it Ollama
+        // omits token usage from streams and every count reads 0.
+        compatibility: "strict",
       });
       const cleanModelId = modelId.startsWith("ollama/") ? modelId.slice(7) : modelId;
       return ollama(cleanModelId);

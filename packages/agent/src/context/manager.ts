@@ -5,6 +5,7 @@ import type { EpisodicMemory } from "../memory/episodic.js";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { TODO_FILE } from "../services/crayonDir.js";
 
 export interface ContextOptions {
   task: string;
@@ -76,7 +77,7 @@ ${modeInstructions}
 - Use the \`terminal\` tool for everything else that a shell does: build scripts, tests, package managers, git, dev servers, AND opening files/URLs. You CAN open things for the user — e.g. \`open <file>\` (macOS), \`xdg-open <file>\` (Linux), \`start <file>\` (Windows). Never tell the user you "can't open a browser/file/app" — run the command. Only decline if it is genuinely destructive and not approved.
 
 ## Scratchpad & Planning
-- For complex tasks, use the \`todo\` tool to maintain an internal scratchpad at \`.crayon.todo\`.
+- For complex tasks, use the \`todo\` tool to maintain an internal scratchpad at \`.crayon/todo.md\`.
 - This file acts as your personal memory across turns. Keep it updated with your progress.
 
 ## Verification Contract
@@ -179,12 +180,12 @@ export async function buildDynamicContext(options: ContextOptions): Promise<stri
   // to the current file (more specific rules come later = higher priority).
   const durableMemory = await collectDurableMemory(workspaceRoot, currentFile);
 
-  const todoPath = path.join(workspaceRoot, ".crayon.todo");
+  const todoPath = path.join(workspaceRoot, TODO_FILE);
   let todoMemory = "";
   if (existsSync(todoPath)) {
     try {
       const todoContent = await readFile(todoPath, "utf-8");
-      todoMemory = `\n## Internal Scratchpad (.crayon.todo)\n${todoContent}\n`;
+      todoMemory = `\n## Internal Scratchpad (${TODO_FILE})\n${todoContent}\n`;
     } catch {}
   }
 

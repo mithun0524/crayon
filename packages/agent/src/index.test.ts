@@ -18,6 +18,7 @@ vi.mock("./models/router.js", () => ({
   getPlanningModel: () => h.model,
   getCompactModel: () => h.model,
   resolveModel: () => h.model,
+  resolveProvider: () => "anthropic",
 }));
 
 // ── Mock the evaluator so the self-heal loop is controllable ──────────

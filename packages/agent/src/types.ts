@@ -19,7 +19,7 @@ export type AgentEvent =
   | { type: "eval"; passed: boolean; output: string }
   | { type: "done"; summary: string }
   | { type: "error"; message: string }
-  | { type: "usage"; promptTokens: number; completionTokens: number; totalTokens: number }
+  | { type: "usage"; promptTokens: number; completionTokens: number; totalTokens: number; /** USD for this turn, priced by the provider actually used. */ cost?: number }
   | { type: "terminal_output"; content: string }
   | { type: "ask_user"; question: string };
 

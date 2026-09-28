@@ -1,3 +1,4 @@
+import { lspLog } from "./log.js";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { createLSPServerInstance, type LSPServerInstance, type LspServerConfig } from "./LSPServerInstance.js";
@@ -72,7 +73,7 @@ export function createLSPServerManager(workspaceRoot: string): LSPServerManager 
       try {
         await instance.start();
       } catch (err) {
-        console.warn(`LSP Server ${serverName} failed to start, skipping: ${(err as Error).message}`);
+        lspLog(`LSP Server ${serverName} failed to start, skipping: ${(err as Error).message}`);
         return undefined;
       }
     }
@@ -106,7 +107,7 @@ export function createLSPServerManager(workspaceRoot: string): LSPServerManager 
         });
         openedFiles.add(fileUri);
       } catch (err) {
-        console.warn(`LSP didOpen failed for ${filePath}: ${(err as Error).message}`);
+        lspLog(`LSP didOpen failed for ${filePath}: ${(err as Error).message}`);
       }
     },
 
@@ -129,7 +130,7 @@ export function createLSPServerManager(workspaceRoot: string): LSPServerManager 
           contentChanges: [{ text: content }],
         });
       } catch (err) {
-        console.warn(`LSP didChange failed for ${filePath}: ${(err as Error).message}`);
+        lspLog(`LSP didChange failed for ${filePath}: ${(err as Error).message}`);
       }
     },
 
@@ -145,7 +146,7 @@ export function createLSPServerManager(workspaceRoot: string): LSPServerManager 
           },
         });
       } catch (err) {
-        console.warn(`LSP didSave failed for ${filePath}: ${(err as Error).message}`);
+        lspLog(`LSP didSave failed for ${filePath}: ${(err as Error).message}`);
       }
     },
 
@@ -164,7 +165,7 @@ export function createLSPServerManager(workspaceRoot: string): LSPServerManager 
         });
         openedFiles.delete(fileUri);
       } catch (err) {
-        console.warn(`LSP didClose failed for ${filePath}: ${(err as Error).message}`);
+        lspLog(`LSP didClose failed for ${filePath}: ${(err as Error).message}`);
       }
     },
 

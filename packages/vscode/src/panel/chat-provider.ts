@@ -215,7 +215,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         }
         case "cost": {
           const model = cfg.get<string>("defaultModel") || "claude-sonnet-4-6";
-          const pricing = getModelPricing(model);
+          const pricing = getModelPricing(model, cfg.get<string>("provider"));
           const cost = (this.promptTokens * pricing.input + this.completionTokens * pricing.output) / 1_000_000;
           const total = this.promptTokens + this.completionTokens;
           return this.postNotice(
